@@ -39,6 +39,7 @@ mod apply_settings;
 mod bench_ui;
 mod extensions_ui;
 mod panel_ui;
+mod popups_ui;
 mod private_tabs;
 mod split_ui;
 mod vault_ui;
@@ -76,6 +77,7 @@ const MENU_KEEP_AWAKE: usize = 12;
 const MENU_CLOSE: usize = 13;
 const MENU_CLOSE_OTHERS: usize = 14;
 const MENU_SHIELD: usize = 15;
+const MENU_POPUPS: usize = 16;
 const MENU_SPLIT: usize = 40;
 const MENU_UNSPLIT: usize = 41;
 
@@ -139,6 +141,7 @@ struct App {
     bench: bench_ui::BenchState,
     vault: vault_ui::Vault,
     extensions: extensions_ui::Extensions,
+    popups: popups_ui::Popups,
 }
 
 thread_local! {
@@ -193,6 +196,7 @@ pub fn run() -> windows::core::Result<()> {
     let session: Session = storage::read_json(&data.join("session.json"));
     let history = History::from_entries(storage::read_json::<Vec<Entry>>(&data.join("history.json")));
     shield::set_disabled(&settings.shield_disabled);
+    shield::set_cosmetic(settings.block_trackers);
 
     let hwnd = create_window(&session)?;
     web::set_window(hwnd);
@@ -252,6 +256,7 @@ pub fn run() -> windows::core::Result<()> {
         bench: Default::default(),
         vault: Default::default(),
         extensions: extensions_ui::Extensions::load(),
+        popups: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -963,19 +968,7 @@ impl App {
                 }
                 self.invalidate();
             }
-            Event::NewWindow(from, url) => {
-                let at = self.tabs.index_of(from).map(|i| i + 1);
-                let test = !self.tabs.records(from) && self.tabs.get(from).is_some_and(|t| !t.private);
-                if self.tabs.get(from).is_some_and(|t| t.private) {
-                    self.open_private_tab(&url, at);
-                } else {
-                    self.open_tab(&url, at);
-                    // What a test tab opens is a test tab too.
-                    if let (true, Some(id)) = (test, self.tabs.active) {
-                        self.tabs.mark_test(id);
-                    }
-                }
-            }
+            Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
             Event::ProcessFailed(id) => {
                 let visible = self.visible_tabs().contains(&id);
                 self.discard(id);
@@ -1054,6 +1047,7 @@ impl App {
                     let _ = crate::download_watch::watch(&web.webview, id);
                 }
                 self.curtain.install(&web, id);
+                web.apply_privacy(self.settings.block_trackers);
                 if web.passwords {
                     let _ = crate::vault_watch::watch(&web.webview, id);
                 }
@@ -1213,6 +1207,7 @@ impl App {
                     self.with_active_web(|w| w.hard_reload());
                 }
             }
+            Command::TogglePopups => self.toggle_popups(),
             Command::SplitPage => self.split_command(),
             Command::Unsplit => {
                 if let Some(id) = self.tabs.active {
@@ -1304,6 +1299,8 @@ impl App {
         let awake = self.keeps_awake(&tab.url);
         let site = if tab.private { "" } else { shield::site_key(&tab.url) };
         let shielded = (!site.is_empty()).then(|| !self.settings.shield_disabled.contains(site));
+        // Offered in private tabs too: there the choice is not saved.
+        let popups = crate::curtain::host_of(&tab.url).map(|_| self.popups_allowed_for(&tab.url, tab.private));
         let paired = self.split.splits.partner(id).is_some();
         let can_split = self.settings.split_view && !paired && self.tabs.active.is_some_and(|a| a != id);
         unsafe {
@@ -1314,6 +1311,9 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING | check(awake), MENU_KEEP_AWAKE, w!("Mantener sitio despierto (usa más memoria)"));
             if let Some(on) = shielded {
                 let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_SHIELD, w!("Bloqueo de anuncios en este sitio"));
+            }
+            if let Some(on) = popups {
+                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_POPUPS, w!("Permitir ventanas emergentes en este sitio"));
             }
             if paired {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_UNSPLIT, w!("Deshacer vista dividida"));
@@ -1342,6 +1342,7 @@ impl App {
                 MENU_DUPLICATE => self.run(Command::DuplicateTab),
                 MENU_KEEP_AWAKE => self.run(Command::KeepAwake),
                 MENU_SHIELD => self.run(Command::ToggleShield),
+                MENU_POPUPS => self.run(Command::TogglePopups),
                 MENU_CLOSE => self.close_tab(id),
                 MENU_CLOSE_OTHERS => {
                     let others: Vec<u64> =

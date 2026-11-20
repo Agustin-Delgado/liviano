@@ -64,6 +64,8 @@ const ID_EXT_RELOAD: i32 = 126;
 const ID_EXT_REMOVE: i32 = 127;
 const ID_EXT_LOAD: i32 = 128;
 const ID_BENCH_LABEL: i32 = 129;
+const ID_TRACKERS: i32 = 130;
+const ID_TRACKERS_LABEL: i32 = 131;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
@@ -111,6 +113,7 @@ struct State {
     updates: HWND,
     version: HWND,
     bench: HWND,
+    trackers: HWND,
     passwords_offer: HWND,
     /// "Importar…" was pressed: its menu opens after the state is released.
     status_after_import: bool,
@@ -448,23 +451,26 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let r = 400;
         heading(&mut add, "Atajos", (r, 18, 356, 22));
         let keys_style = list_style | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32;
-        let keys_list = add(w!("LISTBOX"), "", keys_style, edge, (r, 48, 356, 362), ID_KEYS_LIST, Kind::List, false);
-        let key_edit = add(w!("EDIT"), "", edit_style, edge, (r, 420, 176, 26), ID_KEY_EDIT, Kind::Edit, false);
-        add(w!("BUTTON"), "Asignar", button_style, none, (r + 184, 420, 80, 26), ID_KEY_ASSIGN, Kind::Button, false);
-        add(w!("BUTTON"), "Restablecer", button_style, none, (r + 270, 420, 86, 26), ID_KEY_RESET, Kind::Button, false);
-        label(&mut add, "Ej.: Ctrl+Shift+O o F6; varios con coma; vacío: sin atajo.", (r, 452, 356, 22));
-        let status = label(&mut add, "Los cambios se aplican y se guardan al momento.", (r, 482, 356, 22));
+        let keys_list = add(w!("LISTBOX"), "", keys_style, edge, (r, 48, 356, 298), ID_KEYS_LIST, Kind::List, false);
+        let key_edit = add(w!("EDIT"), "", edit_style, edge, (r, 356, 176, 26), ID_KEY_EDIT, Kind::Edit, false);
+        add(w!("BUTTON"), "Asignar", button_style, none, (r + 184, 356, 80, 26), ID_KEY_ASSIGN, Kind::Button, false);
+        add(w!("BUTTON"), "Restablecer", button_style, none, (r + 270, 356, 86, 26), ID_KEY_RESET, Kind::Button, false);
+        label(&mut add, "Ej.: Ctrl+Shift+O o F6; varios con coma; vacío: sin atajo.", (r, 388, 356, 22));
+        let status = label(&mut add, "Los cambios se aplican y se guardan al momento.", (r, 418, 356, 22));
 
         // The box carries no text of its own: a themed checkbox ignores the
         // text colour, so in dark mode its label would vanish. The label
         // beside it toggles it too.
-        heading(&mut add, "Actualizaciones", (r, 516, 140, 22));
-        let updates = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 517, 20, 20), ID_UPDATES, Kind::Button, false);
-        add(w!("STATIC"), "Buscar una vez por día", SS_NOTIFY, none, (r + 174, 516, 182, 22), ID_UPDATES_LABEL, Kind::Label, false);
-        heading(&mut add, "Pruebas", (r, 548, 140, 22));
-        let bench = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 549, 20, 20), ID_BENCH, Kind::Button, false);
-        add(w!("STATIC"), "Control por script (canal local)", SS_NOTIFY, none, (r + 174, 548, 182, 22), ID_BENCH_LABEL, Kind::Label, false);
-        let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 576, 356, 22), -1, Kind::Label, false);
+        heading(&mut add, "Actualizaciones", (r, 452, 140, 22));
+        let updates = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 453, 20, 20), ID_UPDATES, Kind::Button, false);
+        add(w!("STATIC"), "Buscar una vez por día", SS_NOTIFY, none, (r + 174, 452, 182, 22), ID_UPDATES_LABEL, Kind::Label, false);
+        heading(&mut add, "Privacidad", (r, 484, 140, 22));
+        let trackers = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r, 511, 20, 20), ID_TRACKERS, Kind::Button, false);
+        add(w!("STATIC"), "Bloquear cookies de terceros y rastreadores", SS_NOTIFY, none, (r + 24, 510, 332, 22), ID_TRACKERS_LABEL, Kind::Label, false);
+        heading(&mut add, "Pruebas", (r, 542, 140, 22));
+        let bench = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 543, 20, 20), ID_BENCH, Kind::Button, false);
+        add(w!("STATIC"), "Control por script (canal local)", SS_NOTIFY, none, (r + 174, 542, 182, 22), ID_BENCH_LABEL, Kind::Label, false);
+        let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 570, 356, 22), -1, Kind::Label, false);
         add(w!("BUTTON"), "Cerrar", button_style, none, (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28), ID_CLOSE, Kind::Button, false);
 
         for (theme_value, name) in THEMES {
@@ -502,6 +508,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             updates,
             version,
             bench,
+            trackers,
             passwords_offer,
             status_after_import: false,
             status,
@@ -586,6 +593,27 @@ fn fill_bench(st: &State) {
     unsafe {
         SendMessageW(st.bench, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
     }
+    let check = if st.settings.block_trackers { BST_CHECKED } else { BST_UNCHECKED };
+    unsafe {
+        SendMessageW(st.trackers, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
+    }
+}
+
+fn toggle_trackers(st: &mut State, flip: bool) -> Outcome {
+    unsafe {
+        if flip {
+            let checked = SendMessageW(st.trackers, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+            let next = if checked { BST_UNCHECKED } else { BST_CHECKED };
+            SendMessageW(st.trackers, BM_SETCHECK, Some(WPARAM(next.0 as usize)), None);
+        }
+        st.settings.block_trackers = SendMessageW(st.trackers, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
+    }
+    let on = st.settings.block_trackers;
+    status(
+        st,
+        if on { "Rastreadores y carteles de cookies bloqueados." } else { "Rastreadores y carteles de cookies permitidos." },
+    );
+    Outcome::Changed
 }
 
 fn fill_awake(st: &State, select: Option<usize>) {
@@ -819,6 +847,8 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
         (ID_BENCH, BN_CLICKED_CODE) => toggle_bench(st, false),
         (ID_BENCH_LABEL, STN_CLICKED) => toggle_bench(st, true),
         (ID_CLOSE, BN_CLICKED_CODE) => Outcome::Close,
+        (ID_TRACKERS, BN_CLICKED_CODE) => toggle_trackers(st, false),
+        (ID_TRACKERS_LABEL, STN_CLICKED) => toggle_trackers(st, true),
         (ID_UPDATES, BN_CLICKED_CODE) => toggle_updates(st, false),
         (ID_UPDATES_LABEL, STN_CLICKED) => toggle_updates(st, true),
         (ID_EXT_TOGGLE | ID_EXT_PIN | ID_EXT_RELOAD | ID_EXT_REMOVE | ID_EXT_LOAD, BN_CLICKED_CODE) => {

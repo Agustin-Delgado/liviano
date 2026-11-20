@@ -34,7 +34,10 @@ pub enum Event {
     SourceChanged(u64),
     NavigationStarting(u64),
     NavigationCompleted(u64, bool),
-    NewWindow(u64, String),
+    /// A page asked for a new window: tab, address, whether a click or a
+    /// key was behind it. The engine's window is never opened: the app
+    /// opens a tab or blocks it.
+    NewWindow(u64, String, bool),
     ProcessFailed(u64),
     /// The page of this tab took focus (a click on it).
     PageClicked(u64),
@@ -194,8 +197,10 @@ impl WebTab {
                     if let Some(args) = args {
                         let mut uri = PWSTR::null();
                         args.Uri(&mut uri)?;
+                        let mut user = BOOL(0);
+                        let _ = args.IsUserInitiated(&mut user);
                         args.SetHandled(true)?;
-                        push(Event::NewWindow(id, take_pwstr(uri)));
+                        push(Event::NewWindow(id, take_pwstr(uri), user.as_bool()));
                     }
                     Ok(())
                 })),
@@ -254,6 +259,21 @@ impl WebTab {
                     Theme::Dark => COREWEBVIEW2_PREFERRED_COLOR_SCHEME_DARK,
                 };
                 let _ = profile.SetPreferredColorScheme(scheme);
+            }
+        }
+    }
+
+    /// The engine's tracking prevention on this view's profile: strict
+    /// with `block_trackers`, the engine's default (balanced) without.
+    /// Strict, measured: the scripts of Facebook, Google Analytics and
+    /// Hotjar fail to load from a third-party page (balanced let all three
+    /// through), and the sign-in pages of Google, Microsoft, GitHub and
+    /// Amazon still load. It has no per-site exception in the engine.
+    pub fn apply_privacy(&self, block_trackers: bool) {
+        let level = tracking_level(block_trackers);
+        unsafe {
+            if let Ok(profile) = self.webview.cast::<ICoreWebView2_13>().and_then(|w| w.Profile()).and_then(|p| p.cast::<ICoreWebView2Profile3>()) {
+                let _ = profile.SetPreferredTrackingPreventionLevel(level);
             }
         }
     }
@@ -443,6 +463,10 @@ impl WebTab {
             let _ = self.controller.Close();
         }
     }
+}
+
+fn tracking_level(block_trackers: bool) -> COREWEBVIEW2_TRACKING_PREVENTION_LEVEL {
+    if block_trackers { COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_STRICT } else { COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BALANCED }
 }
 
 /// The engine's active match index is already 1-based (measured: the first

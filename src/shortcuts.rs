@@ -38,6 +38,7 @@ pub enum Command {
     HideElement,
     ShowHidden,
     ToggleShield,
+    TogglePopups,
     SplitPage,
     Unsplit,
     FocusLeftPage,
@@ -82,6 +83,7 @@ impl Command {
                     Command::HideElement => "hide_element",
                     Command::ShowHidden => "show_hidden",
                     Command::ToggleShield => "toggle_shield",
+                    Command::TogglePopups => "toggle_popups",
                     Command::SplitPage => "split_page",
                     Command::Unsplit => "unsplit",
                     Command::FocusLeftPage => "focus_left_page",
@@ -129,6 +131,7 @@ impl Command {
             Command::HideElement => "Ocultar elemento",
             Command::ShowHidden => "Ver elementos ocultos",
             Command::ToggleShield => "Bloqueo de anuncios en este sitio",
+            Command::TogglePopups => "Permitir ventanas emergentes en este sitio",
             Command::SplitPage => "Dividir página actual",
             Command::Unsplit => "Deshacer vista dividida",
             Command::FocusLeftPage => "Ir a la página dividida de la izquierda",
@@ -285,7 +288,7 @@ pub fn table(overrides: &HashMap<String, String>) -> Vec<(Chord, Command)> {
 /// Every command, in the order the settings screen lists them.
 pub fn all_commands() -> Vec<Command> {
     let mut all: Vec<Command> = Vec::new();
-    for command in defaults().into_iter().map(|(_, c)| c).chain([Command::PinTab, Command::KeepAwake, Command::ToggleShield]) {
+    for command in defaults().into_iter().map(|(_, c)| c).chain([Command::PinTab, Command::KeepAwake, Command::ToggleShield, Command::TogglePopups]) {
         if !all.contains(&command) {
             all.push(command);
         }

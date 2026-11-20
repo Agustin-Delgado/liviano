@@ -24,8 +24,15 @@ pub enum Action {
     Text { tab: Option<u64> },
     /// A PNG of the tab's view, written to `path` (or a temporary file).
     Screenshot { tab: Option<u64>, path: Option<String> },
-    /// Clicks the first element that matches a CSS selector.
-    Click { tab: Option<u64>, selector: String },
+    /// Clicks the first element that matches a CSS selector. With
+    /// `gesture`, as a person's click (the page gets user activation, so a
+    /// `window.open` in it counts as asked for).
+    Click {
+        tab: Option<u64>,
+        selector: String,
+        #[serde(default)]
+        gesture: bool,
+    },
     /// Runs an app command by its settings name ("new_tab") or by the chord
     /// bound to it ("Ctrl+T"), without any keyboard input.
     Run { name: Option<String>, keys: Option<String> },

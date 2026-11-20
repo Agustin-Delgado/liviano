@@ -1,6 +1,8 @@
-//! Where the rules come from: EasyList and EasyPrivacy, cached under the
-//! data folder and refreshed at most once a day, with a small built-in list
-//! so blocking works offline from the very first start. Everything here runs
+//! Where the rules come from: EasyList and EasyPrivacy (network rules) and
+//! the EasyList Cookie List (cookie banners: element hiding and the
+//! consent managers' scripts it names site by site),
+//! cached under the data folder and refreshed at most once a day, with small
+//! built-in lists so blocking works offline from the very first start. Everything here runs
 //! on one background thread; the UI thread only ever receives a finished
 //! engine.
 
@@ -16,15 +18,19 @@ use windows::{
     core::{HSTRING, PCWSTR, w},
 };
 
-use super::filters::Filters;
+use super::{CookieList, filters::Filters};
 
 /// (cache file, host, path). The only traffic of our own besides the pages.
 const LISTS: [(&str, &str, &str); 2] = [
     ("easylist.txt", "easylist.to", "/easylist/easylist.txt"),
     ("easyprivacy.txt", "easylist.to", "/easylist/easyprivacy.txt"),
 ];
+/// Its network rules go in too, but apart (`CookieList`): they are written
+/// site by site, for consent managers whose banner CSS alone can't hide.
+const COOKIE_LIST: (&str, &str, &str) = ("cookies.txt", "secure.fanboy.co.nz", "/fanboy-cookiemonster.txt");
 
 const BUILT_IN: &str = include_str!("minimal.txt");
+const BUILT_IN_COOKIES: &str = include_str!("cookies-minimal.txt");
 const MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 /// How often the sleeping thread wakes to see whether a day has passed
 /// (or to retry a download that failed).
@@ -38,15 +44,44 @@ pub fn spawn(dir: PathBuf) {
     let _ = thread::Builder::new().name("shield".into()).stack_size(256 * 1024).spawn(move || run(&dir));
 }
 
+/// Compiles the cookie list once, when it is turned on after start.
+pub fn spawn_cosmetic(dir: PathBuf) {
+    let _ = thread::Builder::new().name("shield-cookies".into()).stack_size(256 * 1024).spawn(move || {
+        super::deliver_cosmetic(compile_cosmetic(&dir));
+    });
+}
+
+fn cosmetic_wanted() -> bool {
+    super::COSMETIC_WANTED.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 fn run(dir: &Path) {
     let _ = fs::create_dir_all(dir);
     super::deliver(compile(dir));
+    if cosmetic_wanted() {
+        super::deliver_cosmetic(compile_cosmetic(dir));
+    }
     loop {
-        if is_due(dir) && refresh(dir) {
-            super::deliver(compile(dir));
+        if is_due(dir) {
+            let (network, cookies) = refresh(dir);
+            if network {
+                super::deliver(compile(dir));
+            }
+            if cookies && cosmetic_wanted() {
+                super::deliver_cosmetic(compile_cosmetic(dir));
+            }
         }
         thread::sleep(RECHECK);
     }
+}
+
+/// The cached cookie list plus the built-in one.
+fn compile_cosmetic(dir: &Path) -> CookieList {
+    let cached = fs::read_to_string(dir.join(COOKIE_LIST.0)).unwrap_or_default();
+    let cosmetic = CookieList::compile([cached.as_str(), BUILT_IN_COOKIES]);
+    #[cfg(debug_assertions)]
+    eprintln!("shield: {} cookie rules, {} KB", cosmetic.len(), cosmetic.heap_bytes() / 1024);
+    cosmetic
 }
 
 /// The cached lists plus the built-in one (which also covers a cache that is
@@ -67,12 +102,13 @@ fn is_due(dir: &Path) -> bool {
     }
 }
 
-/// Downloads every list; true when at least one changed on disk. The stamp
-/// is only written on success, so a failed attempt is retried next hour.
-fn refresh(dir: &Path) -> bool {
-    let mut changed = false;
+/// Downloads every list; whether the network lists and the cookie list
+/// changed on disk. The stamp is only written on success, so a failed
+/// attempt is retried next hour.
+fn refresh(dir: &Path) -> (bool, bool) {
+    let (mut network, mut cookies) = (false, false);
     let mut all_ok = true;
-    for (file, host, path) in LISTS {
+    for (file, host, path) in LISTS.into_iter().chain([COOKIE_LIST]) {
         let Some(body) = download(host, path).filter(|b| looks_like_a_list(b)) else {
             all_ok = false;
             continue;
@@ -83,13 +119,13 @@ fn refresh(dir: &Path) -> bool {
         }
         let tmp = target.with_extension("tmp");
         if fs::write(&tmp, &body).and_then(|_| fs::rename(&tmp, &target)).is_ok() {
-            changed = true;
+            if file == COOKIE_LIST.0 { cookies = true } else { network = true }
         }
     }
     if all_ok {
         let _ = fs::write(dir.join(STAMP), b"");
     }
-    changed
+    (network, cookies)
 }
 
 /// A captive portal or an error page must never replace a good list.

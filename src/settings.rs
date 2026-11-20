@@ -30,6 +30,12 @@ pub struct Settings {
     pub keep_awake: BTreeSet<String>,
     /// Hosts where ad and tracker blocking is off (it is on everywhere else).
     pub shield_disabled: BTreeSet<String>,
+    /// Sites (same key as `shield_disabled`) that may open windows on their
+    /// own; everywhere else a window nobody clicked for is blocked.
+    pub popups_allowed: BTreeSet<String>,
+    /// Engine tracking prevention (strict) on the main profile, and cookie
+    /// banners hidden with the cookie list. Off turns both off.
+    pub block_trackers: bool,
     /// Command name -> "Ctrl+Shift+X" (comma separated for several).
     pub shortcuts: HashMap<String, String>,
     /// Two pages side by side (Ctrl+Alt+N, or a tab dropped on the page). On
@@ -57,6 +63,8 @@ impl Default for Settings {
             memory_pressure_percent: 85,
             keep_awake: BTreeSet::new(),
             shield_disabled: BTreeSet::new(),
+            popups_allowed: BTreeSet::new(),
+            block_trackers: true,
             shortcuts: HashMap::new(),
             split_view: true,
             check_updates: true,
@@ -75,6 +83,7 @@ impl Default for Settings {
 pub fn from_window(current: &Settings, edited: Settings) -> Settings {
     Settings {
         shield_disabled: current.shield_disabled.clone(),
+        popups_allowed: current.popups_allowed.clone(),
         passwords_never: current.passwords_never.clone(),
         update_url: current.update_url.clone(),
         ..edited

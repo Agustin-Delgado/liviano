@@ -36,6 +36,23 @@ pub fn execute(webview: &ICoreWebView2, script: &str) {
     }
 }
 
+/// Runs a script without handing the page a user gesture. `ExecuteScript`
+/// does hand one (measured: a `window.open` the page makes right after it
+/// reaches the app as initiated by the user), so anything the app runs on
+/// its own — not because the person just asked for it — goes through here,
+/// or the popup blocker would let the page's next window through.
+pub fn execute_without_gesture(webview: &ICoreWebView2, script: &str) {
+    let params = serde_json::json!({ "expression": script, "userGesture": false });
+    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+    unsafe {
+        let _ = webview.CallDevToolsProtocolMethod(
+            &HSTRING::from("Runtime.evaluate"),
+            &HSTRING::from(params.to_string()),
+            &handler,
+        );
+    }
+}
+
 /// Runs a script as if the person had just interacted with the page (DevTools
 /// `Runtime.evaluate` with `userGesture`): some APIs, like Picture-in-Picture,
 /// refuse a plain `ExecuteScript`, and a key handled by the app never reaches

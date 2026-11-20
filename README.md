@@ -49,7 +49,9 @@ canal de control por script; lo que no se puede probar así está marcado.
 | RF-10 | Modo lectura | Verificado (Readability). |
 | RF-11 | Ocultar elementos por sitio | Verificado (selección por clic, se aplica antes de pintar). La lista de ocultos (Ctrl+Shift+U) es un menú: se revisa a mano. |
 | RF-12 | Video flotante | Hecho con el Picture-in-Picture del motor. Sin verificar en esta pasada (hace falta una página con video). |
-| RF-13 | Bloqueo de anuncios y trackers | Verificado, con excepción por sitio (menú de la pestaña). Usa EasyList y EasyPrivacy, con una lista mínima incluida mientras se descargan. |
+| RF-13 | Bloqueo de anuncios y trackers | Verificado, con excepción por sitio (menú de la pestaña). Usa EasyList y EasyPrivacy, con una lista mínima incluida mientras se descargan. Ver "Bloqueo y privacidad". |
+| — | Ventanas emergentes | Verificado con páginas locales: se bloquean las que nadie pidió y las de anuncios; se permiten por sitio desde el menú de la pestaña. |
+| — | Rastreadores y carteles de cookies | Verificado: prevención de rastreo estricta del motor y carteles ocultos antes del primer cuadro (EasyList Cookie List). |
 | RF-14 | Contraseñas en el Administrador de credenciales | Verificado: ofrece guardar tras un login y nunca rellena solo. Ctrl+Alt+L abre el panel. |
 | RF-15 | Importar contraseñas de otros navegadores | Hecho (Chrome, Edge, Brave, Vivaldi, Opera, Arc y CSV, todo en el equipo). Sin verificar en esta pasada: las pruebas no leen perfiles reales. |
 | RF-16 | Llaves de acceso | El motor deriva WebAuthn al diálogo de Windows Hello. Sin verificar en esta pasada. |
@@ -60,7 +62,7 @@ canal de control por script; lo que no se puede probar así está marcado.
 | RF-21 | Buscar en la página | Verificado. |
 | RF-22 | Actualización diaria firmada | Hecho, con pruebas unitarias. **Apagado** hasta definir el dueño del repositorio de versiones (ver al final). |
 | RF-23 | Control por script | Verificado (ver "Control por script"). |
-| RF-24 | Ajustes | Verificado: general, pestañas, contraseñas, extensiones, atajos, actualizaciones y pruebas; todo se guarda al momento. |
+| RF-24 | Ajustes | Verificado: general, pestañas, contraseñas, extensiones, atajos, actualizaciones, privacidad y pruebas; todo se guarda al momento. |
 
 La memoria medida contra Edge está en [docs/medicion.md](docs/medicion.md).
 
@@ -112,9 +114,56 @@ Todos se pueden cambiar en Ajustes (Ctrl+,).
 | Contraseñas | Ctrl+Alt+L |
 | Ajustes | Ctrl+, |
 
-Fijar una pestaña, mantener un sitio despierto y el bloqueo de anuncios en un
-sitio están en el menú de la pestaña (clic derecho) y no tienen atajo de
-fábrica; se les puede asignar uno en Ajustes.
+Fijar una pestaña, mantener un sitio despierto, el bloqueo de anuncios en un
+sitio y "Permitir ventanas emergentes en este sitio" están en el menú de la
+pestaña (clic derecho) y no tienen atajo de fábrica; se les puede asignar uno
+en Ajustes.
+
+## Bloqueo y privacidad
+
+Todo sale del mismo lugar: el menú de la pestaña para un sitio, y Ajustes →
+Privacidad para todos.
+
+- **Anuncios y rastreadores (red).** EasyList y EasyPrivacy, bajadas una vez
+  por día. "Bloqueo de anuncios en este sitio" lo apaga para ese sitio, junto
+  con lo que sigue salvo la prevención de rastreo del motor.
+- **Ventanas emergentes.** Una ventana que la página abre sin que medie un
+  clic o una tecla se bloquea siempre; una abierta con un clic se bloquea sólo
+  si su dirección es un anuncio según las listas (reglas `$popup` o un
+  servidor de anuncios entero: los popunders que se cuelgan del primer clic).
+  Los logins con ventana (Google, Microsoft, Facebook, Apple, GitHub, PayPal)
+  se abren: una prueba con las listas reales lo comprueba. Al bloquear, la
+  página muestra "Ventana emergente bloqueada" y "Permitir ventanas emergentes
+  en este sitio" (menú de la pestaña) las deja pasar; desde una pestaña
+  privada ese permiso dura hasta cerrar Liviano y no se guarda. Las páginas de
+  extensiones no se tocan.
+- **Rastreadores y cookies de terceros** (Ajustes → Privacidad, "Bloquear
+  cookies de terceros y rastreadores", prendido de fábrica). La prevención de
+  rastreo del motor en nivel *estricto*: medido, no deja cargar los scripts de
+  Facebook, Google Analytics ni Hotjar desde un sitio ajeno (el nivel
+  equilibrado, el de fábrica del motor, los dejaba pasar) y los logins de
+  Google, Microsoft, GitHub y Amazon siguen cargando. Sus cookies y su
+  almacenamiento quedan bloqueados con ellos; las cookies del sitio que se
+  visita (las de la sesión) no se tocan. El motor no ofrece excepciones por
+  sitio para este nivel, así que la excepción del bloqueo de anuncios no lo
+  relaja. Las cookies de terceros que no son de rastreadores conocidos no se
+  bloquean: WebView2 no tiene una opción soportada para eso (la única que
+  funciona, `--test-third-party-cookie-phaseout`, es un interruptor de prueba
+  de Chromium, no documentado para WebView2, y se dejó afuera).
+- **Carteles de cookies.** Con el mismo interruptor: la EasyList Cookie List
+  (de `secure.fanboy.co.nz`, bajada con las otras) oculta los avisos de
+  consentimiento con sus reglas `##`, `dominio##` y `#@#` y corta, sitio por
+  sitio, los scripts de gestores de consentimiento que la lista nombra. Cada
+  documento le pide a Liviano, al crearse, las reglas de su sitio (unas 180)
+  y, a medida que aparecen, las genéricas de los `#id` y `.clase` que de
+  verdad tiene, como hace uBlock: hasta el primer cuadro lo pregunta sin
+  esperar, así que un cartel no llega a pintarse. Son pedidos que nunca salen
+  de la máquina. Con las 15.000 reglas genéricas de entrada, cada pestaña
+  gastaba ~10 MB más en su proceso; así, menos de 1 MB, y la página tarda
+  ~15 ms más en estar lista. Si el cartel bloqueaba el desplazamiento, se
+  libera. Los muros de "aceptá o pagá" (Spiegel, Corriere, The Guardian) la
+  lista no los oculta a propósito. Compilada ocupa ~1,3 MB en memoria de
+  Liviano; apagada, no se compila.
 
 ## Compilar
 
@@ -169,6 +218,7 @@ cargo run --release --example bench -- text
 cargo run --release --example bench -- run new_tab   # cualquier comando por su nombre
 cargo run --release --example bench -- type "example.com" --submit
 cargo run --release --example bench -- state         # pestañas, campo, pares, privadas
+cargo run --release --example bench -- shield        # bloqueos, reglas, popups y lista de cookies
 cargo run --release --example bench -- quit
 ```
 
@@ -225,7 +275,8 @@ nada hasta presionar Enter: el autocompletado sale del historial local.
 | Dato | Dónde |
 |---|---|
 | Ajustes, pestañas abiertas, historial, marcadores, descargas, elementos ocultos, extensiones | `%APPDATA%\Liviano\*.json` |
-| Listas de filtros y extensiones de la Web Store | `%APPDATA%\Liviano\shield`, `%APPDATA%\Liviano\extensions` |
+| Listas de filtros (anuncios, rastreo, cookies) y extensiones de la Web Store | `%APPDATA%\Liviano\shield`, `%APPDATA%\Liviano\extensions` |
+| Sitios con excepción de bloqueo o con ventanas emergentes permitidas | `settings.json` (`shield_disabled`, `popups_allowed`) |
 | Contraseñas | Administrador de credenciales de Windows (genéricas `Liviano:<origen> <usuario>`) |
 | Cookies, caché y datos de sitios | `%LOCALAPPDATA%\Liviano\engine` (perfil propio, separado de Edge) |
 | Actualización descargada | `%LOCALAPPDATA%\Liviano\update` |

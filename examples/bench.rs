@@ -92,7 +92,7 @@ fn action(args: &Args) -> Result<Action, String> {
         "wait" => Action::Wait { tab, timeout_ms: args.number("--timeout")? },
         "text" => Action::Text { tab },
         "screenshot" => Action::Screenshot { tab, path: args.value("--path").map(str::to_string) },
-        "click" => Action::Click { tab, selector: word(1).ok_or("click necesita un selector CSS")? },
+        "click" => Action::Click { tab, selector: word(1).ok_or("click necesita un selector CSS")?, gesture: false },
         "run" => match args.value("--keys") {
             Some(keys) => Action::Run { name: None, keys: Some(keys.to_string()) },
             None => Action::Run { name: Some(word(1).ok_or("run necesita un comando o --keys")?), keys: None },

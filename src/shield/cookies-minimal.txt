@@ -1,0 +1,11 @@
+! Cookie banners hidden before the cookie list is downloaded (and if it
+! never is): the most common consent managers, taken from that list.
+###onetrust-banner-sdk
+###onetrust-consent-sdk
+###didomi-notice
+##.didomi-notice-banner
+###cookie-law-info-bar
+##.cookie-law-info-bar
+###termly-code-snippet-support-banner
+##.termly-consent
+###cookieklaro

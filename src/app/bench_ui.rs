@@ -12,7 +12,7 @@ use std::{
 
 use serde_json::{Value, json};
 use webview2_com::{
-    CapturePreviewCompletedHandler, ExecuteScriptCompletedHandler,
+    CallDevToolsProtocolMethodCompletedHandler, CapturePreviewCompletedHandler, ExecuteScriptCompletedHandler,
     Microsoft::Web::WebView2::Win32::{COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, ICoreWebView2},
 };
 use windows::{
@@ -243,12 +243,37 @@ impl App {
                     let _ = webview.ExecuteScript(&HSTRING::from(protocol::TEXT_SCRIPT), &handler);
                 }
             }
-            Action::Click { tab, selector } => {
+            Action::Click { tab, selector, gesture } => {
                 let webview = match self.bench_web(tab) {
                     Ok(webview) => webview,
                     Err(message) => return reply.error(&message),
                 };
                 let shown = selector.clone();
+                if gesture {
+                    let params = json!({
+                        "expression": protocol::click_script(&selector),
+                        "userGesture": true,
+                        "returnByValue": true,
+                    });
+                    let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+                        let value: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
+                        let value = &value["result"]["value"];
+                        match (result, value.get("found").and_then(Value::as_bool)) {
+                            (Err(e), _) => reply.error(&format!("no se pudo ejecutar el clic: {e}")),
+                            (_, Some(true)) => reply.ok(json!({ "clicked": shown })),
+                            _ => reply.error(&format!("ningún elemento coincide con «{shown}»")),
+                        }
+                        Ok(())
+                    }));
+                    unsafe {
+                        let _ = webview.CallDevToolsProtocolMethod(
+                            &HSTRING::from("Runtime.evaluate"),
+                            &HSTRING::from(params.to_string()),
+                            &handler,
+                        );
+                    }
+                    return;
+                }
                 let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
                     let value: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
                     match (result, value.get("found").and_then(Value::as_bool), value.get("error")) {
@@ -287,6 +312,10 @@ impl App {
                     "blocked": stats.blocked,
                     "rules": stats.rules,
                     "heap_bytes": stats.heap_bytes,
+                    "popups_blocked": self.popups.blocked,
+                    "popups_recent": self.popups.recent,
+                    "cookie_rules": stats.cosmetic_rules,
+                    "cookie_heap_bytes": stats.cosmetic_heap_bytes,
                 }));
             }
             Action::Discard => {

@@ -24,7 +24,16 @@ impl App {
         let shortcuts_changed = settings.shortcuts != self.settings.shortcuts;
         let split_changed = settings.split_view != self.settings.split_view;
         let bench_changed = settings.bench_enabled != self.settings.bench_enabled;
+        let trackers_changed = settings.block_trackers != self.settings.block_trackers;
         self.settings = settings;
+        if trackers_changed {
+            crate::shield::set_cosmetic(self.settings.block_trackers);
+            for tab in &self.tabs.tabs {
+                if let super::Live::Ready(web) = &tab.live {
+                    web.apply_privacy(self.settings.block_trackers);
+                }
+            }
+        }
         crate::updater::configure(&self.settings);
         if bench_changed {
             crate::bench::set_enabled(self.hwnd, crate::bench::wanted(self.settings.bench_enabled));

@@ -33,11 +33,15 @@ pub enum Kind {
     Other = 1 << 10,
     /// The top-level page. Only `@@…$document` rules look at it.
     Document = 1 << 11,
+    /// A new window a page opens. Only `$popup` (or `$all`) rules and the
+    /// bare `||host^` ones look at it: a generic path rule like `/ads/*`
+    /// would stop links a person meant to follow.
+    Popup = 1 << 12,
 }
 
 /// Every type a rule without type options applies to (not the page itself).
 const DEFAULT_TYPES: u16 = (1 << 11) - 1;
-const POPUP: u16 = 1 << 12;
+const POPUP: u16 = Kind::Popup as u16;
 
 const EXCEPTION: u8 = 1 << 0;
 const IMPORTANT: u8 = 1 << 1;
@@ -190,7 +194,7 @@ impl Filters {
                 types |= Kind::Document as u16;
             }
         } else if types == 0 {
-            // Only popups or only the page itself: nothing to block here.
+            // Only the page itself: nothing to block here.
             return;
         }
         if types == 0 {
@@ -327,7 +331,8 @@ impl Filters {
     /// Whether any rule of `index` matches.
     fn find(&self, index: &Index, request: &Request) -> bool {
         let hit = |rule: u32| self.matches(self.rules[rule as usize], request);
-        // Bare host rules have the default types, which leave out the page itself.
+        // Bare host rules have the default types, which leave out the page
+        // itself; a popup to a bare ad or tracker host is blocked too.
         let bare_applies = request.kind != Kind::Document;
         if bare_applies && suffixes(request.host).any(|(_, s)| index.hosts.binary_search(&hash64(s.as_bytes())).is_ok()) {
             return true;
@@ -376,7 +381,7 @@ fn lookup(index: &[(u32, u32)], key: u32) -> impl Iterator<Item = u32> + '_ {
 
 /// The host and each parent domain: "a.b.com" -> "a.b.com", "b.com", "com",
 /// with the offset of each inside the host.
-fn suffixes(host: &str) -> impl Iterator<Item = (usize, &str)> {
+pub(super) fn suffixes(host: &str) -> impl Iterator<Item = (usize, &str)> {
     std::iter::once(0)
         .chain(host.match_indices('.').map(|(i, _)| i + 1))
         .filter(move |&i| i < host.len())
@@ -479,7 +484,7 @@ fn glob(pattern: &[u8], text: &[u8], anchor_start: bool, anchor_end: bool) -> bo
 
 /// `domain=a.com|~b.a.com`: the page must be one of the plain entries (if
 /// any) and none of the `~` ones. Subdomains count; the most specific wins.
-fn domain_allows(domains: &str, page_host: &str) -> bool {
+pub(super) fn domain_allows(domains: &str, page_host: &str) -> bool {
     let mut include_seen = false;
     let mut best: Option<(usize, bool)> = None;
     for entry in domains.split('|').filter(|e| !e.is_empty()) {
@@ -537,7 +542,7 @@ fn parse_options(text: &str) -> Option<Options<'_>> {
             "websocket" => Kind::Websocket as u16,
             "other" => Kind::Other as u16,
             "popup" => POPUP,
-            "all" => DEFAULT_TYPES,
+            "all" => DEFAULT_TYPES | POPUP,
             "document" | "doc" => {
                 if !negated {
                     document = true;
@@ -571,7 +576,7 @@ fn parse_options(text: &str) -> Option<Options<'_>> {
         }
     }
     let base = if positive == 0 && !document { DEFAULT_TYPES } else { positive };
-    let types = (base & !negative) & !POPUP;
+    let types = base & !negative;
     Some(Options { types, flags, document, domains })
 }
 
@@ -604,7 +609,7 @@ fn lower(text: &str) -> std::borrow::Cow<'_, str> {
 
 /// The host of an http(s)/ws(s) URL and its offset; `None` for anything else
 /// (data:, blob:, about:…), which is never blocked.
-fn host_of(url: &str) -> Option<(usize, &str)> {
+pub(super) fn host_of(url: &str) -> Option<(usize, &str)> {
     let (scheme, rest) = url.split_once("://")?;
     if !matches!(scheme, "http" | "https" | "ws" | "wss") {
         return None;
@@ -656,7 +661,7 @@ fn hash64(bytes: &[u8]) -> u64 {
     h
 }
 
-fn hash32(bytes: &[u8]) -> u32 {
+pub(super) fn hash32(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811c_9dc5;
     for &b in bytes {
         h ^= b as u32;
