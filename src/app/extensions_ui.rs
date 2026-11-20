@@ -1,0 +1,668 @@
+//! Extensions as the person meets them: the puzzle button and its native
+//! menu, the pinned ones beside it, "Instalar extensión" in the field when a
+//! Web Store link is pasted, the developer's unpacked folders, and the
+//! section in Ajustes. What is installed lives in `extensions::Registry`;
+//! what the engine has loaded is brought in line with it (`sync_extensions`)
+//! whenever a view exists to reach the profile through.
+//!
+//! WebView2 draws no extension UI (no toolbar, no popup bubble, no side
+//! panel), so a popup, options page or side panel opens as a tab
+//! (docs/extensiones.md).
+
+use std::path::PathBuf;
+
+use webview2_com::{
+    Microsoft::Web::WebView2::Win32::{GetAvailableCoreWebView2BrowserVersionString, ICoreWebView2},
+    take_pwstr,
+};
+use windows::{
+    Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM},
+        Graphics::Gdi::ClientToScreen,
+        System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+        UI::{
+            Shell::{FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH},
+            WindowsAndMessaging::*,
+        },
+    },
+    core::{HSTRING, PCWSTR, PWSTR, w},
+};
+
+use super::{App, Row, with_app};
+use crate::{
+    extension_host::{self, HostEvent},
+    extensions::{self, Extension, Registry},
+    inject,
+    settings_window::{self, ExtensionCommand},
+    tabs::Live,
+    webstore,
+};
+
+/// Asks the window to do something that opens a modal dialog (a folder
+/// picker, a confirmation) once the app is no longer borrowed.
+pub(super) const WM_APP_EXTENSION_ACTION: u32 = WM_APP + 41;
+const ACTION_LOAD_UNPACKED: usize = 1;
+const ACTION_REMOVE: usize = 2;
+
+const MENU_BASE: usize = 1000;
+const MENU_STRIDE: usize = 16;
+const ITEM_POPUP: usize = 0;
+const ITEM_OPTIONS: usize = 1;
+const ITEM_SIDE_PANEL: usize = 2;
+const ITEM_ENABLED: usize = 3;
+const ITEM_PINNED: usize = 4;
+const ITEM_RELOAD: usize = 5;
+const ITEM_REMOVE: usize = 6;
+const MENU_INSTALL_HERE: usize = 900;
+const MENU_LOAD_UNPACKED: usize = 901;
+const MENU_SETTINGS: usize = 902;
+const MENU_NOTE: usize = 903;
+/// Used when the runtime's version can't be read.
+const FALLBACK_BROWSER_VERSION: &str = "157.0.0.0";
+
+#[derive(Default)]
+pub(super) struct Extensions {
+    pub(super) registry: Registry,
+    /// Whether the running engine has extension support; None until the
+    /// engine starts (it starts with the first page).
+    engine_on: Option<bool>,
+    /// Folders the engine is loading, so a second sync doesn't load them twice.
+    adding: Vec<String>,
+    /// Store ids being downloaded.
+    installing: Vec<String>,
+    /// Tabs showing a page of an extension being reloaded: the engine moves
+    /// them off the page while it unloads, and they go back once it is in.
+    restore: Vec<(String, Vec<(u64, String)>)>,
+    synced: bool,
+    /// The last thing that happened, shown first in the menu.
+    notice: Option<String>,
+}
+
+impl Extensions {
+    pub(super) fn load() -> Self {
+        let registry = Registry::load();
+        extensions::sweep(&registry);
+        Self { registry, ..Default::default() }
+    }
+}
+
+fn on_settings_command(command: ExtensionCommand, index: Option<usize>) {
+    match command {
+        // Both open a modal dialog: done from the window, not from here.
+        ExtensionCommand::LoadUnpacked => {
+            if let Some(hwnd) = with_app(|app| app.hwnd) {
+                post_action(hwnd, ACTION_LOAD_UNPACKED, 0);
+            }
+        }
+        ExtensionCommand::Remove => {
+            if let (Some(index), Some(hwnd)) = (index, with_app(|app| app.hwnd)) {
+                post_action(hwnd, ACTION_REMOVE, index);
+            }
+        }
+        _ => {
+            with_app(|app| app.settings_extension_command(command, index));
+        }
+    }
+}
+
+fn post_action(hwnd: HWND, action: usize, index: usize) {
+    unsafe {
+        let _ = PostMessageW(Some(hwnd), WM_APP_EXTENSION_ACTION, WPARAM(action), LPARAM(index as isize));
+    }
+}
+
+/// The window messages that belong to extensions; None for any other.
+pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
+    match msg {
+        extensions::WM_APP_EXTENSION_INSTALLED => {
+            if with_app(|app| app.extensions_installed()).is_none() {
+                super::retry_later(hwnd, msg, wparam, lparam);
+            }
+            Some(LRESULT(0))
+        }
+        WM_APP_EXTENSION_ACTION => {
+            match wparam.0 {
+                ACTION_LOAD_UNPACKED => {
+                    if let Some(folder) = pick_folder(hwnd) {
+                        with_app(|app| app.add_unpacked(folder));
+                    }
+                }
+                ACTION_REMOVE => {
+                    let index = lparam.0 as usize;
+                    let name = with_app(|app| app.extensions.registry.extensions.get(index).map(|e| e.name.clone())).flatten();
+                    if let Some(name) = name {
+                        if confirm(hwnd, &format!("¿Quitar «{name}»?\n\nSe borran sus datos y deja de funcionar en todas las pestañas.")) {
+                            with_app(|app| app.remove_extension(index, &name));
+                        }
+                    }
+                }
+                _ => {}
+            }
+            Some(LRESULT(0))
+        }
+        _ => None,
+    }
+}
+
+fn confirm(owner: HWND, text: &str) -> bool {
+    unsafe {
+        MessageBoxW(Some(owner), &HSTRING::from(text), w!("Extensiones — Liviano"), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2)
+            == IDYES
+    }
+}
+
+/// The system folder picker (IFileOpenDialog with FOS_PICKFOLDERS).
+fn pick_folder(owner: HWND) -> Option<PathBuf> {
+    unsafe {
+        let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
+        let options = dialog.GetOptions().ok()?;
+        dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM).ok()?;
+        let _ = dialog.SetTitle(w!("Cargar extensión sin empaquetar: elegí la carpeta con manifest.json"));
+        dialog.Show(Some(owner)).ok()?;
+        let item = dialog.GetResult().ok()?;
+        let path = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
+        Some(PathBuf::from(take_pwstr(path)))
+    }
+}
+
+/// The runtime's version, which the store wants to pick a compatible package.
+fn browser_version() -> String {
+    let mut version = PWSTR::null();
+    unsafe {
+        if GetAvailableCoreWebView2BrowserVersionString(PCWSTR::null(), &mut version).is_ok() && !version.is_null() {
+            let text = take_pwstr(version);
+            // "157.0.3800.10 beta" -> the number.
+            if let Some(number) = text.split_whitespace().next().filter(|n| !n.is_empty()) {
+                return number.to_string();
+            }
+        }
+    }
+    FALLBACK_BROWSER_VERSION.to_string()
+}
+
+fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
+    unsafe {
+        let _ = AppendMenuW(menu, flags, id, &HSTRING::from(text));
+    }
+}
+
+fn source_label(extension: &Extension) -> &'static str {
+    if extension.unpacked() { "sin empaquetar" } else { "Chrome Web Store" }
+}
+
+impl App {
+    // ---------- what the rest of the app asks ----------
+
+    /// The engine is about to start: extension support only if one is
+    /// enabled, since each extension adds processes.
+    pub(super) fn extensions_for_environment(&mut self) -> bool {
+        let on = self.extensions.registry.any_enabled();
+        self.extensions.engine_on = Some(on);
+        on
+    }
+
+    /// For the strip: `Some(pinned)` when the button shows.
+    pub(super) fn extension_slots(&self) -> Option<usize> {
+        let registry = &self.extensions.registry;
+        (!registry.extensions.is_empty()).then(|| registry.pinned().len())
+    }
+
+    pub(super) fn extension_initials(&self) -> Vec<char> {
+        self.extensions.registry.pinned().into_iter().map(|(_, c)| c).collect()
+    }
+
+    /// A Web Store link in the field becomes a row that installs it.
+    pub(super) fn extension_row(&self, text: &str) -> Option<(String, Row)> {
+        let id = webstore::extension_id_from_link(text)?;
+        let label = match self.extensions.registry.find_store(&id).map(|i| &self.extensions.registry.extensions[i]) {
+            Some(installed) => format!("Actualizar la extensión «{}» desde la Chrome Web Store", installed.name),
+            None => format!("Instalar extensión de la Chrome Web Store    {id}"),
+        };
+        Some((label, Row::InstallExtension(id)))
+    }
+
+    fn restart_needed(&self) -> bool {
+        matches!(self.extensions.engine_on, Some(on) if on != self.extensions.registry.any_enabled())
+    }
+
+    fn any_webview(&self) -> Option<ICoreWebView2> {
+        let active = self.tabs.active_tab().and_then(|t| match &t.live {
+            Live::Ready(web) => Some(web.webview.clone()),
+            _ => None,
+        });
+        active.or_else(|| {
+            self.tabs.tabs.iter().find_map(|t| match &t.live {
+                Live::Ready(web) => Some(web.webview.clone()),
+                _ => None,
+            })
+        })
+    }
+
+    /// Says what happened on the page in view (and keeps it for the menu).
+    fn extension_notice(&mut self, text: String) {
+        if let Some(web) = self.tabs.active_tab().and_then(|t| match &t.live {
+            Live::Ready(web) => Some(web.webview.clone()),
+            _ => None,
+        }) {
+            inject::execute(&web, &inject::toast_script(&text));
+        }
+        self.extensions.notice = Some(text);
+        self.refresh_extension_views();
+    }
+
+    /// Strip, Ajustes and storage after a change of the list.
+    fn refresh_extension_views(&mut self) {
+        self.relayout_soft();
+        self.sync_settings_extensions();
+    }
+
+    fn save_extensions(&mut self) {
+        self.extensions.registry.save();
+        self.refresh_extension_views();
+    }
+
+    // ---------- the engine ----------
+
+    /// The first view after start: bring the profile in line once.
+    pub(super) fn extensions_view_ready(&mut self) {
+        if !self.extensions.synced {
+            self.extensions.synced = true;
+            self.sync_extensions();
+        }
+    }
+
+    /// Loads (or reloads in place) a folder, keeping its open pages.
+    fn load_folder(&mut self, webview: &ICoreWebView2, path: &str) {
+        self.extensions.adding.push(path.to_string());
+        let open = self
+            .extensions
+            .registry
+            .find_path(path)
+            .and_then(|i| self.extensions.registry.extensions[i].engine_id.clone())
+            .map(|id| self.extension_tabs(&id))
+            .unwrap_or_default();
+        if !open.is_empty() {
+            self.extensions.restore.push((path.to_string(), open));
+        }
+        extension_host::add(webview, path);
+    }
+
+    /// Tabs on one of the extension's pages: (tab, address).
+    fn extension_tabs(&self, engine_id: &str) -> Vec<(u64, String)> {
+        let prefix = format!("chrome-extension://{engine_id}/");
+        self.tabs.tabs.iter().filter(|t| t.url.starts_with(&prefix)).map(|t| (t.id, t.url.clone())).collect()
+    }
+
+    /// An extension that goes away takes its pages with it, as in Chrome.
+    fn close_extension_tabs(&mut self, engine_id: Option<&str>) {
+        let Some(engine_id) = engine_id else { return };
+        for (tab, _) in self.extension_tabs(engine_id) {
+            self.close_tab(tab);
+        }
+    }
+
+    fn sync_extensions(&mut self) {
+        if self.extensions.engine_on != Some(true) {
+            return;
+        }
+        if let Some(webview) = self.any_webview() {
+            extension_host::list(&webview);
+        } else {
+            // No view yet: the next one syncs.
+            self.extensions.synced = false;
+        }
+    }
+
+    pub(super) fn on_extension_event(&mut self, event: HostEvent) {
+        match event {
+            HostEvent::Listed(Ok(engine)) => {
+                let plan = extensions::plan(&self.extensions.registry, &engine);
+                self.extensions.registry.removed.retain(|id| engine.contains_key(id) && !plan.remove.contains(id));
+                let Some(webview) = self.any_webview() else { return };
+                for index in plan.add {
+                    let path = self.extensions.registry.extensions[index].path.clone();
+                    if !self.extensions.adding.contains(&path) {
+                        self.load_folder(&webview, &path);
+                    }
+                }
+                extension_host::apply(&webview, plan.enable, plan.remove);
+                self.extensions.registry.save();
+            }
+            HostEvent::Listed(Err(error)) => self.extension_notice(format!("Extensiones: {error}")),
+            HostEvent::Added(path, result) => {
+                self.extensions.adding.retain(|p| *p != path);
+                if let Some(at) = self.extensions.restore.iter().position(|(p, _)| *p == path) {
+                    let (_, open) = self.extensions.restore.remove(at);
+                    for (id, url) in open {
+                        if let Some(tab) = self.tabs.get_mut(id) {
+                            tab.url = url.clone();
+                            if let Live::Ready(web) = &tab.live {
+                                web.navigate(&url);
+                            }
+                        }
+                    }
+                }
+                let Some(index) = self.extensions.registry.find_path(&path) else { return };
+                match result {
+                    Ok((id, _)) => {
+                        let extension = &mut self.extensions.registry.extensions[index];
+                        extension.engine_id = Some(id.clone());
+                        let (enabled, name) = (extension.enabled, extension.name.clone());
+                        if !enabled {
+                            if let Some(webview) = self.any_webview() {
+                                extension_host::apply(&webview, vec![(id, false)], Vec::new());
+                            }
+                        }
+                        self.save_extensions();
+                        self.extension_notice(format!("Extensión lista: {name}"));
+                    }
+                    Err(error) => {
+                        let name = self.extensions.registry.extensions[index].name.clone();
+                        self.extension_notice(format!("No se pudo cargar «{name}»: {error}"));
+                    }
+                }
+            }
+            HostEvent::Changed => {}
+        }
+    }
+
+    // ---------- installing ----------
+
+    pub(super) fn install_from_store(&mut self, id: &str) {
+        if self.extensions.installing.iter().any(|i| i == id) {
+            return;
+        }
+        self.extensions.installing.push(id.to_string());
+        self.extension_notice("Descargando la extensión de la Chrome Web Store…".to_string());
+        extensions::install_in_background(self.hwnd.0 as isize, id.to_string(), browser_version());
+    }
+
+    /// The worker thread finished one or more store installs.
+    fn extensions_installed(&mut self) {
+        for (id, result) in extensions::take_finished() {
+            self.extensions.installing.retain(|i| *i != id);
+            match result {
+                Ok(extension) => {
+                    let name = extension.name.clone();
+                    let path = extension.path.clone();
+                    self.extensions.registry.upsert(extension);
+                    self.save_extensions();
+                    match self.extensions.engine_on {
+                        Some(true) => {
+                            // New or an update over loaded files: adding the
+                            // folder loads it, or reloads it in place.
+                            if let Some(webview) = self.any_webview() {
+                                self.load_folder(&webview, &path);
+                                self.extension_notice(format!("Instalada: {name}. Cargándola…"));
+                            } else {
+                                self.extensions.synced = false;
+                                self.extension_notice(format!("Instalada: {name}. Se carga con la próxima pestaña."));
+                            }
+                        }
+                        Some(false) => self.extension_notice(format!(
+                            "Instalada: {name}. Se activa al reiniciar Liviano: sin extensiones el motor arranca sin ellas, para ahorrar memoria."
+                        )),
+                        None => self.extension_notice(format!("Instalada: {name}.")),
+                    }
+                }
+                Err(error) => self.extension_notice(format!("No se pudo instalar la extensión: {error}")),
+            }
+        }
+    }
+
+    fn add_unpacked(&mut self, folder: PathBuf) {
+        match extensions::from_unpacked(&folder) {
+            Ok(extension) => {
+                let name = extension.name.clone();
+                let path = extension.path.clone();
+                self.extensions.registry.upsert(extension);
+                self.save_extensions();
+                match self.extensions.engine_on {
+                    Some(true) => match self.any_webview() {
+                        Some(webview) => {
+                            self.load_folder(&webview, &path);
+                        }
+                        None => self.extensions.synced = false,
+                    },
+                    Some(false) => self.extension_notice(format!("Agregada: {name}. Se activa al reiniciar Liviano.")),
+                    None => self.extension_notice(format!("Agregada: {name}.")),
+                }
+            }
+            Err(error) => self.extension_notice(format!("No se pudo cargar {}: {error}", folder.display())),
+        }
+    }
+
+    // ---------- the person's actions ----------
+
+    fn toggle_extension(&mut self, index: usize) {
+        let Some(extension) = self.extensions.registry.extensions.get_mut(index) else { return };
+        extension.enabled = !extension.enabled;
+        let (enabled, name, engine_id) = (extension.enabled, extension.name.clone(), extension.engine_id.clone());
+        if !enabled {
+            self.close_extension_tabs(engine_id.as_deref());
+        }
+        self.save_extensions();
+        if self.extensions.engine_on == Some(true) {
+            self.sync_extensions();
+        }
+        let state = if enabled { "habilitada" } else { "deshabilitada" };
+        let tail = if self.restart_needed() { " Reiniciá Liviano para que el cambio libere o active el soporte de extensiones." } else { "" };
+        self.extension_notice(format!("{name}: {state}.{tail}"));
+    }
+
+    fn toggle_pin(&mut self, index: usize) {
+        if let Some(extension) = self.extensions.registry.extensions.get_mut(index) {
+            extension.pinned = !extension.pinned;
+            self.save_extensions();
+        }
+    }
+
+    fn reload_extension(&mut self, index: usize) {
+        let Some(extension) = self.extensions.registry.extensions.get_mut(index) else { return };
+        if let Err(error) = extensions::refresh(extension) {
+            let name = extension.name.clone();
+            self.extension_notice(format!("No se pudo recargar «{name}»: {error}"));
+            return;
+        }
+        let (path, name) = (extension.path.clone(), extension.name.clone());
+        self.save_extensions();
+        match (self.extensions.engine_on, self.any_webview()) {
+            (Some(true), Some(webview)) => {
+                self.load_folder(&webview, &path);
+                self.extension_notice(format!("Recargando «{name}»…"));
+            }
+            _ => self.extension_notice(format!("«{name}» se recarga cuando el motor tenga extensiones.")),
+        }
+    }
+
+    fn remove_extension(&mut self, index: usize, name: &str) {
+        let Some(extension) = self.extensions.registry.remove(index) else { return };
+        self.close_extension_tabs(extension.engine_id.as_deref());
+        if let (Some(true), Some(webview), Some(id)) = (self.extensions.engine_on, self.any_webview(), extension.engine_id.clone()) {
+            extension_host::apply(&webview, Vec::new(), vec![id.clone()]);
+            self.extensions.registry.removed.retain(|r| *r != id);
+        }
+        extensions::delete_files(&extension);
+        self.save_extensions();
+        self.extension_notice(format!("Quitada: {name}"));
+    }
+
+    /// Opens one of the extension's pages in a tab next to the active one.
+    fn open_extension_page(&mut self, index: usize, page: Option<String>) {
+        let Some(extension) = self.extensions.registry.extensions.get(index) else { return };
+        let Some(url) = page.and_then(|p| extension.page_url(&p)) else { return };
+        let at = self.tabs.after_active();
+        self.open_tab(&url, at);
+    }
+
+    /// A click on a pinned extension: its popup (as a tab), else its options,
+    /// else the menu.
+    pub(super) fn open_pinned_extension(&mut self, nth: usize) {
+        let Some((index, _)) = self.extensions.registry.pinned().get(nth).copied() else { return };
+        let extension = &self.extensions.registry.extensions[index];
+        let usable = self.extensions.engine_on == Some(true) && extension.enabled && extension.engine_id.is_some();
+        let page = extension.popup.clone().or_else(|| extension.options.clone());
+        if usable && page.is_some() {
+            self.open_extension_page(index, page);
+        } else {
+            self.extensions_menu();
+        }
+    }
+
+    /// The puzzle button's menu: every extension with what can be done with
+    /// it, then installing and Ajustes.
+    pub(super) fn extensions_menu(&mut self) {
+        let store_here = self
+            .tabs
+            .active_tab()
+            .and_then(|t| webstore::extension_id_from_link(&t.url))
+            .filter(|id| self.extensions.registry.find_store(id).is_none());
+        let engine_on = self.extensions.engine_on == Some(true);
+        let chosen = unsafe {
+            let Ok(menu) = CreatePopupMenu() else { return };
+            let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
+            let grey = |on: bool| if on { MF_ENABLED } else { MF_GRAYED };
+            if let Some(notice) = &self.extensions.notice {
+                let mut short: String = notice.chars().take(90).collect();
+                if short.len() < notice.len() {
+                    short.push('…');
+                }
+                append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, &short);
+                append(menu, MF_SEPARATOR, 0, "");
+            }
+            for (i, extension) in self.extensions.registry.extensions.iter().enumerate() {
+                let Ok(sub) = CreatePopupMenu() else { continue };
+                let base = MENU_BASE + i * MENU_STRIDE;
+                let usable = engine_on && extension.enabled && extension.engine_id.is_some();
+                let pages = [
+                    (ITEM_POPUP, &extension.popup, "Abrir su ventana emergente (en una pestaña)"),
+                    (ITEM_OPTIONS, &extension.options, "Opciones"),
+                    (ITEM_SIDE_PANEL, &extension.side_panel, "Panel lateral (en una pestaña)"),
+                ];
+                for (item, page, label) in pages {
+                    if page.is_some() {
+                        append(sub, MF_STRING | grey(usable), base + item, label);
+                    }
+                }
+                if pages.iter().any(|(_, p, _)| p.is_some()) {
+                    append(sub, MF_SEPARATOR, 0, "");
+                }
+                append(sub, MF_STRING | check(extension.enabled), base + ITEM_ENABLED, "Habilitada");
+                append(sub, MF_STRING | check(extension.pinned), base + ITEM_PINNED, "Fijar junto al botón");
+                if extension.unpacked() {
+                    append(sub, MF_STRING, base + ITEM_RELOAD, "Recargar desde la carpeta");
+                }
+                append(sub, MF_STRING, base + ITEM_REMOVE, "Quitar…");
+                append(sub, MF_SEPARATOR, 0, "");
+                let about = format!("Versión {} · {}", extension.version, source_label(extension));
+                append(sub, MF_STRING | MF_GRAYED, MENU_NOTE, &about);
+                let title = if extension.enabled { extension.name.clone() } else { format!("{} (deshabilitada)", extension.name) };
+                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, &HSTRING::from(title));
+            }
+            if !self.extensions.registry.extensions.is_empty() {
+                append(menu, MF_SEPARATOR, 0, "");
+            }
+            if store_here.is_some() {
+                append(menu, MF_STRING, MENU_INSTALL_HERE, "Instalar la extensión de esta página");
+            }
+            append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Cargar extensión sin empaquetar…");
+            append(menu, MF_STRING, MENU_SETTINGS, "Extensiones en Ajustes…");
+            append(menu, MF_SEPARATOR, 0, "");
+            let note = if self.restart_needed() {
+                "Reiniciá Liviano para aplicar los cambios de extensiones"
+            } else {
+                "Cada extensión habilitada suma procesos y memoria"
+            };
+            append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, note);
+
+            let button = self.layout.extensions;
+            let mut point = POINT { x: button.left, y: button.bottom };
+            let flags = if self.layout.vertical {
+                point = POINT { x: button.right, y: button.top };
+                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_BOTTOMALIGN
+            } else {
+                TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN
+            };
+            if !self.layout.vertical {
+                point.x = button.right;
+            }
+            let _ = ClientToScreen(self.hwnd, &mut point);
+            let chosen = TrackPopupMenu(menu, flags, point.x, point.y, None, self.hwnd, None).0 as usize;
+            let _ = DestroyMenu(menu);
+            chosen
+        };
+        match chosen {
+            0 | MENU_NOTE => {}
+            MENU_INSTALL_HERE => {
+                if let Some(id) = store_here {
+                    self.install_from_store(&id);
+                }
+            }
+            MENU_LOAD_UNPACKED => post_action(self.hwnd, ACTION_LOAD_UNPACKED, 0),
+            MENU_SETTINGS => self.open_settings(),
+            id if id >= MENU_BASE => {
+                let (index, item) = ((id - MENU_BASE) / MENU_STRIDE, (id - MENU_BASE) % MENU_STRIDE);
+                let Some(extension) = self.extensions.registry.extensions.get(index) else { return };
+                match item {
+                    ITEM_POPUP => self.open_extension_page(index, extension.popup.clone()),
+                    ITEM_OPTIONS => self.open_extension_page(index, extension.options.clone()),
+                    ITEM_SIDE_PANEL => self.open_extension_page(index, extension.side_panel.clone()),
+                    ITEM_ENABLED => self.toggle_extension(index),
+                    ITEM_PINNED => self.toggle_pin(index),
+                    ITEM_RELOAD => self.reload_extension(index),
+                    ITEM_REMOVE => post_action(self.hwnd, ACTION_REMOVE, index),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // ---------- Ajustes ----------
+
+    /// Wires the Extensiones section of an open settings window.
+    pub(super) fn attach_settings_extensions(&mut self) {
+        settings_window::set_extension_handler(on_settings_command);
+        self.sync_settings_extensions();
+    }
+
+    fn sync_settings_extensions(&self) {
+        let rows: Vec<String> = self
+            .extensions
+            .registry
+            .extensions
+            .iter()
+            .map(|e| {
+                let mut parts = vec![e.name.clone()];
+                if !e.version.is_empty() {
+                    parts.push(e.version.clone());
+                }
+                parts.push(if e.enabled { "habilitada" } else { "deshabilitada" }.to_string());
+                if e.pinned {
+                    parts.push("fijada".to_string());
+                }
+                parts.push(source_label(e).to_string());
+                parts.join("  ·  ")
+            })
+            .collect();
+        let enabled = self.extensions.registry.extensions.iter().filter(|e| e.enabled).count();
+        let note = if self.restart_needed() {
+            "Reiniciá Liviano para aplicar los cambios: el soporte de extensiones se decide al arrancar el motor.".to_string()
+        } else if enabled == 0 {
+            "Sin extensiones habilitadas el motor arranca sin soporte de extensiones: no gastan memoria.".to_string()
+        } else {
+            format!("{enabled} habilitada(s). Cada una suma procesos propios y memoria (en torno a 20-40 MB).")
+        };
+        settings_window::set_extensions(&rows, &note);
+    }
+
+    fn settings_extension_command(&mut self, command: ExtensionCommand, index: Option<usize>) {
+        let Some(index) = index.filter(|i| *i < self.extensions.registry.extensions.len()) else { return };
+        match command {
+            ExtensionCommand::Toggle => self.toggle_extension(index),
+            ExtensionCommand::Pin => self.toggle_pin(index),
+            ExtensionCommand::Reload => self.reload_extension(index),
+            ExtensionCommand::Remove | ExtensionCommand::LoadUnpacked => {}
+        }
+    }
+}

@@ -1,0 +1,4 @@
+/target
+# Update signing keys: only the public half is committed.
+/keys/*.key
+/dist

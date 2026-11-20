@@ -1,0 +1,8 @@
+Readability.js is vendored unmodified from Mozilla Readability 0.6.0
+(https://github.com/mozilla/readability, npm package @mozilla/readability).
+
+Copyright (c) 2010 Arc90 Inc. and the Mozilla Readability contributors.
+Licensed under the Apache License, Version 2.0 (see LICENSE.md in this folder).
+
+Liviano embeds it in the executable and injects it into a page only when
+reader mode is turned on (src/reader.rs).

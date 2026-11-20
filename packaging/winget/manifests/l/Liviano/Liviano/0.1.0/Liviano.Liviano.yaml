@@ -1,0 +1,9 @@
+# Ejemplo, sin publicar. Antes de enviarlo a winget-pkgs: publicar el release
+# y poner el SHA256 real
+# (dist\SHA256SUMS.txt). Validar con: winget validate --manifest <carpeta>
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
+PackageIdentifier: Liviano.Liviano
+PackageVersion: 0.1.0
+DefaultLocale: es-AR
+ManifestType: version
+ManifestVersion: 1.6.0

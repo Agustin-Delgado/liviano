@@ -1,0 +1,32 @@
+Liviano
+Copyright (c) 2026 Los autores de Liviano. Licencia MIT (ver LICENSE).
+
+Referencia funcional: Search, de driceroland (https://github.com/driceroland/Search),
+licencia MIT. Liviano reproduce sus ideas en Windows; no incluye su código, su
+nombre ni su ícono.
+
+Componentes de terceros incluidos en el ejecutable
+--------------------------------------------------
+
+Mozilla Readability 0.6.0 (assets/readability/Readability.js)
+  Copyright (c) 2010 Arc90 Inc. y colaboradores de Mozilla Readability.
+  Apache License 2.0 (texto completo en assets/readability/LICENSE.md).
+  Se usa sin modificar para el modo lectura.
+
+WebView2 SDK: cargador estático (WebView2LoaderStatic.lib, vía webview2-com-sys)
+  Copyright (c) Microsoft Corporation. Licencia del SDK de WebView2 (de tipo BSD).
+
+webview2-com, webview2-com-sys, webview2-com-macros
+  Copyright (c) Microsoft Corporation y colaboradores. Licencia MIT.
+
+windows, windows-core y crates asociados (windows-rs)
+  Copyright (c) Microsoft Corporation. Licencia MIT o Apache 2.0.
+
+ed25519-compact
+  Copyright (c) 2020-2026 Frank Denis. Licencia MIT.
+
+serde, serde_json
+  Copyright (c) David Tolnay y colaboradores. Licencia MIT o Apache 2.0.
+
+El runtime de WebView2 (el motor de Microsoft Edge) no se distribuye con
+Liviano: se usa el que está instalado en Windows.

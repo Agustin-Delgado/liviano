@@ -1,0 +1,104 @@
+//! User settings (settings.json). Every field has a default, so a missing or
+//! partial file is fine and new fields never break an old file.
+
+use std::collections::{BTreeSet, HashMap};
+
+use serde::{Deserialize, Serialize};
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Theme {
+    #[default]
+    System,
+    Light,
+    Dark,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Settings {
+    pub theme: Theme,
+    /// `{q}` is replaced by the encoded query.
+    pub search_url: String,
+    /// Seconds a background tab stays live before it is suspended.
+    pub suspend_after_secs: u64,
+    /// Seconds a background tab stays suspended before its view is destroyed.
+    pub discard_after_secs: u64,
+    /// System memory load (percent) above which background tabs are discarded at once.
+    pub memory_pressure_percent: u32,
+    /// Hosts that never sleep nor get discarded (they cost more memory).
+    pub keep_awake: BTreeSet<String>,
+    /// Hosts where ad and tracker blocking is off (it is on everywhere else).
+    pub shield_disabled: BTreeSet<String>,
+    /// Command name -> "Ctrl+Shift+X" (comma separated for several).
+    pub shortcuts: HashMap<String, String>,
+    /// Two pages side by side (Ctrl+Alt+N, or a tab dropped on the page). On
+    /// by default: it costs nothing until a pair exists.
+    pub split_view: bool,
+    /// Look for a new version once a day (RF-22).
+    pub check_updates: bool,
+    /// Manifest address; empty means the one built in (`updater`).
+    pub update_url: String,
+    /// RF-23: the local pipe scripts drive the browser through (tests only).
+    pub bench_enabled: bool,
+    /// Offer to save a password after a login (filling is always on request).
+    pub passwords_offer: bool,
+    /// Origins where saving is never offered ("Nunca para este sitio").
+    pub passwords_never: BTreeSet<String>,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            theme: Theme::System,
+            search_url: "https://duckduckgo.com/?q={q}".to_string(),
+            suspend_after_secs: 60,
+            discard_after_secs: 15 * 60,
+            memory_pressure_percent: 85,
+            keep_awake: BTreeSet::new(),
+            shield_disabled: BTreeSet::new(),
+            shortcuts: HashMap::new(),
+            split_view: true,
+            check_updates: true,
+            update_url: String::new(),
+            bench_enabled: false,
+            passwords_offer: true,
+            passwords_never: BTreeSet::new(),
+        }
+    }
+}
+
+/// What the Ajustes window hands back, on top of the settings in force. The
+/// window edits a copy taken when it opened and has no control for the
+/// per-site lists the app changes from a tab (shield exceptions, "never for
+/// this site") nor for the update address: those stay as the app has them.
+pub fn from_window(current: &Settings, edited: Settings) -> Settings {
+    Settings {
+        shield_disabled: current.shield_disabled.clone(),
+        passwords_never: current.passwords_never.clone(),
+        update_url: current.update_url.clone(),
+        ..edited
+    }
+}
+
+/// A search address the field can use: http(s) with a `{q}` for the query.
+pub fn valid_search_url(text: &str) -> bool {
+    let text = text.trim();
+    let lower = text.to_ascii_lowercase();
+    (lower.starts_with("https://") || lower.starts_with("http://")) && text.contains("{q}") && !text.contains(char::is_whitespace)
+}
+
+/// A whole number within `range`, as typed in a settings field.
+pub fn parse_number(text: &str, range: std::ops::RangeInclusive<u64>) -> Option<u64> {
+    text.trim().parse::<u64>().ok().filter(|n| range.contains(n))
+}
+
+/// The host a "keep awake" entry is stored as, the way tabs are compared
+/// against it: no scheme, no path, no "www.". "https://www.YouTube.com/x" -> "youtube.com".
+pub fn normalize_host(text: &str) -> Option<String> {
+    let text = text.trim().to_lowercase();
+    let host = crate::omnibox::display_host(&text);
+    (!host.is_empty() && !host.contains(char::is_whitespace) && host.contains(|c: char| c.is_ascii_alphanumeric()))
+        .then(|| host.to_string())
+}
+

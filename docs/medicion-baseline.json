@@ -1,0 +1,35 @@
+{
+    "commit":  "1a410d7",
+    "date":  "2026-11-20",
+    "unit":  "MB, private working set",
+    "scenarios":  {
+                      "solo-programa":  {
+                                            "total_mb":  1.6,
+                                            "tolerance_percent":  15
+                                        },
+                      "about-blank":  {
+                                          "total_mb":  86.8,
+                                          "tolerance_percent":  15
+                                      },
+                      "liviana":  {
+                                      "total_mb":  109.8,
+                                      "tolerance_percent":  15
+                                  },
+                      "pesada-con-bloqueo":  {
+                                                 "total_mb":  394.9,
+                                                 "tolerance_percent":  35
+                                             },
+                      "pesada-sin-bloqueo":  {
+                                                 "total_mb":  559.3,
+                                                 "tolerance_percent":  35
+                                             },
+                      "20-pestanas":  {
+                                          "total_mb":  182.7,
+                                          "tolerance_percent":  15
+                                      },
+                      "restaurar-50":  {
+                                           "total_mb":  109.8,
+                                           "tolerance_percent":  15
+                                       }
+                  }
+}

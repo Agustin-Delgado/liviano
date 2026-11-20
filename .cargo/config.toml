@@ -1,0 +1,7 @@
+# The C runtime goes inside the executable: no Visual C++ redistributable
+# needed on the machines it runs on.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

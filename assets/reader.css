@@ -1,0 +1,46 @@
+:root {
+  color-scheme: light dark;
+  --bg: #faf9f6;
+  --ink: #1d1d1f;
+  --muted: #6a6862;
+  --link: #1f5fbf;
+  --rule: #e2dfd8;
+  --code: #f0eee9;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1b1d;
+    --ink: #e4e2dd;
+    --muted: #9b988f;
+    --link: #8db6ff;
+    --rule: #34343a;
+    --code: #26262a;
+  }
+}
+html { background: var(--bg); }
+body {
+  margin: 0;
+  color: var(--ink);
+  font: 19px/1.65 Charter, "Iowan Old Style", Georgia, "Palatino Linotype", serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+main { max-width: 40rem; margin: 0 auto; padding: 3.5rem 1.5rem 6rem; }
+header { margin-bottom: 2rem; padding-bottom: 1.2rem; border-bottom: 1px solid var(--rule); }
+.site, .byline { margin: 0; color: var(--muted); font: 0.85rem/1.4 "Segoe UI", system-ui, sans-serif; }
+h1, h2, h3, h4 { font-family: "Segoe UI", system-ui, sans-serif; font-weight: 600; line-height: 1.25; }
+h1 { font-size: 2.1rem; margin: 0.3rem 0 0.6rem; }
+h2 { font-size: 1.45rem; margin-top: 2.2rem; }
+h3 { font-size: 1.2rem; margin-top: 1.8rem; }
+p, ul, ol, blockquote, figure, pre, table { margin: 0 0 1.1em; }
+a { color: var(--link); text-decoration-thickness: 1px; text-underline-offset: 2px; }
+img, video, svg, canvas, iframe { max-width: 100%; height: auto; }
+figure { margin-left: 0; margin-right: 0; }
+figcaption, small { color: var(--muted); font-size: 0.85em; }
+blockquote { margin-left: 0; padding-left: 1em; border-left: 3px solid var(--rule); color: var(--muted); }
+pre, code { font-family: "Cascadia Mono", Consolas, monospace; font-size: 0.85em; }
+pre { overflow: auto; padding: 0.9em 1em; background: var(--code); border-radius: 6px; }
+:not(pre) > code { padding: 0.1em 0.3em; background: var(--code); border-radius: 4px; }
+table { display: block; overflow-x: auto; border-collapse: collapse; font-size: 0.9em; }
+th, td { padding: 0.35em 0.6em; border: 1px solid var(--rule); text-align: left; vertical-align: top; }
+hr { border: 0; border-top: 1px solid var(--rule); margin: 2rem 0; }
