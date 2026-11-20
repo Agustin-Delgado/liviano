@@ -10,6 +10,7 @@ mod download_watch;
 mod downloads;
 mod extension_host;
 mod extensions;
+mod gfx;
 mod history;
 mod http;
 mod inject;
@@ -40,6 +41,7 @@ mod vault_watch;
 mod unzip;
 mod web;
 mod webstore;
+mod widgets;
 
 use windows::Win32::{
     System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},

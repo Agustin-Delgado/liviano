@@ -12,7 +12,6 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::{
-            Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
             Gdi::{
                 BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
                 LOGFONTW, PAINTSTRUCT,
@@ -47,6 +46,7 @@ mod vault_ui;
 use crate::{
     curtain::Curtain,
     design::{self, Palette},
+    gfx,
     history::{Entry, History},
     omnibar::{Omnibar, Signal},
     omnibox,
@@ -66,6 +66,8 @@ use crate::{
 const TIMER_SLEEP: usize = 1;
 const TIMER_SAVE: usize = 2;
 const TIMER_RETRY: usize = 3;
+/// Runs only while something in the strip moves (see `tabbar::Motion`).
+const TIMER_ANIM: usize = 4;
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
 const WM_APP_REPAINT: u32 = WM_APP + 3;
 const MENU_PIN: usize = 10;
@@ -119,6 +121,10 @@ struct App {
     vertical: bool,
     collapsed: bool,
     layout: tabbar::Layout,
+    surface: gfx::Surface,
+    motion: tabbar::Motion,
+    /// The animation timer's interval while it runs.
+    anim_timer: Option<u32>,
     omnibar: Box<Omnibar>,
     mode: Option<Mode>,
     rows: Vec<Row>,
@@ -229,6 +235,9 @@ pub fn run() -> windows::core::Result<()> {
         vertical: session.vertical_tabs,
         collapsed: session.sidebar_collapsed,
         layout: Default::default(),
+        surface: Default::default(),
+        motion: tabbar::Motion::new(!design::animations_enabled()),
+        anim_timer: None,
         omnibar,
         mode: None,
         rows: Vec::new(),
@@ -328,29 +337,41 @@ fn create_window(session: &Session) -> windows::core::Result<HWND> {
 }
 
 fn make_font(scale: f32) -> HFONT {
+    make_font_sized(design::size::TEXT, scale)
+}
+
+/// A GDI font in the interface's face, for the native controls.
+pub(crate) fn make_font_sized(px: f32, scale: f32) -> HFONT {
+    make_font_weighted(px, 400, scale)
+}
+
+pub(crate) fn make_font_weighted(px: f32, weight: i32, scale: f32) -> HFONT {
     let mut lf = LOGFONTW {
-        lfHeight: -(13.0 * scale).round() as i32,
-        lfWeight: 400,
+        lfHeight: -(px * scale).round() as i32,
+        lfWeight: weight,
         lfQuality: CLEARTYPE_QUALITY,
         ..Default::default()
     };
-    for (slot, ch) in lf.lfFaceName.iter_mut().zip("Segoe UI".encode_utf16()) {
+    for (slot, ch) in lf.lfFaceName.iter_mut().take(31).zip(gfx::family().encode_utf16()) {
         *slot = ch;
     }
     unsafe { CreateFontIndirectW(&lf) }
 }
 
+/// The frame Windows draws around the window, made one piece with the strip:
+/// dark mode when the palette is, the title bar in the chrome's own grey with
+/// muted ink, and round corners (Windows 11 does that by default; asking is
+/// harmless on 10, where the attributes are ignored).
+///
+/// No Mica: it tints the frame with the wallpaper, and the look this follows
+/// is flat neutral greys where the page is the only thing with colour.
 fn apply_window_theme(hwnd: HWND, palette: &Palette) {
-    // DWMWA_USE_IMMERSIVE_DARK_MODE
-    let dark: i32 = palette.dark as i32;
-    unsafe {
-        let _ = DwmSetWindowAttribute(
-            hwnd,
-            DWMWINDOWATTRIBUTE(20),
-            &dark as *const i32 as *const _,
-            std::mem::size_of::<i32>() as u32,
-        );
-    }
+    use design::dwm;
+    dwm::set(hwnd, dwm::DARK_MODE, palette.dark as u32);
+    dwm::set(hwnd, dwm::CORNERS, dwm::ROUND);
+    dwm::set(hwnd, dwm::CAPTION_COLOR, palette.chrome.colorref().0);
+    dwm::set(hwnd, dwm::TEXT_COLOR, palette.ink_muted.colorref().0);
+    dwm::set(hwnd, dwm::BORDER_COLOR, palette.line.colorref().0);
 }
 
 fn on_omnibar(signal: Signal) {
@@ -473,6 +494,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
+                TIMER_ANIM => {
+                    with_app(|app| app.invalidate_strip());
+                }
                 _ => {}
             }
             LRESULT(0)
@@ -594,26 +618,65 @@ impl App {
 
     fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC) {
         let (width, height) = self.client_size();
+        let loading = self.tabs.tabs.iter().any(|t| t.loading);
+        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, Instant::now());
+        self.set_anim_timer(next);
+        let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
-        tabbar::paint(
-            hdc,
-            width,
-            height,
-            &tabbar::Paint {
-                layout: &self.layout,
-                tabs: &infos,
-                active: self.tabs.active,
-                hover: self.hover,
-                palette: &self.palette,
-                font: self.font,
-                hint: self.hint(),
-                scale: self.scale,
-                groups: &self.split_groups(),
-                fills: &self.split_fills(),
-                extension_initials: &extension_initials,
-            },
-        );
+        let groups = self.split_groups();
+        let fills = self.split_fills();
+        let hint = self.hint().map(str::to_owned);
+        let paint = tabbar::Paint {
+            layout: &self.layout,
+            tabs: &infos,
+            active: self.tabs.active,
+            palette: &self.palette,
+            hint: hint.as_deref(),
+            scale: self.scale,
+            groups: &groups,
+            fills: &fills,
+            extension_initials: &extension_initials,
+            motion: &self.motion,
+        };
+        let rect = RECT { left: 0, top: 0, right: width, bottom: height };
+        let drawn = surface.paint(hdc, rect, |g| tabbar::paint(g, width, height, &paint));
+        drop(paint);
+        self.surface = surface;
+        if !drawn {
+            gfx::fill_gdi(hdc, rect, self.palette.chrome);
+        }
+    }
+
+    /// Starts, retimes or stops the animation timer: it runs only while
+    /// something moves, so a still window costs nothing.
+    fn set_anim_timer(&mut self, interval: Option<u32>) {
+        if self.anim_timer == interval {
+            return;
+        }
+        unsafe {
+            match interval {
+                Some(ms) => {
+                    SetTimer(Some(self.hwnd), TIMER_ANIM, ms, None);
+                }
+                None => {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_ANIM);
+                }
+            }
+        }
+        self.anim_timer = interval;
+    }
+
+    fn invalidate_strip(&self) {
+        let strip = self.layout.strip;
+        if strip.width() == 0 {
+            // Nothing left to move: the next paint stops the timer.
+            self.invalidate();
+            return;
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), Some(&strip.win()), false);
+        }
     }
 
     fn update_title(&self) {
@@ -624,6 +687,7 @@ impl App {
     }
 
     fn refresh_theme(&mut self) {
+        self.motion.reduced = !design::animations_enabled();
         self.palette = design::palette(self.settings.theme);
         apply_window_theme(self.hwnd, &self.palette);
         self.omnibar.set_palette(&self.palette);

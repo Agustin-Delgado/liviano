@@ -1,5 +1,7 @@
 //! Ajustes (Ctrl+,): one small native window with plain controls — no web
-//! view for the interface. It edits a copy of the settings and hands every
+//! view for the interface. The controls are the system's, framed in the
+//! app's look: the page's ground, edits and lists sitting in soft grey wells
+//! instead of a sunken edge, and buttons drawn by `widgets`. It edits a copy of the settings and hands every
 //! committed change to the app, which applies it at once and writes
 //! settings.json. Everything it holds (window, fonts, brushes) is freed when
 //! it closes.
@@ -9,18 +11,13 @@ use std::cell::{Cell, RefCell};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::{
-            Dwm::{DWMWINDOWATTRIBUTE, DwmSetWindowAttribute},
-            Gdi::{
-                CLEARTYPE_QUALITY, CreateFontIndirectW, CreateSolidBrush, DT_CALCRECT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-                DT_RIGHT, DT_SINGLELINE, DT_VCENTER, DeleteObject, DrawTextW, FillRect, HBRUSH, HDC, HFONT,
-                LOGFONTW, RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SelectObject,
-                SetBkColor, SetBkMode, SetTextColor, TRANSPARENT,
-            },
+        Graphics::Gdi::{
+            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, PAINTSTRUCT, RDW_ALLCHILDREN,
+            RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SetBkColor, SetTextColor,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, ODS_SELECTED, SetWindowTheme},
+            Controls::{BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, ODS_SELECTED, ODT_BUTTON, SetWindowTheme},
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
             Input::KeyboardAndMouse::{GetFocus, SetFocus},
             WindowsAndMessaging::*,
@@ -30,7 +27,9 @@ use windows::{
 };
 
 use crate::{
-    design::Palette,
+    design::{Palette, dwm, size},
+    gfx::{Align, Color, Font, RectF, Surface},
+    widgets::{self, ButtonKind},
     settings::{self, Settings, Theme},
     shortcuts::{self, Command},
     updater,
@@ -120,6 +119,7 @@ struct State {
     ext_note: HWND,
     font: HFONT,
     heading_font: HFONT,
+    scale: f32,
 }
 
 /// Brushes and colours the window proc paints with. Kept apart from `State`
@@ -132,8 +132,6 @@ struct Colors {
     background_color: u32,
     field_color: u32,
     ink: u32,
-    ink_muted: u32,
-    font: isize,
 }
 
 thread_local! {
@@ -141,6 +139,12 @@ thread_local! {
     static HANDLER: Cell<Option<fn(Settings)>> = const { Cell::new(None) };
     static EXTENSION_HANDLER: Cell<Option<fn(ExtensionCommand, Option<usize>)>> = const { Cell::new(None) };
     static COLORS: Cell<Colors> = Cell::new(Colors::default());
+    /// The palette and scale, and the wells: read while painting, which can
+    /// happen while the state is borrowed.
+    static LOOK: Cell<Option<(Palette, f32)>> = const { Cell::new(None) };
+    static WELLS: RefCell<Vec<RECT>> = const { RefCell::new(Vec::new()) };
+    /// The window's ground, its buttons, and the shortcuts list's rows.
+    static SURFACES: RefCell<(Surface, Surface, Surface)> = RefCell::new(Default::default());
 }
 
 enum Outcome {
@@ -159,16 +163,7 @@ fn wide(text: &str) -> HSTRING {
 }
 
 fn make_font(scale: f32, weight: i32) -> HFONT {
-    let mut lf = LOGFONTW {
-        lfHeight: -(13.0 * scale).round() as i32,
-        lfWeight: weight,
-        lfQuality: CLEARTYPE_QUALITY,
-        ..Default::default()
-    };
-    for (slot, ch) in lf.lfFaceName.iter_mut().zip("Segoe UI".encode_utf16()) {
-        *slot = ch;
-    }
-    unsafe { CreateFontIndirectW(&lf) }
+    crate::app::make_font_weighted(size::TEXT, weight, scale)
 }
 
 fn text_of(hwnd: HWND) -> String {
@@ -273,8 +268,9 @@ pub fn pre_translate(msg: &MSG) -> bool {
 
 /// Re-colours the window (also the first time): the same pairs as the rest.
 pub fn set_palette(palette: &Palette) {
-    let Some((hwnd, children, font)) =
-        STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.font))))
+    let Some((hwnd, children, _font, scale)) = STATE.with(|s| {
+        s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.font, st.scale)))
+    })
     else {
         return;
     };
@@ -287,18 +283,20 @@ pub fn set_palette(palette: &Palette) {
         }
         COLORS.with(|c| {
             c.set(Colors {
-                background: CreateSolidBrush(palette.chrome.colorref()).0 as isize,
-                field: CreateSolidBrush(palette.field.colorref()).0 as isize,
-                selection: CreateSolidBrush(palette.tab_hover.colorref()).0 as isize,
-                background_color: palette.chrome.colorref().0,
-                field_color: palette.field.colorref().0,
+                background: CreateSolidBrush(palette.field.colorref()).0 as isize,
+                field: CreateSolidBrush(palette.selection.colorref()).0 as isize,
+                selection: CreateSolidBrush(palette.selection.colorref()).0 as isize,
+                background_color: palette.field.colorref().0,
+                field_color: palette.selection.colorref().0,
                 ink: palette.ink.colorref().0,
-                ink_muted: palette.ink_muted.colorref().0,
-                font: font.0 as isize,
             })
         });
-        let dark: i32 = palette.dark as i32;
-        let _ = DwmSetWindowAttribute(hwnd, DWMWINDOWATTRIBUTE(20), &dark as *const i32 as *const _, 4);
+        LOOK.with(|l| l.set(Some((*palette, scale))));
+        dwm::set(hwnd, dwm::DARK_MODE, palette.dark as u32);
+        dwm::set(hwnd, dwm::CORNERS, dwm::ROUND);
+        dwm::set(hwnd, dwm::CAPTION_COLOR, palette.field.colorref().0);
+        dwm::set(hwnd, dwm::TEXT_COLOR, palette.ink_muted.colorref().0);
+        dwm::set(hwnd, dwm::BORDER_COLOR, palette.line.colorref().0);
         for (child, kind) in children {
             let _ = match (palette.dark, kind) {
                 (_, Kind::Label) => Ok(()),
@@ -358,8 +356,18 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let font = make_font(scale, 400);
         let heading_font = make_font(scale, 600);
         let mut children: Vec<(HWND, Kind)> = Vec::new();
+        let mut wells: Vec<RECT> = Vec::new();
         let mut add = |class: PCWSTR, text: &str, style: u32, ex: WINDOW_EX_STYLE, rect: (i32, i32, i32, i32), id: i32, kind: Kind, heading: bool| {
-            let (x, y, w, h) = rect;
+            let (mut x, mut y, mut w, mut h) = rect;
+            let mut ex = ex;
+            if ex == WS_EX_CLIENTEDGE {
+                // No sunken edge: the control sits inside a grey well the
+                // window draws, a little smaller than the place it was given.
+                wells.push(RECT { left: px(x), top: px(y), right: px(x + w), bottom: px(y + h) });
+                let (dx, dy) = if matches!(kind, Kind::Edit) { (8, 4) } else { (4, 4) };
+                (x, y, w, h) = (x + dx, y + dy, w - 2 * dx, h - 2 * dy);
+                ex = WINDOW_EX_STYLE::default();
+            }
             let child = CreateWindowExW(
                 ex,
                 class,
@@ -394,7 +402,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         };
         let edit_style = tab | ES_AUTOHSCROLL as u32;
         let number_style = edit_style | ES_NUMBER as u32;
-        let button_style = tab | BS_PUSHBUTTON as u32;
+        let button_style = tab | BS_OWNERDRAW as u32;
 
         // Left column: General and Pestañas.
         let l = 24;
@@ -468,8 +476,13 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             let text = wide(name);
             SendMessageW(passwords_offer, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
-        let row = SendMessageW(keys_list, LB_GETITEMHEIGHT, Some(WPARAM(0)), None).0.max(1);
-        SendMessageW(keys_list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(px(24).max(row as i32) as isize)));
+        SendMessageW(keys_list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(px(28) as isize)));
+        WELLS.with(|w| *w.borrow_mut() = wells);
+        for (child, kind) in &children {
+            if matches!(kind, Kind::Button) && (GetWindowLongW(*child, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_OWNERDRAW as u32 {
+                widgets::track_hover(*child);
+            }
+        }
 
         Ok(State {
             hwnd,
@@ -496,6 +509,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             ext_note,
             font,
             heading_font,
+            scale,
         })
     }
 }
@@ -866,41 +880,38 @@ fn close() {
 }
 
 /// Owner-drawn row of the shortcuts list: the action on the left, its chords
-/// on the right.
-fn draw_key_row(item: &DRAWITEMSTRUCT) {
+/// on the right, the picked row on a soft rounded ground.
+fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
     if item.itemID == u32::MAX {
         return;
     }
-    let colors = COLORS.with(|c| c.get());
-    unsafe {
+    let text = unsafe {
         let len = SendMessageW(item.hwndItem, LB_GETTEXTLEN, Some(WPARAM(item.itemID as usize)), None).0;
         if len < 0 {
             return;
         }
         let mut buffer = vec![0u16; len as usize + 1];
         SendMessageW(item.hwndItem, LB_GETTEXT, Some(WPARAM(item.itemID as usize)), Some(LPARAM(buffer.as_mut_ptr() as isize)));
-        let text = String::from_utf16_lossy(&buffer[..len as usize]);
-        let (label, chords) = text.split_once('\t').unwrap_or((&text, ""));
-        let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
-        let brush = if selected { colors.selection } else { colors.field };
-        let hdc: HDC = item.hDC;
-        FillRect(hdc, &item.rcItem, HBRUSH(brush as _));
-        SelectObject(hdc, HFONT(colors.font as _).into());
-        SetBkMode(hdc, TRANSPARENT);
-        let pad = (item.rcItem.bottom - item.rcItem.top) / 3;
-        let mut rect = RECT { left: item.rcItem.left + pad, right: item.rcItem.right - pad, ..item.rcItem };
-        let flags = DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_END_ELLIPSIS;
-        SetTextColor(hdc, COLORREF(colors.ink_muted));
-        let mut right: Vec<u16> = chords.encode_utf16().collect();
-        let mut measured = rect;
-        DrawTextW(hdc, &mut right, &mut measured, flags | DT_CALCRECT);
-        DrawTextW(hdc, &mut right, &mut rect, flags | DT_RIGHT);
-        SetTextColor(hdc, COLORREF(colors.ink));
-        // The label takes what the chords leave.
-        rect.right -= (measured.right - measured.left) + pad;
-        let mut left: Vec<u16> = label.encode_utf16().collect();
-        DrawTextW(hdc, &mut left, &mut rect, flags | DT_LEFT);
-    }
+        String::from_utf16_lossy(&buffer[..len as usize])
+    };
+    let (label, chords) = text.split_once('\t').unwrap_or((&text, ""));
+    let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+    SURFACES.with(|s| {
+        s.borrow_mut().2.paint(item.hDC, item.rcItem, |g| {
+            let rect: RectF = item.rcItem.into();
+            g.fill(rect, palette.selection);
+            if selected {
+                g.round(rect.inset(0.0, 1.0), size::RADIUS * scale * 0.75, palette.tab_active);
+            }
+            let inner = rect.inset(10.0 * scale, 0.0);
+            let small = Font::new(size::TEXT_SMALL * scale, size::REGULAR, Align::Leading);
+            let chords_w = g.measure(chords, small).min(inner.width() * 0.5);
+            let chords_rect = RectF::new(inner.right - chords_w - 1.0, inner.top, inner.right, inner.bottom);
+            g.text(chords, chords_rect, small, palette.ink_muted);
+            let label_rect = RectF::new(inner.left, inner.top, chords_rect.left - 8.0 * scale, inner.bottom);
+            g.text(label, label_rect, Font::new(size::TEXT * scale, size::REGULAR, Align::Leading), palette.ink);
+        })
+    });
 }
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -942,7 +953,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_DRAWITEM => {
             let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
-            draw_key_row(item);
+            let Some((palette, scale)) = LOOK.with(|l| l.get()) else { return LRESULT(1) };
+            if item.CtlType == ODT_BUTTON {
+                let kind = if item.CtlID == ID_CLOSE as u32 { ButtonKind::Primary } else { ButtonKind::Secondary };
+                SURFACES.with(|s| {
+                    widgets::draw_button_item(&mut s.borrow_mut().1, item, kind, Color::from(palette.field), &palette, scale)
+                });
+            } else {
+                draw_key_row(item, &palette, scale);
+            }
             LRESULT(1)
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLORBTN | WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
@@ -958,17 +977,27 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(if on_field { colors.field } else { colors.background })
         }
-        WM_ERASEBKGND => {
-            let colors = COLORS.with(|c| c.get());
-            if colors.background == 0 {
-                return default();
-            }
-            let mut rect = RECT::default();
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
             unsafe {
+                let hdc = BeginPaint(hwnd, &mut ps);
+                let mut rect = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rect);
-                FillRect(HDC(wparam.0 as _), &rect, HBRUSH(colors.background as _));
+                let wells = WELLS.with(|w| w.borrow().clone());
+                if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                    SURFACES.with(|s| {
+                        s.borrow_mut().0.paint(hdc, rect, |g| {
+                            g.fill(rect.into(), palette.field);
+                            for well in &wells {
+                                widgets::draw_well(g, (*well).into(), &palette, scale);
+                            }
+                        })
+                    });
+                }
+                let _ = EndPaint(hwnd, &ps);
             }
-            LRESULT(1)
+            LRESULT(0)
         }
         _ => default(),
     }

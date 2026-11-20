@@ -14,6 +14,21 @@ Las ideas vienen del navegador [Search](https://github.com/driceroland/Search)
 de driceroland (licencia MIT), que sirvió de referencia funcional. Liviano no
 contiene su código, su nombre ni su ícono.
 
+## Cómo se ve
+
+La interfaz se dibuja con Direct2D y DirectWrite sobre ventanas Win32, con
+los grises planos de Search, esquinas redondeadas y barra de título oscura de
+Windows 11 (sin Mica, que tiñe con el fondo de pantalla). Sin interfaz web.
+
+| | |
+|---|---|
+| ![Pestañas arriba, tema claro](docs/capturas/claro-horizontal.png) | ![Pestañas al costado, tema oscuro](docs/capturas/oscuro-vertical.png) |
+| ![Campo único abierto](docs/capturas/campo-claro.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
+| ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |
+
+Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
+al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.
+
 ## Qué hace
 
 Estado de cada función de la especificación (sección 3) en esta versión.

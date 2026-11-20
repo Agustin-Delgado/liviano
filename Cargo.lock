@@ -81,6 +81,7 @@ dependencies = [
  "serde_json",
  "webview2-com",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

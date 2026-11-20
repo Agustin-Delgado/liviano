@@ -1,18 +1,34 @@
 //! The single field: a small popup over the page with a native edit control
-//! and, under it, a native list of suggestions. It serves three modes —
-//! address, tab switcher, find in page and the bookmarks, history and
-//! downloads panels — so there is one field, not six.
+//! and, under it, the list of suggestions. It serves every mode — address,
+//! tab switcher, find in page and the bookmarks, history, downloads and
+//! passwords panels — so there is one field, not six.
+//!
+//! The edit stays the system's (IME, selection, clipboard, undo all come
+//! with it); everything around it is drawn with Direct2D: the floating
+//! panel's ground and its search glass, and the list, an owner-drawn list
+//! box whose rows read as Search's (a site mark, the title, the address
+//! dimmed, a soft rounded ground for the picked row). Windows 11 rounds the
+//! popup's corners and casts its shadow.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
-        Graphics::Gdi::{CreateSolidBrush, DeleteObject, HBRUSH, HDC, HFONT, SetBkColor, SetTextColor},
+        Graphics::Gdi::{
+            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, InvalidateRect, PAINTSTRUCT,
+            SetBkColor, SetTextColor,
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{EM_GETSEL, EM_SETCUEBANNER, EM_SETSEL},
-            Input::KeyboardAndMouse::{GetKeyState, SetFocus, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_RETURN, VK_SHIFT, VK_UP},
+            Controls::{
+                DRAWITEMSTRUCT, EM_GETSEL, EM_SETCUEBANNER, EM_SETMARGINS, EM_SETSEL, ODS_SELECTED, SetWindowTheme,
+                WM_MOUSELEAVE,
+            },
+            Input::KeyboardAndMouse::{
+                GetKeyState, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_DOWN, VK_ESCAPE,
+                VK_RETURN, VK_SHIFT, VK_UP,
+            },
             Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
         },
@@ -20,7 +36,10 @@ use windows::{
     core::{HSTRING, PCWSTR, w},
 };
 
-use crate::design::Palette;
+use crate::{
+    design::{Palette, dwm, size},
+    gfx::{Align, Color, Font, Painter, RectF, Surface},
+};
 
 /// Whether the foreground window is one of this process's. Taking the focus
 /// otherwise would pull the keyboard away from the program the person is
@@ -53,8 +72,19 @@ pub enum Signal {
 
 thread_local! {
     static HANDLER: Cell<Option<fn(Signal)>> = const { Cell::new(None) };
-    static BRUSHES: Cell<(isize, isize, u32, u32)> = const { Cell::new((0, 0, 0, 0)) };
+    /// The edit's ground brush (WM_CTLCOLOREDIT), its colour and the ink.
+    static BRUSHES: Cell<(isize, u32, u32)> = const { Cell::new((0, 0, 0)) };
+    static LOOK: Cell<Option<(Palette, f32)>> = const { Cell::new(None) };
+    /// One surface for the panel's ground and one for the list's rows.
+    static SURFACES: RefCell<(Surface, Surface)> = RefCell::new(Default::default());
+    /// The row under the pointer, drawn with a quieter ground than the picked one.
+    static HOVERED: Cell<Option<usize>> = const { Cell::new(None) };
 }
+
+/// Space around the list inside the panel.
+const LIST_PAD: f32 = 6.0;
+/// The glass's column at the field's left.
+const GLASS_COLUMN: f32 = 44.0;
 
 fn signal(s: Signal) {
     if let Some(handler) = HANDLER.with(|h| h.get()) {
@@ -68,6 +98,7 @@ pub struct Omnibar {
     pub list: HWND,
     rows: usize,
     row_height: i32,
+    scale: f32,
     edit_height: i32,
     /// Rows shown at once; the list scrolls past them.
     visible_rows: usize,
@@ -81,6 +112,8 @@ impl Omnibar {
         unsafe {
             let instance = GetModuleHandleW(None)?.into();
             let class = WNDCLASSW {
+                // The shadow under the rounded panel.
+                style: CS_DROPSHADOW,
                 lpfnWndProc: Some(popup_proc),
                 hInstance: instance,
                 lpszClassName: w!("LivianoOmnibar"),
@@ -92,7 +125,7 @@ impl Omnibar {
                 WS_EX_TOOLWINDOW,
                 w!("LivianoOmnibar"),
                 PCWSTR::null(),
-                WS_POPUP | WS_BORDER,
+                WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,
                 100,
@@ -120,7 +153,9 @@ impl Omnibar {
                 WINDOW_EX_STYLE::default(),
                 w!("LISTBOX"),
                 PCWSTR::null(),
-                WS_CHILD | WS_VSCROLL | WINDOW_STYLE((LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32),
+                WS_CHILD
+                    | WS_VSCROLL
+                    | WINDOW_STYLE((LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32),
                 0,
                 30,
                 100,
@@ -131,12 +166,15 @@ impl Omnibar {
                 None,
             )?;
             let _ = SetWindowSubclass(edit, Some(edit_proc), 1, 0);
+            let _ = SetWindowSubclass(list, Some(list_proc), 2, 0);
+            dwm::set(popup, dwm::CORNERS, dwm::ROUND);
             Ok(Self {
                 popup,
                 edit,
                 list,
                 rows: 0,
-                row_height: 24,
+                row_height: 36,
+                scale: 1.0,
                 edit_height: 34,
                 visible_rows: usize::MAX,
                 rows_deletable: false,
@@ -144,32 +182,44 @@ impl Omnibar {
         }
     }
 
+    /// The edit is set in a larger cut of the interface's face (`font` is
+    /// the one other controls use; this one is the field's own).
     pub fn set_font(&mut self, font: HFONT, scale: f32) {
+        let edit_font = crate::app::make_font_sized(size::TEXT_FIELD, scale);
         unsafe {
-            for hwnd in [self.edit, self.list] {
-                SendMessageW(hwnd, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+            let old = SendMessageW(self.edit, WM_GETFONT, None, None).0;
+            SendMessageW(self.edit, WM_SETFONT, Some(WPARAM(edit_font.0 as usize)), Some(LPARAM(1)));
+            if old != 0 && old != font.0 as isize {
+                let _ = DeleteObject(HFONT(old as _).into());
             }
-            let item = SendMessageW(self.list, LB_GETITEMHEIGHT, Some(WPARAM(0)), None).0 as i32;
-            self.row_height = item.max(1);
+            // Owner-drawn rows: their height is ours, not the font's.
+            self.row_height = (36.0 * scale).round() as i32;
+            SendMessageW(self.list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.row_height as isize)));
         }
-        self.edit_height = (34.0 * scale).round() as i32;
+        self.edit_height = (48.0 * scale).round() as i32;
+        self.scale = scale;
+        LOOK.with(|l| l.set(l.get().map(|(p, _)| (p, scale))));
     }
 
     pub fn set_palette(&self, palette: &Palette) {
         BRUSHES.with(|b| {
-            let (old_field, old_chrome, _, _) = b.get();
+            let (old, _, _) = b.get();
             unsafe {
-                if old_field != 0 {
-                    let _ = DeleteObject(HBRUSH(old_field as _).into());
-                    let _ = DeleteObject(HBRUSH(old_chrome as _).into());
+                if old != 0 {
+                    let _ = DeleteObject(HBRUSH(old as _).into());
                 }
                 let field = CreateSolidBrush(palette.field.colorref());
-                let chrome = CreateSolidBrush(palette.tab_active.colorref());
-                b.set((field.0 as isize, chrome.0 as isize, palette.ink.colorref().0, palette.field.colorref().0));
+                b.set((field.0 as isize, palette.field.colorref().0, palette.ink.colorref().0));
             }
         });
+        LOOK.with(|l| l.set(Some((*palette, self.scale))));
+        dwm::set(self.popup, dwm::BORDER_COLOR, palette.line.colorref().0);
+        dwm::set(self.popup, dwm::DARK_MODE, palette.dark as u32);
         unsafe {
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.popup), None, true);
+            let theme = if palette.dark { w!("DarkMode_Explorer") } else { w!("Explorer") };
+            let _ = SetWindowTheme(self.list, theme, PCWSTR::null());
+            let _ = InvalidateRect(Some(self.popup), None, true);
+            let _ = InvalidateRect(Some(self.list), None, true);
         }
     }
 
@@ -208,30 +258,35 @@ impl Omnibar {
 
     pub fn place(&self, (left, top, width): (i32, i32, i32)) {
         let shown = self.rows.min(self.visible_rows);
-        let list_h = shown as i32 * self.row_height + if shown > 0 { 6 } else { 0 };
+        let pad = (LIST_PAD * self.scale).round() as i32;
+        let list_h = shown as i32 * self.row_height;
+        let below = if shown > 0 { list_h + 2 * pad + 1 } else { 0 };
+        let glass = (GLASS_COLUMN * self.scale).round() as i32;
+        let text_h = (self.edit_height as f32 * 0.5).round() as i32;
         unsafe {
-            let _ = SetWindowPos(
-                self.popup,
-                Some(HWND_TOP),
-                left,
-                top,
-                width,
-                self.edit_height + list_h + 2,
-                SWP_NOACTIVATE,
-            );
-            let pad = (self.edit_height as f32 * 0.3) as i32;
-            let text_h = (self.row_height + 4).min(self.edit_height);
+            let _ = SetWindowPos(self.popup, Some(HWND_TOP), left, top, width, self.edit_height + below, SWP_NOACTIVATE);
             let _ = SetWindowPos(
                 self.edit,
                 None,
-                pad,
+                glass,
                 (self.edit_height - text_h) / 2,
-                width - 2 * pad - 2,
+                width - glass - (16.0 * self.scale).round() as i32,
                 text_h,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            let _ = SetWindowPos(self.list, None, 0, self.edit_height, width - 2, list_h, SWP_NOZORDER | SWP_NOACTIVATE);
+            // EC_LEFTMARGIN | EC_RIGHTMARGIN, both zero: the glass column is the margin.
+            SendMessageW(self.edit, EM_SETMARGINS, Some(WPARAM(3)), Some(LPARAM(0)));
+            let _ = SetWindowPos(
+                self.list,
+                None,
+                pad,
+                self.edit_height + 1 + pad,
+                width - 2 * pad,
+                list_h,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
             let _ = ShowWindow(self.list, if self.rows > 0 { SW_SHOWNA } else { SW_HIDE });
+            let _ = InvalidateRect(Some(self.popup), None, false);
         }
     }
 
@@ -277,6 +332,7 @@ impl Omnibar {
     }
 
     pub fn set_rows(&mut self, rows: &[String]) {
+        HOVERED.with(|h| h.set(None));
         unsafe {
             SendMessageW(self.list, LB_RESETCONTENT, None, None);
             for row in rows {
@@ -376,7 +432,7 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             LRESULT(0)
         }
         WM_CTLCOLOREDIT | WM_CTLCOLORLISTBOX => {
-            let (field, _, ink, field_color) = BRUSHES.with(|b| b.get());
+            let (field, field_color, ink) = BRUSHES.with(|b| b.get());
             if field == 0 {
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             }
@@ -387,17 +443,41 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             }
             LRESULT(field)
         }
-        WM_ERASEBKGND => {
-            let (field, _, _, _) = BRUSHES.with(|b| b.get());
-            if field != 0 {
+        WM_ERASEBKGND => LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            unsafe {
+                let hdc = BeginPaint(hwnd, &mut ps);
                 let mut rect = RECT::default();
-                unsafe {
-                    let _ = GetClientRect(hwnd, &mut rect);
-                    windows::Win32::Graphics::Gdi::FillRect(HDC(wparam.0 as _), &rect, HBRUSH(field as _));
+                let _ = GetClientRect(hwnd, &mut rect);
+                let list = GetDlgItem(Some(hwnd), LIST_ID as i32).unwrap_or_default();
+                let list_shown = IsWindowVisible(list).as_bool();
+                let edit_h = INSTANCE.with(|i| i.get()).map_or(rect.bottom, |o| (*o).edit_height);
+                if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                    SURFACES.with(|s| {
+                        s.borrow_mut().0.paint(hdc, rect, |g| paint_panel(g, rect, edit_h, list_shown, &palette, scale))
+                    });
                 }
+                let _ = EndPaint(hwnd, &ps);
+            }
+            LRESULT(0)
+        }
+        WM_DRAWITEM => {
+            let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            if item.itemID == u32::MAX {
                 return LRESULT(1);
             }
-            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+            let text = item_text(item.hwndItem, item.itemID as usize);
+            let picked = item.itemState.0 & ODS_SELECTED.0 != 0;
+            let hovered = HOVERED.with(|h| h.get()) == Some(item.itemID as usize);
+            if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                SURFACES.with(|s| {
+                    s.borrow_mut().1.paint(item.hDC, item.rcItem, |g| {
+                        paint_row(g, item.rcItem.into(), &text, picked, hovered, &palette, scale)
+                    })
+                });
+            }
+            LRESULT(1)
         }
         // Losing activation does not close the field: the main window taking
         // focus back (first launch, Alt+Tab, a click on the title bar) would
@@ -408,3 +488,134 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
+
+/// The panel's ground: the field's colour, the search glass, and a hairline
+/// between the field and the list.
+fn paint_panel(g: &Painter, rect: RECT, edit_h: i32, list_shown: bool, pal: &Palette, scale: f32) {
+    g.fill(rect.into(), pal.field);
+    let column = GLASS_COLUMN * scale;
+    let (cx, cy) = (column * 0.55 - scale, edit_h as f32 / 2.0 - scale);
+    let r = 5.5 * scale;
+    let ink = Color::from(pal.ink_muted);
+    g.arc(cx, cy, r, 0.0, std::f32::consts::TAU - 0.01, 1.5 * scale, ink);
+    let d = r * std::f32::consts::FRAC_1_SQRT_2;
+    let from = (cx + d, cy + d);
+    g.line(from, (from.0 + 4.0 * scale, from.1 + 4.0 * scale), 1.6 * scale, ink);
+    if list_shown {
+        let y = edit_h as f32;
+        g.fill(RectF::new(0.0, y, rect.right as f32, y + 1.0), pal.line);
+    }
+}
+
+/// One row: a soft ground when picked (or, quieter, under the pointer), the
+/// site's mark, the title in ink and what follows it dimmed.
+fn paint_row(g: &Painter, rect: RectF, text: &str, picked: bool, hovered: bool, pal: &Palette, scale: f32) {
+    g.fill(rect, pal.field);
+    let ground = rect.inset(0.0, 1.0);
+    if picked {
+        g.round(ground, size::RADIUS * scale, pal.selection);
+    } else if hovered {
+        g.round(ground, size::RADIUS * scale, pal.row_hover);
+    }
+    let parts = RowParts::of(text);
+    let x = rect.left + 10.0 * scale;
+    let (_, cy) = rect.center();
+    if let Some(initial) = parts.mark {
+        let m = size::MARK * scale;
+        let mark = RectF::new(x, cy - m / 2.0, x + m, cy + m / 2.0);
+        crate::tabbar::draw_mark(g, mark, initial, false, false, pal, scale);
+    }
+    let x = x + (size::MARK + 10.0) * scale;
+    let right = rect.right - 12.0 * scale;
+    let title_font = Font::new(size::TEXT * scale, size::REGULAR, Align::Leading);
+    let detail_font = Font::new(size::TEXT_SMALL * scale, size::REGULAR, Align::Leading);
+    if parts.detail.is_empty() {
+        g.text(parts.title, RectF::new(x, rect.top, right, rect.bottom), title_font, pal.ink);
+        return;
+    }
+    // The title takes what it needs, up to two thirds of the row; the
+    // detail what is left.
+    let room = right - x;
+    let title_w = g.measure(parts.title, title_font).min(room * 0.66);
+    g.text(parts.title, RectF::new(x, rect.top, x + title_w + 1.0, rect.bottom), title_font, pal.ink);
+    let detail_x = x + title_w + 10.0 * scale;
+    if detail_x < right {
+        g.text(&parts.detail, RectF::new(detail_x, rect.top, right, rect.bottom), detail_font, pal.ink_muted);
+    }
+}
+
+/// How a row's label splits for drawing. The app writes labels as
+/// "title    address    more" (four spaces between parts), the shape the
+/// script control and the tests read back unchanged.
+#[derive(Debug, PartialEq)]
+struct RowParts<'a> {
+    title: &'a str,
+    detail: String,
+    mark: Option<char>,
+}
+
+impl<'a> RowParts<'a> {
+    fn of(label: &'a str) -> Self {
+        let mut parts = label.split("    ").map(str::trim).filter(|p| !p.is_empty());
+        let title = parts.next().unwrap_or("");
+        let rest: Vec<&str> = parts.collect();
+        let detail = rest.join(" · ");
+        // The site's letter, from the address when the row has one.
+        let mark = rest.first().filter(|a| a.contains('.') && !a.contains(' ')).and_then(|address| {
+            let host = address.trim_start_matches("www.");
+            host.chars().find(|c| c.is_alphanumeric())
+        });
+        Self { title, detail, mark }
+    }
+}
+
+fn item_text(list: HWND, index: usize) -> String {
+    unsafe {
+        let len = SendMessageW(list, LB_GETTEXTLEN, Some(WPARAM(index)), None).0;
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buffer = vec![0u16; len as usize + 1];
+        SendMessageW(list, LB_GETTEXT, Some(WPARAM(index)), Some(LPARAM(buffer.as_mut_ptr() as isize)));
+        String::from_utf16_lossy(&buffer[..len as usize])
+    }
+}
+
+/// Tracks the row under the pointer for its quieter ground.
+unsafe extern "system" fn list_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+    match msg {
+        WM_MOUSEMOVE => {
+            let mut tme = TRACKMOUSEEVENT {
+                cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+                dwFlags: TME_LEAVE,
+                hwndTrack: hwnd,
+                dwHoverTime: 0,
+            };
+            let found = unsafe { SendMessageW(hwnd, LB_ITEMFROMPOINT, None, Some(lparam)).0 as u32 };
+            // The high word says the point is past every row.
+            let row = ((found >> 16) == 0).then_some((found & 0xFFFF) as usize);
+            unsafe {
+                let _ = TrackMouseEvent(&mut tme);
+            }
+            set_hovered(hwnd, row);
+        }
+        WM_MOUSELEAVE => set_hovered(hwnd, None),
+        _ => {}
+    }
+    unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+fn set_hovered(list: HWND, row: Option<usize>) {
+    let before = HOVERED.with(|h| h.replace(row));
+    if before == row {
+        return;
+    }
+    for index in [before, row].into_iter().flatten() {
+        let mut rect = RECT::default();
+        unsafe {
+            SendMessageW(list, LB_GETITEMRECT, Some(WPARAM(index)), Some(LPARAM(&mut rect as *mut RECT as isize)));
+            let _ = InvalidateRect(Some(list), Some(&rect), false);
+        }
+    }
+}
+

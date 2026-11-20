@@ -1,21 +1,25 @@
-//! "¿Guardar contraseña…?": a small native bubble over the page's top right
-//! corner, with three buttons. It never takes focus by itself (the person
+//! "¿Guardar contraseña…?": a small floating card over the page's top right
+//! corner, with three buttons (drawn by `widgets`, the main one in ink). It never takes focus by itself (the person
 //! may be typing on the page that follows a login) and exists only while an
 //! offer stands: it is created for it and destroyed after.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
         Graphics::Gdi::{CreateSolidBrush, DeleteObject, FillRect, HBRUSH, HDC, HFONT, SetBkColor, SetTextColor},
         System::LibraryLoader::GetModuleHandleW,
-        UI::{Controls::SetWindowTheme, WindowsAndMessaging::*},
+        UI::{Controls::DRAWITEMSTRUCT, WindowsAndMessaging::*},
     },
     core::{HSTRING, PCWSTR, w},
 };
 
-use crate::design::Palette;
+use crate::{
+    design::{Palette, dwm},
+    gfx::{Color, Surface},
+    widgets::{self, ButtonKind},
+};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
@@ -36,6 +40,8 @@ thread_local! {
     static HANDLER: Cell<Option<fn(Choice)>> = const { Cell::new(None) };
     /// (background brush, background colour, ink)
     static COLORS: Cell<(isize, u32, u32)> = const { Cell::new((0, 0, 0)) };
+    static LOOK: Cell<Option<(Palette, f32)>> = const { Cell::new(None) };
+    static SURFACE: RefCell<Surface> = RefCell::new(Surface::default());
 }
 
 pub struct VaultBar {
@@ -56,6 +62,7 @@ impl VaultBar {
         unsafe {
             let instance = GetModuleHandleW(None).ok()?.into();
             let class = WNDCLASSW {
+                style: CS_DROPSHADOW,
                 lpfnWndProc: Some(bar_proc),
                 hInstance: instance,
                 lpszClassName: w!("LivianoVaultBar"),
@@ -67,7 +74,7 @@ impl VaultBar {
                 WS_EX_TOOLWINDOW,
                 w!("LivianoVaultBar"),
                 w!("Contraseña — Liviano"),
-                WS_POPUP | WS_BORDER,
+                WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,
                 px(WIDTH, scale),
@@ -101,8 +108,13 @@ impl VaultBar {
             let buttons: Vec<HWND> = BUTTONS
                 .iter()
                 .zip(&texts[1..])
-                .map(|((id, _), text)| make(w!("BUTTON"), text, (WS_TABSTOP.0) | BS_PUSHBUTTON as u32, *id))
+                .map(|((id, _), text)| make(w!("BUTTON"), text, (WS_TABSTOP.0) | BS_OWNERDRAW as u32, *id))
                 .collect();
+            for button in &buttons {
+                widgets::track_hover(*button);
+            }
+            dwm::set(popup, dwm::CORNERS, dwm::ROUND);
+            LOOK.with(|l| l.set(Some((*palette, scale))));
             let bar = Self { popup, label, buttons, scale };
             bar.set_palette(palette);
             bar.layout();
@@ -113,17 +125,17 @@ impl VaultBar {
     fn layout(&self) {
         let s = self.scale;
         let (width, height) = (px(WIDTH, s), px(HEIGHT, s));
-        let pad = px(12.0, s);
-        let button_h = px(28.0, s);
+        let pad = px(14.0, s);
+        let button_h = px(30.0, s);
         unsafe {
             let _ = SetWindowPos(self.label, None, pad, pad, width - 2 * pad, px(22.0, s), SWP_NOZORDER | SWP_NOACTIVATE);
             // Right-aligned, the main action first.
             let widths = [92.0, 150.0, 92.0].map(|w| px(w, s));
             let gap = px(8.0, s);
             let total: i32 = widths.iter().sum::<i32>() + gap * 2;
-            let mut x = width - pad - total - 2;
+            let mut x = width - pad - total;
             for (button, w) in self.buttons.iter().zip(widths) {
-                let _ = SetWindowPos(*button, None, x, height - pad - button_h - 2, w, button_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ = SetWindowPos(*button, None, x, height - pad - button_h, w, button_h, SWP_NOZORDER | SWP_NOACTIVATE);
                 x += w + gap;
             }
         }
@@ -136,16 +148,22 @@ impl VaultBar {
                 if old != 0 {
                     let _ = DeleteObject(HBRUSH(old as _).into());
                 }
-                let brush = CreateSolidBrush(palette.tab_active.colorref());
-                c.set((brush.0 as isize, palette.tab_active.colorref().0, palette.ink.colorref().0));
+                let brush = CreateSolidBrush(palette.field.colorref());
+                c.set((brush.0 as isize, palette.field.colorref().0, palette.ink.colorref().0));
             }
         });
-        let theme = if palette.dark { w!("DarkMode_Explorer") } else { w!("Explorer") };
+        LOOK.with(|l| l.set(Some((*palette, self.scale))));
+        dwm::set(self.popup, dwm::BORDER_COLOR, palette.line.colorref().0);
+        dwm::set(self.popup, dwm::DARK_MODE, palette.dark as u32);
         unsafe {
-            for button in &self.buttons {
-                let _ = SetWindowTheme(*button, theme, PCWSTR::null());
-            }
-            let _ = windows::Win32::Graphics::Gdi::InvalidateRect(Some(self.popup), None, true);
+            let _ = windows::Win32::Graphics::Gdi::RedrawWindow(
+                Some(self.popup),
+                None,
+                None,
+                windows::Win32::Graphics::Gdi::RDW_INVALIDATE
+                    | windows::Win32::Graphics::Gdi::RDW_ERASE
+                    | windows::Win32::Graphics::Gdi::RDW_ALLCHILDREN,
+            );
         }
     }
 
@@ -197,6 +215,16 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 }
             }
             LRESULT(0)
+        }
+        WM_DRAWITEM => {
+            let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                let kind = if item.CtlID == 1 { ButtonKind::Primary } else { ButtonKind::Secondary };
+                SURFACE.with(|s| {
+                    widgets::draw_button_item(&mut s.borrow_mut(), item, kind, Color::from(palette.field), &palette, scale)
+                });
+            }
+            LRESULT(1)
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
             let (brush, background, ink) = COLORS.with(|c| c.get());
