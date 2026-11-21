@@ -437,15 +437,6 @@ impl BackdropLook {
     }
 }
 
-/// erfc(x), Abramowitz and Stegun 7.1.26 (error under 1.5e-7).
-fn erfc(x: f32) -> f32 {
-    let z = x.abs();
-    let t = 1.0 / (1.0 + 0.327_591_1 * z);
-    let poly = t * (0.254_829_6 + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152 + t * 1.061_405_4))));
-    let y = poly * (-z * z).exp();
-    if x >= 0.0 { y } else { 2.0 - y }
-}
-
 /// Draws the backdrop into `pixels` (premultiplied BGRA, `width` per row):
 /// the shadow, the ring 1 px outside the shape, and the shape's ground with
 /// an antialiased edge. Inside, past the edge, there is nothing to work
@@ -475,7 +466,8 @@ fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: Backdro
         let cover = (0.5 - d).clamp(0.0, 1.0);
         let ring = ((1.5 - d).clamp(0.0, 1.0) - cover) * look.ring.1;
         // The layers stack as shadows do, each over the others.
-        let clear: f32 = layers.iter().map(|(s, k, alpha)| 1.0 - alpha * 0.5 * erfc(s.distance(x, y) * k)).product();
+        let clear: f32 =
+            layers.iter().map(|(s, k, alpha)| 1.0 - alpha * 0.5 * crate::gfx::erfc(s.distance(x, y) * k)).product();
         // Shadow, then ring over it, then the ground over both.
         let mut a = 1.0 - clear;
         let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);

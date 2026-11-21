@@ -221,9 +221,15 @@ pub mod size {
 /// The lifts, as alphas of black over what they stand on (brand.css
 /// `--shadow-*`).
 pub mod lift {
-    /// `shadow-card`'s 1 px ring and its drop (0 2px 6px -2px).
-    pub const CARD_RING: f32 = 0.08;
-    pub const CARD_DROP: f32 = 0.12;
+    /// `shadow-ring`, the live tab's card (the active entry of a sidebar):
+    /// a 1 px ring at 0.09 and a drop 1 px down with a 2 px blur at 0.05.
+    /// On a dark ground: a white ring at 0.08 and a black drop at 0.3.
+    pub const RING: f32 = 0.09;
+    pub const RING_DROP: f32 = 0.05;
+    pub const RING_DARK: f32 = 0.08;
+    pub const RING_DROP_DARK: f32 = 0.3;
+    pub const RING_DROP_Y: f32 = 1.0;
+    pub const RING_DROP_BLUR: f32 = 2.0;
     /// `shadow-focus`'s halo, 4 px of brand at 0.18 around a 1 px line.
     pub const FOCUS_HALO: f32 = 0.18;
     /// `shadow-pop`, what floats over the page (the field): a 1 px ring and
