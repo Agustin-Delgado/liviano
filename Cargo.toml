@@ -2,9 +2,12 @@
 name = "nea"
 version = "0.1.0"
 edition = "2024"
-description = "Navegador para Windows: una fila de pestañas, un campo y la página."
+description = "A browser for Windows: one row of tabs, one field and the page."
 license = "MIT"
 repository = "https://github.com/Agustin-Delgado/nea"
+# `tests/` is the private test suite (a git submodule), not integration tests.
+# Its modules attach to `src` through `#[path]` hooks. Refer to build.rs.
+autotests = false
 
 [dependencies]
 ed25519-compact = { version = "2.6.1", default-features = false }

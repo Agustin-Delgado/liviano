@@ -125,7 +125,7 @@ fn host_of(origin: &str) -> &str {
 }
 
 fn user_label(username: &str) -> &str {
-    if username.is_empty() { "(sin usuario)" } else { username }
+    if username.is_empty() { "(no user name)" } else { username }
 }
 
 /// "ana    ejemplo.com", the way a panel row reads.
@@ -259,7 +259,7 @@ unsafe fn confirm_with(owner: HWND, module: HMODULE) -> bool {
         let prompt: PromptFn = std::mem::transmute(prompt);
         let unpack: UnpackFn = std::mem::transmute(unpack);
         let caption = HSTRING::from("Nea");
-        let message = HSTRING::from("Confirmá que sos vos para ver la contraseña guardada.");
+        let message = HSTRING::from("Confirm your identity to show the saved password.");
         let info = CREDUI_INFOW {
             cbSize: std::mem::size_of::<CREDUI_INFOW>() as u32,
             hwndParent: owner,
@@ -309,7 +309,7 @@ unsafe fn confirm_with(owner: HWND, module: HMODULE) -> bool {
     }
 }
 
-/// "EQUIPO\ana" or "MicrosoftAccount\ana@x.com" -> (user, domain); a UPN has none.
+/// "PC\ana" or "MicrosoftAccount\ana@x.com" -> (user, domain); a UPN has none.
 fn split_user(user: &str, domain: &str) -> (String, Option<String>) {
     match user.split_once('\\') {
         Some((domain, user)) => (user.to_string(), Some(domain.to_string())),
@@ -377,7 +377,7 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
         DEFERRED_SAVE_FAILED => unsafe {
             MessageBoxW(
                 Some(hwnd),
-                w!("No se pudo guardar la contraseña en el Administrador de credenciales de Windows."),
+                w!("Cannot save the password in Windows Credential Manager."),
                 w!("Nea"),
                 MB_OK | MB_ICONWARNING,
             );
@@ -394,13 +394,13 @@ fn account_menu(hwnd: HWND, request: &MenuRequest) -> usize {
             menu,
             MF_STRING | MF_GRAYED,
             0,
-            &HSTRING::from(format!("Contraseñas de {}", host_of(&request.origin))),
+            &HSTRING::from(format!("Passwords for {}", host_of(&request.origin))),
         );
         for (i, account) in request.accounts.iter().enumerate() {
             let _ = AppendMenuW(menu, MF_STRING, i + 1, &HSTRING::from(user_label(&account.username)));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_MANAGE, w!("Administrar contraseñas…"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_MANAGE, w!("Manage passwords…"));
         let chosen = TrackPopupMenu(
             menu,
             TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
@@ -469,19 +469,19 @@ impl App {
         let host = host_of(&pending.origin).to_string();
         let question = match (&saved, pending.username.is_empty()) {
             (Some(_), _) => {
-                format!("¿Actualizar la contraseña guardada de {} para {host}?", user_label(&pending.username))
+                format!("Update the saved password of {} for {host}?", user_label(&pending.username))
             }
-            (None, true) => format!("¿Guardar la contraseña para {host}?"),
-            (None, false) => format!("¿Guardar la contraseña de {} para {host}?", pending.username),
+            (None, true) => format!("Save the password for {host}?"),
+            (None, false) => format!("Save the password of {} for {host}?", pending.username),
         };
-        let save = if saved.is_some() { "Actualizar" } else { "Guardar" };
+        let save = if saved.is_some() { "Update" } else { "Save" };
         self.vault.bar = None;
         self.vault.bar = VaultBar::create(
             self.hwnd,
             &self.palette,
             self.font,
             self.scale,
-            [&question, save, "Nunca para este sitio", "Ahora no"],
+            [&question, save, "Never for this site", "Not now"],
             on_bar_choice,
         );
         self.vault.offer = Some(Offer {
@@ -568,7 +568,7 @@ impl App {
         let Some(panel) = &self.panels.passwords else { return rows };
         let info = |text: String| (text, Row::Info);
         if let Some((account, secret)) = &panel.shown {
-            rows.push(info(format!("{}: {}    se oculta al cerrar el panel", account_label(account), secret.expose())));
+            rows.push(info(format!("{}: {}    hidden when the panel closes", account_label(account), secret.expose())));
         } else if let Some(notice) = &panel.notice {
             rows.push(info(notice.clone()));
         }
@@ -578,11 +578,9 @@ impl App {
             .filter(|a| crate::panels::matches(query, &[&a.username, host_of(&a.origin)]))
             .collect();
         if panel.accounts.is_empty() {
-            rows.push(info(
-                "Todavía no hay contraseñas guardadas: se ofrece guardarlas al iniciar sesión.".to_string(),
-            ));
+            rows.push(info("No saved passwords yet. Nea offers to save a password when you sign in.".to_string()));
         } else if found.is_empty() {
-            rows.push(info("Sin resultados".to_string()));
+            rows.push(info("No results".to_string()));
         }
         rows.extend(found.into_iter().map(|a| (account_label(a), Row::Panel(Item::Account(a.clone())))));
         rows.extend(
@@ -592,15 +590,15 @@ impl App {
                 .filter(|origin| crate::panels::matches(query, &[host_of(origin)]))
                 .map(|origin| {
                     (
-                        format!("No se ofrece guardar en {}    Supr vuelve a ofrecerlo", host_of(origin)),
+                        format!(
+                            "Nea does not offer to save passwords on {}    Delete offers it again",
+                            host_of(origin)
+                        ),
                         Row::Panel(Item::NeverSite(origin.clone())),
                     )
                 }),
         );
-        rows.push((
-            "Importar contraseñas de otro navegador o de un CSV…".to_string(),
-            Row::Panel(Item::ImportPasswords),
-        ));
+        rows.push(("Import passwords from another browser or a CSV…".to_string(), Row::Panel(Item::ImportPasswords)));
         rows
     }
 
@@ -620,12 +618,12 @@ impl App {
             Item::Account(account) => {
                 let text = match self.vault.store.password(&account) {
                     Some(secret) if copy_secret(self.hwnd, &secret) => format!(
-                        "Contraseña de {} copiada: se borra del portapapeles en {} s",
+                        "Password of {} copied. Nea clears the clipboard in {} s",
                         account_label(&account),
                         CLIPBOARD_MS / 1000
                     ),
-                    Some(_) => "No se pudo usar el portapapeles".to_string(),
-                    None => "Esa contraseña ya no está en el Administrador de credenciales".to_string(),
+                    Some(_) => "Cannot use the clipboard".to_string(),
+                    None => "That password is not in Credential Manager now".to_string(),
                 };
                 self.panel_notice(text);
                 self.refresh_password_panel(Some(0));
@@ -644,12 +642,12 @@ impl App {
                     self.panels.passwords.as_ref().is_some_and(|p| p.confirm_delete.as_ref() == Some(&account));
                 let text = if confirmed {
                     if self.vault.store.delete(&account) {
-                        format!("Se borró la contraseña de {}", account_label(&account))
+                        format!("Deleted the password of {}", account_label(&account))
                     } else {
-                        "No se pudo borrar".to_string()
+                        "Cannot delete it".to_string()
                     }
                 } else {
-                    format!("Supr otra vez borra la contraseña de {} · Esc cancela", account_label(&account))
+                    format!("Press Delete again to delete the password of {} · Esc cancels", account_label(&account))
                 };
                 let accounts = confirmed.then(|| self.vault.store.accounts(None));
                 self.panel_notice(text);
@@ -665,7 +663,7 @@ impl App {
                 self.settings.passwords_never.remove(&origin);
                 self.save_settings();
                 crate::settings_window::sync(&self.settings);
-                self.panel_notice(format!("Se vuelve a ofrecer guardar contraseñas en {}", host_of(&origin)));
+                self.panel_notice(format!("Nea offers to save passwords on {} again", host_of(&origin)));
                 self.refresh_password_panel(Some(row));
             }
             _ => {}
@@ -684,11 +682,9 @@ impl App {
                     panel.shown = Some((account, secret));
                 }
             }
-            None if confirmed => {
-                self.panel_notice("Esa contraseña ya no está en el Administrador de credenciales".to_string())
-            }
+            None if confirmed => self.panel_notice("That password is not in Credential Manager now".to_string()),
             None => self.panel_notice(
-                "Windows no confirmó tu identidad: la contraseña sigue oculta (Enter la copia)".to_string(),
+                "Windows did not confirm your identity. The password stays hidden (Enter copies it)".to_string(),
             ),
         }
         self.refresh_password_panel(Some(0));
@@ -712,3 +708,8 @@ impl App {
         self.refresh_panel(PanelKind::Passwords, keep);
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/vault_ui.rs"]
+#[rustfmt::skip]
+mod tests;

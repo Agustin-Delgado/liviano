@@ -63,23 +63,23 @@ impl Event {
     /// What the diagnostics call it (see `diag::doing`).
     pub fn name(&self) -> &'static &'static str {
         match self {
-            Event::EnvironmentReady(_) => &"evento:EnvironmentReady",
-            Event::ControllerReady(..) => &"evento:ControllerReady",
-            Event::TitleChanged(_) => &"evento:TitleChanged",
-            Event::SourceChanged(_) => &"evento:SourceChanged",
-            Event::NavigationStarting(_) => &"evento:NavigationStarting",
-            Event::NavigationCompleted(..) => &"evento:NavigationCompleted",
-            Event::NewWindow(..) => &"evento:NewWindow",
-            Event::ProcessFailed(..) => &"evento:ProcessFailed",
-            Event::PageClicked(_) => &"evento:PageClicked",
-            Event::FindChanged(_) => &"evento:FindChanged",
-            Event::HistoryChanged(_) => &"evento:HistoryChanged",
-            Event::NavHistory(..) => &"evento:NavHistory",
-            Event::WebMessage(..) => &"evento:WebMessage",
-            Event::Command(_) => &"evento:Command",
-            Event::Download(_) => &"evento:Download",
-            Event::Vault(..) => &"evento:Vault",
-            Event::Extension(_) => &"evento:Extension",
+            Event::EnvironmentReady(_) => &"event:EnvironmentReady",
+            Event::ControllerReady(..) => &"event:ControllerReady",
+            Event::TitleChanged(_) => &"event:TitleChanged",
+            Event::SourceChanged(_) => &"event:SourceChanged",
+            Event::NavigationStarting(_) => &"event:NavigationStarting",
+            Event::NavigationCompleted(..) => &"event:NavigationCompleted",
+            Event::NewWindow(..) => &"event:NewWindow",
+            Event::ProcessFailed(..) => &"event:ProcessFailed",
+            Event::PageClicked(_) => &"event:PageClicked",
+            Event::FindChanged(_) => &"event:FindChanged",
+            Event::HistoryChanged(_) => &"event:HistoryChanged",
+            Event::NavHistory(..) => &"event:NavHistory",
+            Event::WebMessage(..) => &"event:WebMessage",
+            Event::Command(_) => &"event:Command",
+            Event::Download(_) => &"event:Download",
+            Event::Vault(..) => &"event:Vault",
+            Event::Extension(_) => &"event:Extension",
         }
     }
 
@@ -153,7 +153,6 @@ pub struct WebTab {
 pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Result<()> {
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
-        options.set_language("es".to_string());
         options.set_are_browser_extensions_enabled(extensions);
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
@@ -287,7 +286,7 @@ impl WebTab {
                     let failure = args.map(|a| ProcessFailure::read(&a)).unwrap_or_default();
                     crate::diag::log(
                         crate::diag::Log::Crash,
-                        format!("{} motor: {} (pestaña {id})", crate::diag::stamp(), failure.describe()),
+                        format!("{} engine: {} (tab {id})", crate::diag::stamp(), failure.describe()),
                     );
                     push(Event::ProcessFailed(id, failure.kind));
                     Ok(())
@@ -404,7 +403,7 @@ impl WebTab {
     pub fn show(&mut self, bounds: RECT) {
         unsafe {
             if self.suspended {
-                let _doing = crate::diag::doing(&"vista:reanudar", 0);
+                let _doing = crate::diag::doing(&"view:resume", 0);
                 if let Ok(w3) = self.webview.cast::<ICoreWebView2_3>() {
                     let _ = w3.Resume();
                 }
@@ -415,11 +414,11 @@ impl WebTab {
                 self.suspended = false;
             }
             if self.shown != Some(bounds) {
-                let _doing = crate::diag::doing(&"vista:límites", 0);
+                let _doing = crate::diag::doing(&"view:bounds", 0);
                 let _ = self.controller.SetBounds(bounds);
             }
             if self.shown.is_none() {
-                let _doing = crate::diag::doing(&"vista:visible", 0);
+                let _doing = crate::diag::doing(&"view:visible", 0);
                 let _ = self.controller.SetIsVisible(true);
             }
             self.shown = Some(bounds);
@@ -658,31 +657,31 @@ impl ProcessFailure {
 
     fn describe(&self) -> String {
         let kind = match self.kind {
-            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "proceso del navegador terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "proceso de la página terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "página sin responder",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED => "proceso de un marco terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED => "proceso utilitario terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED => "proceso del sandbox terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED => "proceso de la GPU terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_PLUGIN_PROCESS_EXITED => "plugin terminado",
-            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_BROKER_PROCESS_EXITED => "broker de plugin terminado",
-            _ => "proceso desconocido",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "browser process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "page process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "page not responding",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED => "frame process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED => "utility process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED => "sandbox process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED => "GPU process ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_PLUGIN_PROCESS_EXITED => "plugin ended",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_BROKER_PROCESS_EXITED => "plugin broker ended",
+            _ => "unknown process",
         };
         let reason = match self.reason {
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED) => "inesperado",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNRESPONSIVE) => "sin responder",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED) => "terminado",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED) => "se cayó",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_LAUNCH_FAILED) => "no arrancó",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY) => "sin memoria",
-            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_PROFILE_DELETED) => "perfil borrado",
-            Some(_) => "otro motivo",
-            None => "motivo desconocido",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED) => "unexpected",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNRESPONSIVE) => "not responding",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED) => "terminated",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED) => "crashed",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_LAUNCH_FAILED) => "did not start",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY) => "out of memory",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_PROFILE_DELETED) => "profile deleted",
+            Some(_) => "other reason",
+            None => "unknown reason",
         };
-        let mut text = format!("{kind} ({}, motivo {reason}", self.kind.0);
+        let mut text = format!("{kind} ({}, reason {reason}", self.kind.0);
         if let Some(code) = self.exit_code {
-            text.push_str(&format!(", código de salida 0x{code:08X}"));
+            text.push_str(&format!(", exit code 0x{code:08X}"));
         }
         if !self.description.is_empty() {
             text.push_str(&format!(", {}", self.description));
@@ -705,3 +704,8 @@ fn tracking_level(block_trackers: bool) -> COREWEBVIEW2_TRACKING_PREVENTION_LEVE
 fn match_position(index: i32, count: i32) -> (i32, i32) {
     (index.clamp(1, count.max(1)), count)
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/web.rs"]
+#[rustfmt::skip]
+mod tests;

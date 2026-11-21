@@ -259,3 +259,8 @@ pub fn half(content: Rect, side: Side) -> Rect {
         Side::Right => Rect::new(middle, content.top, content.right, content.bottom),
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/split.rs"]
+#[rustfmt::skip]
+mod tests;

@@ -76,7 +76,7 @@ struct Pending {
 }
 
 /// The publisher's key. Replacing keys/update-public.hex is how a
-/// production key is put in (README, "Firmar una versión").
+/// production key is put in (README, "Sign a release").
 fn public_key() -> Option<PublicKey> {
     let bytes = update_sign::from_hex(include_str!("../keys/update-public.hex"))?;
     PublicKey::from_slice(&bytes).ok()
@@ -215,11 +215,11 @@ fn tick(now: u64) {
     let result = check(&url, state.pending.as_ref(), &update_dir(), &key);
     state.last_result = match result {
         Ok(Some(pending)) => {
-            let line = format!("{} lista para instalar", pending.version);
+            let line = format!("{} is ready to install", pending.version);
             state.pending = Some(pending);
             line
         }
-        Ok(None) => "sin versión nueva".to_string(),
+        Ok(None) => "no new version".to_string(),
         Err(error) => error,
     };
     let _ = storage::write_json(&path, &state);
@@ -230,9 +230,9 @@ fn tick(now: u64) {
 fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> Result<Option<Pending>, String> {
     let mut body = Vec::new();
     http::get(url, MANIFEST_LIMIT, &mut body)?;
-    let manifest: Manifest = serde_json::from_slice(&body).map_err(|e| format!("manifiesto ilegible: {e}"))?;
+    let manifest: Manifest = serde_json::from_slice(&body).map_err(|e| format!("unreadable manifest: {e}"))?;
     if parse_version(&manifest.version).is_none() {
-        return Err(format!("versión ilegible: {}", manifest.version));
+        return Err(format!("unreadable version: {}", manifest.version));
     }
     if !is_newer(&manifest.version, CURRENT_VERSION) {
         return Ok(None);
@@ -246,7 +246,7 @@ fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> R
     let package_url = http::resolve(url, &manifest.url);
     let name = format!("nea-{}.exe", manifest.version.trim());
     if !safe_file_name(&name) {
-        return Err("nombre de paquete inválido".into());
+        return Err("invalid package name".into());
     }
     fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     let partial = dir.join(format!("{name}.part"));
@@ -268,7 +268,7 @@ fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> R
         || !verify_file(&partial, &manifest.version, &manifest.signature, key)
     {
         let _ = fs::remove_file(&partial);
-        return Err(format!("{}: la firma no verifica, descartada", manifest.version));
+        return Err(format!("{}: the signature does not verify, discarded", manifest.version));
     }
     // Only the newest package is kept.
     if let Ok(entries) = fs::read_dir(dir) {
@@ -283,7 +283,7 @@ fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> R
     Ok(Some(Pending { version: manifest.version.trim().to_string(), file: name, signature: manifest.signature }))
 }
 
-/// The version waiting for the next launch, for Ajustes to mention.
+/// The version waiting for the next launch, for Settings to mention.
 pub fn pending_version() -> Option<String> {
     let state: State = storage::read_json(&state_path());
     let pending = state.pending?;
@@ -339,3 +339,8 @@ pub fn apply_pending() -> bool {
     let _ = fs::remove_file(&file);
     applied && std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn().is_ok()
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/updater.rs"]
+#[rustfmt::skip]
+mod tests;

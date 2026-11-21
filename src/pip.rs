@@ -16,3 +16,8 @@ pub fn script() -> String {
 pub fn toggle(web: &WebTab) {
     inject::execute_with_gesture(&web.webview, &script());
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/pip.rs"]
+#[rustfmt::skip]
+mod tests;

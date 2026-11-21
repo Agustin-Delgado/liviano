@@ -45,21 +45,21 @@ impl Download {
         })
     }
 
-    /// The panel's row: "informe.pdf    45 % · 1,2 MB de 2,7 MB".
+    /// The panel's row: "report.pdf    45% · 1.2 MB of 2.7 MB".
     pub fn row(&self, file_exists: bool) -> String {
         let status = match self.state {
             State::InProgress => match self.total {
                 Some(total) if total > 0 => format!(
-                    "{} % · {} de {}",
+                    "{}% · {} of {}",
                     (self.received.min(total) * 100 / total),
                     panels::format_bytes(self.received),
                     panels::format_bytes(total)
                 ),
-                _ => format!("Descargando · {}", panels::format_bytes(self.received)),
+                _ => format!("Downloading · {}", panels::format_bytes(self.received)),
             },
-            State::Completed if !file_exists => "Archivo eliminado o movido".to_string(),
-            State::Completed => format!("Completada · {}", panels::format_bytes(self.total.unwrap_or(self.received))),
-            State::Interrupted => "Interrumpida".to_string(),
+            State::Completed if !file_exists => "File deleted or moved".to_string(),
+            State::Completed => format!("Completed · {}", panels::format_bytes(self.total.unwrap_or(self.received))),
+            State::Interrupted => "Interrupted".to_string(),
         };
         format!("{}    {status}", self.name())
     }
@@ -106,3 +106,8 @@ pub fn update_file(change: impl FnOnce(&mut Vec<Download>)) {
     change(&mut list);
     save(&list);
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/downloads.rs"]
+#[rustfmt::skip]
+mod tests;

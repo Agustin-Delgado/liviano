@@ -18,7 +18,7 @@ use ed25519_compact::{KeyPair, Seed};
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let Some(private_path) = args.first() else {
-        eprintln!("uso: cargo run --example keygen -- <clave privada> [clave pública]");
+        eprintln!("usage: cargo run --example keygen -- <private key> [public key]");
         return ExitCode::from(2);
     };
     let keys = KeyPair::from_seed(Seed::generate());
@@ -29,14 +29,14 @@ fn main() -> ExitCode {
         .open(private_path)
         .and_then(|mut file| writeln!(file, "{}", update_sign::to_hex(&keys.sk.seed()[..])));
     if let Err(error) = written {
-        eprintln!("no se pudo crear {private_path}: {error}");
+        eprintln!("cannot create {private_path}: {error}");
         return ExitCode::FAILURE;
     }
     let public = update_sign::to_hex(&keys.pk[..]);
     if let Some(public_path) = args.get(1)
         && let Err(error) = fs::write(public_path, format!("{public}\n"))
     {
-        eprintln!("no se pudo escribir {public_path}: {error}");
+        eprintln!("cannot write {public_path}: {error}");
         return ExitCode::FAILURE;
     }
     println!("{public}");

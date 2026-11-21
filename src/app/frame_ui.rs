@@ -34,11 +34,11 @@ use crate::{
     tabbar::Hit,
 };
 
-/// "Pestañas al costado / arriba" in the window's system menu (right click
+/// "Tabs on the side / on top" in the window's system menu (right click
 /// on the strip's empty space, Alt+Espacio). System command ids are below
 /// 0xF000 with the low four bits clear.
 const SC_TAB_LAYOUT: usize = 0x0110;
-/// "Ocultar / mostrar la columna", beside it.
+/// "Hide tabs / Show tabs", beside it.
 const SC_SIDEBAR: usize = 0x0120;
 /// `WM_NCMOUSELEAVE` (not in the bindings' WindowsAndMessaging set).
 const WM_NCMOUSELEAVE: u32 = 0x02A2;
@@ -78,11 +78,11 @@ pub(super) fn install(hwnd: HWND, vertical: bool, collapsed: bool) {
 }
 
 pub(super) fn layout_label(vertical: bool) -> &'static str {
-    if vertical { "Pestañas arriba" } else { "Pestañas al costado" }
+    if vertical { "Tabs on top" } else { "Tabs on the side" }
 }
 
 pub(super) fn sidebar_label(collapsed: bool) -> &'static str {
-    if collapsed { "Mostrar las pestañas" } else { "Ocultar las pestañas" }
+    if collapsed { "Show tabs" } else { "Hide tabs" }
 }
 
 /// The frame Windows puts around a maximized window, off the monitor.
@@ -218,7 +218,7 @@ impl App {
     }
 
     /// Tabs on top or at the side, column shown or hidden: from the
-    /// shortcut, the menus or Ajustes, which all show the result.
+    /// shortcut, the menus or Settings, which all show the result.
     pub(super) fn set_tab_layout(&mut self, vertical: bool, collapsed: bool) {
         if (self.vertical, self.collapsed) == (vertical, collapsed) {
             return;
@@ -240,7 +240,7 @@ impl App {
         const NEW_TAB: usize = 3;
         let chosen = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("Nueva pestaña"));
+            let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("New tab"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, TAB_LAYOUT, &wide(layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));

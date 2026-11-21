@@ -1,0 +1,22 @@
+# Sample, not published (see Nea.Nea.yaml).
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Nea.Nea
+PackageVersion: 0.1.0
+PackageLocale: en-US
+Publisher: Nea
+PublisherUrl: https://github.com/Agustin-Delgado/nea
+PackageName: Nea
+PackageUrl: https://github.com/Agustin-Delgado/nea
+License: MIT
+LicenseUrl: https://github.com/Agustin-Delgado/nea/blob/main/LICENSE
+ShortDescription: A Windows browser with one tab strip, one field and the page.
+Description: |-
+  A small browser on WebView2 with a native Win32 interface. Low memory use is
+  its priority. It has no accounts, no sync and no telemetry.
+Moniker: nea
+Tags:
+  - browser
+  - web-browser
+  - webview2
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

@@ -215,3 +215,8 @@ impl App {
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/nav_ui.rs"]
+#[rustfmt::skip]
+mod tests;

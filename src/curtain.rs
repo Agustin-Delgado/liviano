@@ -253,7 +253,7 @@ fn choose(owner: HWND, (x, y): (i32, i32), host: &str, rules: &[Rule]) -> Option
             menu,
             MF_STRING | MF_GRAYED,
             0,
-            &menu_text(&format!("Oculto en {host}: elegí qué volver a mostrar")),
+            &menu_text(&format!("Hidden on {host}: select an element to show again")),
         );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         for (index, rule) in rules.iter().enumerate() {
@@ -261,7 +261,7 @@ fn choose(owner: HWND, (x, y): (i32, i32), host: &str, rules: &[Rule]) -> Option
             let _ = AppendMenuW(menu, MF_STRING, index + 1, &menu_text(text));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_ALL, &menu_text("Mostrar todo"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_ALL, &menu_text("Show all"));
         // The keyboard focus is inside the page (another process's window);
         // a popup menu wants its owner to hold it.
         let _ = SetFocus(Some(owner));
@@ -327,7 +327,7 @@ impl Curtain {
     /// Ctrl+Shift+H: opens the picker, or closes it when it is open.
     pub fn toggle_picker(&mut self, tab: u64, web: &WebTab) {
         if host_of(&web.source()).is_none() {
-            inject::execute(&web.webview, &inject::toast_script("En esta página no se pueden ocultar elementos"));
+            inject::execute(&web.webview, &inject::toast_script("You cannot hide elements on this page"));
             return;
         }
         // Closing posts "done", which takes the tab out again.
@@ -369,11 +369,11 @@ impl Curtain {
         live: impl Iterator<Item = (u64, &'a WebTab)>,
     ) {
         let Some(host) = host_of(&web.source()) else {
-            inject::execute(&web.webview, &inject::toast_script("En esta página no se pueden ocultar elementos"));
+            inject::execute(&web.webview, &inject::toast_script("You cannot hide elements on this page"));
             return;
         };
         if self.store.rules(&host).is_empty() {
-            inject::execute(&web.webview, &inject::toast_script("No hay nada oculto en este sitio"));
+            inject::execute(&web.webview, &inject::toast_script("No hidden elements on this site"));
             return;
         }
         let changed = match choose(owner, at, &host, self.store.rules(&host)) {
@@ -402,3 +402,8 @@ impl Curtain {
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/curtain.rs"]
+#[rustfmt::skip]
+mod tests;

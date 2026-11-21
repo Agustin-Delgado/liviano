@@ -61,7 +61,7 @@ impl Drop for Handle {
 
 fn handle(raw: *mut core::ffi::c_void) -> Result<Handle, String> {
     if raw.is_null() {
-        Err(format!("sin conexión ({})", windows::core::Error::from_thread()))
+        Err(format!("no connection ({})", windows::core::Error::from_thread()))
     } else {
         Ok(Handle(raw))
     }
@@ -70,9 +70,9 @@ fn handle(raw: *mut core::ffi::c_void) -> Result<Handle, String> {
 /// GET over https, following redirects (WinHTTP's default), into memory.
 /// Blocking: call it from a worker thread.
 pub fn download(url: &str) -> Result<Vec<u8>, String> {
-    let rest = url.strip_prefix("https://").ok_or("sólo https")?;
+    let rest = url.strip_prefix("https://").ok_or("https only")?;
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
-    let network = |e: windows::core::Error| format!("falló la descarga ({e})");
+    let network = |e: windows::core::Error| format!("the download failed ({e})");
     unsafe {
         let session =
             handle(WinHttpOpen(w!("Nea"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0))?;
@@ -104,10 +104,11 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
             200 => {}
             204 | 404 => {
                 return Err(
-                    "la Chrome Web Store no tiene esa extensión (o no está disponible para este navegador)".to_string()
+                    "the Chrome Web Store does not have that extension (or it is not available for this browser)"
+                        .to_string(),
                 );
             }
-            other => return Err(format!("la Chrome Web Store respondió {other}")),
+            other => return Err(format!("the Chrome Web Store answered {other}")),
         }
         let mut body = Vec::new();
         let mut chunk = vec![0u8; 64 * 1024];
@@ -119,9 +120,14 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
             }
             body.extend_from_slice(&chunk[..read as usize]);
             if body.len() > MAX_DOWNLOAD {
-                return Err("el paquete es demasiado grande".to_string());
+                return Err("the package is too large".to_string());
             }
         }
         Ok(body)
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/webstore.rs"]
+#[rustfmt::skip]
+mod tests;

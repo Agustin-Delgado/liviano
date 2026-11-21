@@ -18,6 +18,8 @@ use windows::{
     core::{HSTRING, PCWSTR, w},
 };
 
+#[cfg(all(test, nea_tests))]
+use super::cosmetic::Cosmetic;
 use super::{CookieList, filters::Filters};
 
 /// (cache file, host, path). The only traffic of our own besides the pages.
@@ -210,3 +212,8 @@ fn download(host: &str, path: &str) -> Option<Vec<u8>> {
         Some(body)
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/shield/lists.rs"]
+#[rustfmt::skip]
+mod tests;

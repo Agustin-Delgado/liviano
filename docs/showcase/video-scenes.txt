@@ -1,0 +1,14 @@
+0:00.9	Open a tab from the field
+0:11.2	Open new tabs in the background
+0:14.4	The tab card
+0:19.5	Change tabs
+0:23.8	Move a tab
+0:26.7	Tabs on the side
+0:31.7	Collapse and expand the column
+0:36.0	The field with history
+0:39.8	Find a tab by name
+0:44.5	Find in page
+0:47.2	Panels
+0:52.4	Split view
+1:01.3	Settings and the dark theme
+1:05.5	The dark theme

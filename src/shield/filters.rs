@@ -686,3 +686,8 @@ pub(super) fn hash32(bytes: &[u8]) -> u32 {
     }
     h
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/shield/filters.rs"]
+#[rustfmt::skip]
+mod tests;

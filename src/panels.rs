@@ -12,15 +12,15 @@ pub enum PanelKind {
 impl PanelKind {
     pub fn cue(self) -> &'static str {
         match self {
-            PanelKind::Bookmarks => "Marcadores: buscá por nombre o dirección · Supr borra",
-            PanelKind::History => "Historial: buscá por nombre o dirección · Supr borra",
-            PanelKind::Downloads => "Descargas: Enter abre el archivo · Shift+Enter, la carpeta · Supr quita",
-            PanelKind::Passwords => "Contraseñas: Enter copia · Shift+Enter muestra · Supr borra",
+            PanelKind::Bookmarks => "Bookmarks: search by name or address · Delete removes",
+            PanelKind::History => "History: search by name or address · Delete removes",
+            PanelKind::Downloads => "Downloads: Enter opens the file · Shift+Enter opens the folder · Delete removes",
+            PanelKind::Passwords => "Passwords: Enter copies · Shift+Enter shows · Delete removes",
         }
     }
 }
 
-/// Lower case without the Spanish accents, so "cancion" finds "Canción".
+/// Lower case without accents, so "cafe" finds "Café".
 pub fn fold(text: &str) -> String {
     text.chars()
         .flat_map(char::to_lowercase)
@@ -66,7 +66,7 @@ fn contains_folded(field: &str, word: &str) -> bool {
     word.is_empty() || field.windows(word.len()).any(|w| w.eq_ignore_ascii_case(word))
 }
 
-/// "3,2 MB", with the decimal comma the rest of the screen uses.
+/// "3.2 MB", with a decimal point (en-US).
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 4] = ["KB", "MB", "GB", "TB"];
     if bytes < 1024 {
@@ -79,7 +79,7 @@ pub fn format_bytes(bytes: u64) -> String {
         unit += 1;
     }
     let text = if value >= 100.0 { format!("{value:.0}") } else { format!("{value:.1}") };
-    format!("{} {}", text.replace('.', ","), UNITS[unit])
+    format!("{text} {}", UNITS[unit])
 }
 
 /// Days since 1970-01-01 for a civil date (Howard Hinnant's algorithm).
@@ -105,8 +105,10 @@ fn civil_from_days(days: i64) -> (i64, u32, u32) {
     (yoe + era * 400 + i64::from(month <= 2), month, day)
 }
 
-/// When something happened, as a history row says it: "hoy 14:32",
-/// "ayer 09:05", "12/11/2026". `offset` is the local time zone in seconds.
+const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/// When something happened, as a history row says it: "Today 14:32",
+/// "Yesterday 09:05", "Nov 12, 2026". `offset` is the local time zone in seconds.
 pub fn format_when(at: u64, now: u64, offset: i64) -> String {
     let local = at as i64 + offset;
     let day = local.div_euclid(86_400);
@@ -114,11 +116,16 @@ pub fn format_when(at: u64, now: u64, offset: i64) -> String {
     let minutes = local.rem_euclid(86_400) / 60;
     let clock = format!("{:02}:{:02}", minutes / 60, minutes % 60);
     match today - day {
-        0 => format!("hoy {clock}"),
-        1 => format!("ayer {clock}"),
+        0 => format!("Today {clock}"),
+        1 => format!("Yesterday {clock}"),
         _ => {
             let (y, m, d) = civil_from_days(day);
-            format!("{d:02}/{m:02}/{y}")
+            format!("{} {d}, {y}", MONTHS[m as usize - 1])
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/panels.rs"]
+#[rustfmt::skip]
+mod tests;

@@ -1,5 +1,5 @@
 blank_issues_enabled: false
 contact_links:
-  - name: Reportar una vulnerabilidad
+  - name: Report a vulnerability
     url: https://github.com/Agustin-Delgado/nea/security/advisories/new
-    about: Los fallos de seguridad se reportan en privado, no en un issue.
+    about: Report security problems privately, not in an issue.

@@ -86,6 +86,27 @@ pub fn base64_decode(text: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
+/// The base64 encoder only the tests need, to write a Local State of their own.
+#[cfg(all(test, nea_tests))]
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for chunk in bytes.chunks(3) {
+        let mut acc = 0u32;
+        for (i, &b) in chunk.iter().enumerate() {
+            acc |= (b as u32) << (16 - 8 * i);
+        }
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(ALPHABET[(acc >> (18 - 6 * i) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 type DpapiFn = unsafe extern "system" fn(
     *const CRYPT_INTEGER_BLOB,
     *mut PWSTR,
@@ -114,8 +135,12 @@ type DestroyKeyFn = unsafe extern "system" fn(BCRYPT_KEY_HANDLE) -> NTSTATUS;
 /// DPAPI and AES-GCM, loaded for one import.
 pub struct Crypto {
     unprotect: DpapiFn,
+    #[cfg(all(test, nea_tests))]
+    protect: DpapiFn,
     generate_key: GenerateKeyFn,
     decrypt: CipherFn,
+    #[cfg(all(test, nea_tests))]
+    encrypt: CipherFn,
     destroy_key: DestroyKeyFn,
     // Last, so the functions above are never used after the libraries go.
     _crypt32: Library,
@@ -129,8 +154,12 @@ impl Crypto {
         unsafe {
             Some(Self {
                 unprotect: crypt32.function(c"CryptUnprotectData")?,
+                #[cfg(all(test, nea_tests))]
+                protect: crypt32.function(c"CryptProtectData")?,
                 generate_key: bcrypt.function(c"BCryptGenerateSymmetricKey")?,
                 decrypt: bcrypt.function(c"BCryptDecrypt")?,
+                #[cfg(all(test, nea_tests))]
+                encrypt: bcrypt.function(c"BCryptEncrypt")?,
                 destroy_key: bcrypt.function(c"BCryptDestroyKey")?,
                 _crypt32: crypt32,
                 _bcrypt: bcrypt,
@@ -165,6 +194,12 @@ impl Crypto {
     /// Undoes DPAPI for the current Windows user (no prompt is ever shown).
     pub fn dpapi_unprotect(&self, data: &[u8]) -> Option<SecretBytes> {
         self.dpapi(self.unprotect, data)
+    }
+
+    #[cfg(all(test, nea_tests))]
+    pub fn dpapi_protect(&self, data: &[u8]) -> Vec<u8> {
+        // CryptProtectData's second argument is a description; none is given.
+        self.dpapi(self.protect, data).map(|b| b.0.clone()).unwrap()
     }
 
     /// The profile key of a Chromium browser, from Local State's
@@ -233,6 +268,13 @@ impl Crypto {
         self.gcm(self.decrypt, key, nonce, ciphertext, &mut tag.to_vec())
     }
 
+    #[cfg(all(test, nea_tests))]
+    pub fn aes_gcm_encrypt(&self, key: &[u8], nonce: &[u8], plain: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut tag = vec![0u8; TAG_LEN];
+        let cipher = self.gcm(self.encrypt, key, nonce, plain, &mut tag).unwrap();
+        (cipher.0.clone(), tag)
+    }
+
     /// Decrypts a "v10"/"v11" value with the profile key.
     pub fn decrypt_v10(&self, key: &[u8], value: &[u8]) -> Option<SecretBytes> {
         let body = value.get(3..)?;
@@ -244,3 +286,8 @@ impl Crypto {
         self.aes_gcm_decrypt(key, nonce, ciphertext, tag)
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/vault_crypto.rs"]
+#[rustfmt::skip]
+mod tests;

@@ -1,4 +1,4 @@
-//! "¿Guardar contraseña…?": a small floating card over the page's top right
+//! "Save password?": a small floating card over the page's top right
 //! corner, with three buttons (drawn by `widgets`, the main one in ink). It never takes focus by itself (the person
 //! may be typing on the page that follows a login) and exists only while an
 //! offer stands: it is created for it and destroyed after.
@@ -82,7 +82,7 @@ impl VaultBar {
             let popup = CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("NeaVaultBar"),
-                w!("Contraseña — Nea"),
+                w!("Password — Nea"),
                 WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,

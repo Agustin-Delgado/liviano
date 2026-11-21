@@ -1,39 +1,44 @@
 ﻿<#
 .SYNOPSIS
-  Medición de memoria: escenarios fijos, reporte y umbral de regresión.
+  Measures memory use: fixed scenarios, a report and a regression gate.
 
 .DESCRIPTION
-  Cada escenario arranca Nea de cero con un NEA_DATA_DIR temporal y el
-  control por script (NEA_BENCH=1, en un pipe propio), lo lleva al estado
-  del escenario, espera a que se asiente y toma la memoria de trabajo privada
-  de nea.exe más todo el árbol de procesos del motor (mediana de varias
-  muestras). Con -Edge y -Chrome abre las mismas páginas en Edge y en Chrome
-  (cada uno con un perfil temporal propio) y suma su árbol del mismo modo.
+  Each scenario starts a new Nea with a temporary NEA_DATA_DIR and script
+  control (NEA_BENCH=1, on a separate pipe). The script puts Nea in the
+  state of the scenario and waits until the memory is stable. Then it
+  measures the private working set of nea.exe and of all the engine
+  processes. The result is the median of some samples. With -Edge and
+  -Chrome, the script opens the same pages in Edge and in Chrome. Each
+  browser uses a separate temporary profile, and the script measures its
+  process tree in the same way.
 
-  Bloqueo: antes de los escenarios una corrida de preparación deja
-  que Nea baje EasyList y EasyPrivacy una vez; esa caché se copia a cada
-  escenario, así todos compilan las mismas reglas y ninguno descarga listas
-  mientras se mide. Los escenarios con vistas esperan a que el motor de
-  filtros esté compilado antes de abrir la página, y la página pesada anota
-  cuántas solicitudes vio y bloqueó (comando `shield` del pipe).
+  Blocking: before the scenarios, a preparation run lets Nea download
+  EasyList and EasyPrivacy one time. The script copies this cache into each
+  scenario. Thus all the scenarios compile the same rules, and no scenario
+  downloads lists during a measurement. The scenarios with views wait until
+  the filter engine is ready, and then open the page. For the heavy page,
+  the script records the number of requests that the filter engine saw and
+  blocked (the `shield` command of the pipe).
 
-  Escenarios:
-    1 solo-programa         el programa sin vistas (sin motor)
-    2 about-blank           una pestaña con about:blank
-    3 liviana               una página liviana (-LightUrl)
-    4 pesada-<variante>     una página pesada (-HeavyUrl) en cada variante de
-                            -HeavyVariants (con y sin bloqueo)
-    5 20-pestanas           20 pestañas cargadas, 19 dormidas
-    6 restaurar-50          arranque con una sesión de 50 pestañas
+  Scenarios:
+    1 app-only              the app with no views (no engine)
+    2 about-blank           one tab with about:blank
+    3 light                 a light page (-LightUrl)
+    4 heavy-<variant>       a heavy page (-HeavyUrl) in each variant of
+                            -HeavyVariants (with and without blocking)
+    5 20-tabs               20 loaded tabs, 19 of them asleep
+    6 restore-50            startup with a session of 50 tabs
 
-  Umbral: con -Baseline compara contra el archivo y termina con código 1 si
-  algún escenario sube más que su tolerancia; -UpdateBaseline lo reescribe
-  con las cifras de esta corrida.
+  Gate: with -Baseline, the script compares the results with the file. It
+  exits with code 1 if a scenario is more than its tolerance. -UpdateBaseline
+  writes the figures of this run to the file. The script also reads a
+  baseline with the old Spanish scenario names (solo-programa, liviana,
+  pesada-*, 20-pestanas, restaurar-50).
 
 .EXAMPLE
-  tools\measure.ps1 -Build -Edge -Chrome -Report docs\medicion.md -Csv docs\medicion.csv -UpdateBaseline
+  tools\measure.ps1 -Build -Edge -Chrome -Report docs\benchmarks.md -Csv docs\benchmarks.csv -UpdateBaseline
 .EXAMPLE
-  tools\measure.ps1 -Baseline docs\medicion-baseline.json   # falla si hay regresión
+  tools\measure.ps1 -Baseline docs\benchmarks-baseline.json   # fails if there is a regression
 #>
 [CmdletBinding()]
 param(
@@ -79,7 +84,7 @@ if ($Build) {
     Push-Location $root
     try {
         cargo build --release --bin nea --example bench
-        if ($LASTEXITCODE -ne 0) { throw 'cargo build falló' }
+        if ($LASTEXITCODE -ne 0) { throw 'cargo build failed.' }
     } finally { Pop-Location }
 }
 $Exe = (Resolve-Path $Exe).Path
@@ -88,8 +93,8 @@ $BenchExe = (Resolve-Path $BenchExe).Path
 $heavyHost = ([Uri]$HeavyUrl).Host -replace '^www\.', ''
 if (-not $HeavyVariants) {
     $HeavyVariants = [ordered]@{
-        'con-bloqueo' = @{}
-        'sin-bloqueo' = @{ shield_disabled = @($heavyHost) }
+        'blocking'    = @{}
+        'no-blocking' = @{ shield_disabled = @($heavyHost) }
     }
 }
 
@@ -109,7 +114,7 @@ function Remove-TempDir([string]$dir) {
     for ($i = 0; $i -lt 10; $i++) {
         try { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction Stop; return } catch { Start-Sleep -Milliseconds 500 }
     }
-    Write-Warning "No se pudo borrar $dir"
+    Write-Warning "Cannot delete $dir."
 }
 
 # Processes whose command line mentions $marker (an engine or Edge profile dir).
@@ -153,7 +158,7 @@ function Add-Row($scenario, $browser, $m, [string]$note = '') {
         note      = $note
     }
     $script:Rows.Add($row)
-    Write-Host ("  {0,-24} {1,-8} {2,8:N1} MB  ({3} procesos){4}" -f $scenario, $browser, $row.total_mb, $row.processes, $(if ($note) { "  - $note" } else { '' }))
+    Write-Host ("  {0,-24} {1,-8} {2,8:N1} MB  ({3} processes){4}" -f $scenario, $browser, $row.total_mb, $row.processes, $(if ($note) { "  - $note" } else { '' }))
 }
 
 # ---------- Nea ----------
@@ -177,7 +182,7 @@ function Start-Nea([hashtable]$settings, $session) {
     $process = Start-Process -FilePath $Exe -PassThru
     Connect-Nea -TimeoutSec 20
     $ping = Invoke-Nea ping
-    if ($ping.pid -ne $process.Id) { throw "El pipe lo atiende otro proceso ($($ping.pid))" }
+    if ($ping.pid -ne $process.Id) { throw "A different process ($($ping.pid)) answers on the pipe." }
     [pscustomobject]@{ Process = $process; Dir = $dir }
 }
 
@@ -215,7 +220,7 @@ function Wait-Shield {
         if ($null -ne $s.rules) { return $s }
         Start-Sleep -Milliseconds 200
     }
-    throw 'El motor de filtros no terminó de compilar en 20 s'
+    throw 'The filter engine did not compile in 20 s.'
 }
 
 # Opens about:blank first so the engine (and with it the filters) start,
@@ -234,7 +239,7 @@ function Get-ShieldNote {
     $requests = $now.requests - $script:ShieldStats.requests
     $blocked = $now.blocked - $script:ShieldStats.blocked
     $script:LastShield = [pscustomobject]@{ requests = $requests; blocked = $blocked; rules = $now.rules; heap_bytes = $now.heap_bytes }
-    "$blocked de $requests solicitudes bloqueadas"
+    "$blocked of $requests requests blocked"
 }
 
 function Wait-Tab($tab) {
@@ -242,7 +247,7 @@ function Wait-Tab($tab) {
     if ($null -ne $tab) { $arguments.tab = $tab }
     $reply = Invoke-Nea wait $arguments -NoThrow
     if ($reply.ok) { return '' }
-    "no terminó de cargar en $LoadTimeoutSec s"
+    "did not finish loading in $LoadTimeoutSec s"
 }
 
 function Invoke-NeaScenario([string]$name, [hashtable]$settings, $session, [scriptblock]$steps) {
@@ -296,7 +301,7 @@ function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls
     if (-not $b.Wanted -or -not (Test-Wanted $name)) { return }
     $exe = Find-Browser $browser
     if (-not $exe) {
-        $note = "$browser no está instalado: sin comparación."
+        $note = "$browser is not installed. The report has no comparison with it."
         if (-not $script:Notes.Contains($note)) { $script:Notes.Add($note) }
         return
     }
@@ -335,7 +340,7 @@ function Initialize-ShieldCache {
         $deadline = (Get-Date).AddSeconds(90)
         while (-not (Test-Path $stamp) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
         if (-not (Test-Path $stamp)) {
-            $script:Notes.Add('No se pudieron bajar EasyList/EasyPrivacy: el bloqueo usó sólo la lista mínima incorporada.')
+            $script:Notes.Add('The download of EasyList and EasyPrivacy failed. Blocking used only the built-in minimal list.')
             return
         }
         $cache = New-TempDir 'nea-measure-shield'
@@ -358,13 +363,13 @@ $restoreSession = @{
 }
 
 Write-Host "Nea: $Exe"
-Write-Host "Asentamiento $SettleSec s, $Samples muestras por escenario (mediana)."
-if ($Only.Count -eq 0 -or @($Only | Where-Object { $_ -ne 'solo-programa' }).Count -gt 0) {
-    Write-Host 'Preparando la caché de listas de bloqueo...'
+Write-Host "Settling $SettleSec s, $Samples samples per scenario (median)."
+if ($Only.Count -eq 0 -or @($Only | Where-Object { $_ -ne 'app-only' }).Count -gt 0) {
+    Write-Host 'Preparing the block list cache...'
     Initialize-ShieldCache
 }
 
-Invoke-NeaScenario 'solo-programa' @{} $null { '' }
+Invoke-NeaScenario 'app-only' @{} $null { '' }
 
 Invoke-NeaScenario 'about-blank' @{} $null {
     $tab = (Invoke-Nea open @{ url = 'about:blank' }).tab
@@ -372,38 +377,38 @@ Invoke-NeaScenario 'about-blank' @{} $null {
 }
 Invoke-OthersScenario 'about-blank' @('about:blank')
 
-Invoke-NeaScenario 'liviana' @{} $null {
+Invoke-NeaScenario 'light' @{} $null {
     $tab = (Invoke-Nea open @{ url = $LightUrl }).tab
     Wait-Tab $tab
 }
-Invoke-OthersScenario 'liviana' @($LightUrl)
+Invoke-OthersScenario 'light' @($LightUrl)
 
 foreach ($variant in $HeavyVariants.Keys) {
-    Invoke-NeaScenario "pesada-$variant" $HeavyVariants[$variant] $null {
+    Invoke-NeaScenario "heavy-$variant" $HeavyVariants[$variant] $null {
         $tab = Open-Filtered $HeavyUrl
         Wait-Tab $tab
     }
 }
-Invoke-OthersScenario 'pesada' @($HeavyUrl)
+Invoke-OthersScenario 'heavy' @($HeavyUrl)
 
-Invoke-NeaScenario '20-pestanas' @{} $null {
+Invoke-NeaScenario '20-tabs' @{} $null {
     $late = 0
     foreach ($url in $manyUrls) {
         $tab = (Invoke-Nea open @{ url = $url }).tab
         if (Wait-Tab $tab) { $late++ }
     }
     $slept = (Invoke-Nea discard).discarded
-    $note = "$slept dormidas"
-    if ($late) { $note += ", $late sin terminar de cargar" }
+    $note = "$slept asleep"
+    if ($late) { $note += ", $late not done loading" }
     $note
 }
-Invoke-OthersScenario '20-pestanas' $manyUrls
+Invoke-OthersScenario '20-tabs' $manyUrls
 
-Invoke-NeaScenario 'restaurar-50' @{} $restoreSession {
+Invoke-NeaScenario 'restore-50' @{} $restoreSession {
     $state = Invoke-Nea state
-    $note = "$(@($state.tabs).Count) pestañas restauradas"
+    $note = "$(@($state.tabs).Count) tabs restored"
     $late = Wait-Tab $null
-    if ($late) { $note += ", la activa $late" }
+    if ($late) { $note += ", the active one $late" }
     $note
 }
 
@@ -411,7 +416,7 @@ Invoke-NeaScenario 'restaurar-50' @{} $restoreSession {
 
 $commit = (git -C $root rev-parse --short HEAD 2>$null)
 $dirty = (git -C $root status --porcelain 2>$null)
-if ($dirty) { $commit = "$commit (con cambios sin commitear)" }
+if ($dirty) { $commit = "$commit (with uncommitted changes)" }
 $os = Get-CimInstance Win32_OperatingSystem
 $ramGb = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
 $others = @($script:Foreign.Keys | Where-Object { $script:Foreign[$_].Version })
@@ -425,44 +430,44 @@ function Format-Mb([double]$mb) { ('{0:N1}' -f $mb) }
 # The memory budgets, checked against this run.
 function Get-BudgetLines {
     $out = New-Object System.Collections.Generic.List[string]
-    $yes = { param($ok) if ($ok) { 'Sí' } else { '**No**' } }
-    $out.Add('| Presupuesto o criterio | Objetivo | Medido | ¿Se cumple? |')
+    $yes = { param($ok) if ($ok) { 'Yes' } else { '**No**' } }
+    $out.Add('| Budget or criterion | Target | Measured | Met? |')
     $out.Add('|---|---|---|---|')
     $neaRows = @($script:Rows | Where-Object { $_.browser -eq 'Nea' })
-    $solo = Get-Row 'solo-programa'
+    $solo = Get-Row 'app-only'
     if ($neaRows.Count -gt 0) {
         $maxApp = ($neaRows | Measure-Object -Property app_mb -Maximum).Maximum
-        $soloText = if ($solo) { "$(Format-Mb $solo.app_mb) MB sin vistas; " } else { '' }
-        $out.Add("| Proceso propio (interfaz + lógica) | < 20 MB en reposo (máx. unas pocas decenas) | $($soloText)máximo $(Format-Mb $maxApp) MB en todos los escenarios | $(& $yes ($maxApp -lt 20)) |")
+        $soloText = if ($solo) { "$(Format-Mb $solo.app_mb) MB with no views; " } else { '' }
+        $out.Add("| Own process (UI + logic) | < 20 MB idle (a few dozen at most) | $($soloText)at most $(Format-Mb $maxApp) MB across all scenarios | $(& $yes ($maxApp -lt 20)) |")
     }
-    $restore = Get-Row 'restaurar-50'
-    $light = Get-Row 'liviana'
+    $restore = Get-Row 'restore-50'
+    $light = Get-Row 'light'
     if ($restore -and $light) {
         $perApp = ($restore.app_mb - $light.app_mb) / 49
         $perTotal = ($restore.total_mb - $light.total_mb) / 49
         # Rows are rounded to 0.1 MB: spread over 49 tabs that is ~0.002 MB.
-        $perText = if ($perApp -le 0.002) { 'Menos de 0.002 MB (bajo la resolución)' } else { "$('{0:N3}' -f $perApp) MB" }
-        $out.Add("| Pestaña dormida (sólo metadatos) | < 0,5 MB cada una | $perText del programa por pestaña (restaurar-50 contra liviana, 49 dormidas); contando el motor, $('{0:N2}' -f $perTotal) MB | $(& $yes ($perApp -lt 0.5)) |")
+        $perText = if ($perApp -le 0.002) { 'Under 0.002 MB (below the resolution)' } else { "$('{0:N3}' -f $perApp) MB" }
+        $out.Add("| Sleeping tab (metadata only) | < 0.5 MB each | $perText of the app per tab (restore-50 against light, 49 asleep); counting the engine, $('{0:N2}' -f $perTotal) MB | $(& $yes ($perApp -lt 0.5)) |")
     }
     $heavy = @($script:Shield.Values | Where-Object { $_.heap_bytes }) | Select-Object -First 1
     if ($heavy) {
         $engineMb = $heavy.heap_bytes / 1MB
-        $out.Add("| Motor de filtros | Pocos MB | $('{0:N1}' -f $engineMb) MB de reglas compiladas ($('{0:N0}' -f $heavy.rules) reglas de red) | $(& $yes ($engineMb -lt 10)) |")
+        $out.Add("| Filter engine | A few MB | $('{0:N1}' -f $engineMb) MB of compiled rules ($('{0:N0}' -f $heavy.rules) network rules) | $(& $yes ($engineMb -lt 10)) |")
     }
     if ($light) {
-        $out.Add("| Pestaña activa con página liviana | 80 a 150 MB entre todos los procesos del motor | $(Format-Mb $light.engine_mb) MB de motor, $(Format-Mb $light.total_mb) MB en total | $(& $yes ($light.engine_mb -le 150)) |")
+        $out.Add("| Active tab with a light page | 80 to 150 MB across all engine processes | $(Format-Mb $light.engine_mb) MB of engine, $(Format-Mb $light.total_mb) MB in total | $(& $yes ($light.engine_mb -le 150)) |")
     }
-    $twenty = Get-Row '20-pestanas'
+    $twenty = Get-Row '20-tabs'
     if ($twenty) {
         foreach ($browser in $others) {
-            $other = Get-Row '20-pestanas' $browser
+            $other = Get-Row '20-tabs' $browser
             if (-not $other -or $other.total_mb -le 0) { continue }
             $less = 100 * (1 - $twenty.total_mb / $other.total_mb)
-            $out.Add("| 20 pestañas con 19 dormidas, claramente menos que $browser | Al menos 40 % menos | $(Format-Mb $twenty.total_mb) MB contra $(Format-Mb $other.total_mb) MB: $('{0:N0}' -f $less) % menos | $(& $yes ($less -ge 40)) |")
+            $out.Add("| 20 tabs with 19 asleep, clearly less than $browser | At least 40 % less | $(Format-Mb $twenty.total_mb) MB against $(Format-Mb $other.total_mb) MB: $('{0:N0}' -f $less) % less | $(& $yes ($less -ge 40)) |")
         }
     }
-    $out.Add('| Pestaña suspendida | Reducción fuerte respecto de la activa | Sin escenario propio: "20-pestanas" duerme con descarte (vista destruida), el estado de menor costo | Sin medir |')
-    $out.Add('| Índice de historial | Pocos MB con decenas de miles de entradas | Los escenarios arrancan con historial vacío | Sin medir |')
+    $out.Add('| Suspended tab | Much less than an active tab | No scenario: "20-tabs" discards the sleeping tabs (no view), which is the state with the lowest cost | Not measured |')
+    $out.Add('| History index | A few MB with tens of thousands of entries | The scenarios start with an empty history | Not measured |')
     $out
 }
 
@@ -474,26 +479,26 @@ if ($Csv) {
 
 if ($Report) {
     $lines = New-Object System.Collections.Generic.List[string]
-    $lines.Add('# Medición de memoria')
+    $lines.Add('# Memory benchmarks')
     $lines.Add('')
-    $lines.Add('Generado por `tools/measure.ps1`. Memoria de trabajo privada: `nea.exe` más todo el árbol de procesos del motor (WebView2), mediana de ' + $Samples + ' muestras tras ' + $SettleSec + ' s de asentamiento. Cada escenario arranca de cero con datos temporales.')
+    $lines.Add('`tools/measure.ps1` generated this report. The figures are the private working set of `nea.exe` and of all the engine processes (WebView2). Each figure is the median of ' + $Samples + ' samples after ' + $SettleSec + ' s of settling. Each scenario starts a new Nea with temporary data.')
     $lines.Add('')
-    $lines.Add("- Fecha: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
+    $lines.Add("- Date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
     $lines.Add("- Commit: $commit")
-    $lines.Add("- Windows: $($os.Caption) $($os.Version), $ramGb GB de RAM")
-    if ($script:EngineVersion) { $lines.Add("- Motor WebView2: $($script:EngineVersion)") }
-    foreach ($browser in $others) { $lines.Add("- $($browser): $($script:Foreign[$browser].Version) (perfil temporal propio, mismas páginas)") }
-    if ($EngineArgs) { $lines.Add('- Argumentos extra del motor: `' + $EngineArgs + '`') }
-    if ($script:ShieldFiles.Count -gt 0) { $lines.Add("- Listas de bloqueo: $($script:ShieldFiles -join ', ') más la mínima incorporada") }
-    $lines.Add("- Página liviana: $LightUrl · página pesada: $HeavyUrl")
+    $lines.Add("- Windows: $($os.Caption) $($os.Version), $ramGb GB of RAM")
+    if ($script:EngineVersion) { $lines.Add("- WebView2 engine: $($script:EngineVersion)") }
+    foreach ($browser in $others) { $lines.Add("- $($browser): $($script:Foreign[$browser].Version) (own temporary profile, same pages)") }
+    if ($EngineArgs) { $lines.Add('- Extra engine arguments: `' + $EngineArgs + '`') }
+    if ($script:ShieldFiles.Count -gt 0) { $lines.Add("- Block lists: $($script:ShieldFiles -join ', ') plus the built-in minimal one") }
+    $lines.Add("- Light page: $LightUrl · heavy page: $HeavyUrl")
     $lines.Add('')
-    $header = '| Escenario | Nea (MB) | programa | motor | procesos |'
+    $header = '| Scenario | Nea (MB) | app | engine | processes |'
     $rule = '|---|---:|---:|---:|---:|'
-    foreach ($browser in $others) { $header += " $browser (MB) | Ahorro |"; $rule += '---:|---:|' }
-    $lines.Add($header + ' Nota |')
+    foreach ($browser in $others) { $header += " $browser (MB) | Savings |"; $rule += '---:|---:|' }
+    $lines.Add($header + ' Note |')
     $lines.Add($rule + '---|')
     foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Nea' })) {
-        $key = $row.scenario -replace '^pesada-.*$', 'pesada'
+        $key = $row.scenario -replace '^heavy-.*$', 'heavy'
         $line = '| {0} | {1:N1} | {2:N1} | {3:N1} | {4} |' -f $row.scenario, $row.total_mb, $row.app_mb, $row.engine_mb, $row.processes
         foreach ($browser in $others) {
             $other = Get-Row $key $browser
@@ -506,20 +511,20 @@ if ($Report) {
         $lines.Add($line + " $($row.note) |")
     }
     $lines.Add('')
-    $lines.Add('## Presupuestos de memoria')
+    $lines.Add('## Memory budgets')
     $lines.Add('')
     foreach ($l in (Get-BudgetLines)) { $lines.Add($l) }
     $lines.Add('')
-    $lines.Add('Notas:')
+    $lines.Add('Notes:')
     $lines.Add('')
-    $lines.Add('- "programa" es `nea.exe`; "motor" suma todos sus procesos hijos (navegador, GPU, red, almacenamiento, renderizadores, crashpad de WebView2).')
-    $lines.Add('- Las variantes de la página pesada difieren sólo en settings.json (`' + (($HeavyVariants.Keys | ForEach-Object { "$($_): " + ($HeavyVariants[$_] | ConvertTo-Json -Compress) }) -join '`, `') + '`); la clave de `shield_disabled` es la de `shield::site_key` (el host sin "www."). La nota cuenta las solicitudes que vio y bloqueó el motor de filtros desde que se abrió la página hasta la última muestra.')
-    $lines.Add('- En Edge y Chrome no se puede forzar el sueño de pestañas: en "20-pestanas" las 20 están vivas, que es lo que cuesta abrirlas ahí. Tampoco avisan cuándo terminó de cargar: se les da una espera fija antes del asentamiento. Su número incluye su propia interfaz (proceso del navegador), que en Nea es "programa".')
-    $lines.Add('- "restaurar-50" arranca con una sesión de 50 pestañas: sólo la activa crea su vista.')
-    $lines.Add('- Umbral de regresión: `tools/measure.ps1 -Baseline docs/medicion-baseline.json` sale con código 1 si un escenario supera su cifra base más la tolerancia del archivo; `-UpdateBaseline` la reescribe.')
+    $lines.Add('- "app" is `nea.exe`. "engine" is the total of all its child processes (browser, GPU, network, storage, renderers and the WebView2 crashpad).')
+    $lines.Add('- The variants of the heavy page have different settings.json values only (`' + (($HeavyVariants.Keys | ForEach-Object { "$($_): " + ($HeavyVariants[$_] | ConvertTo-Json -Compress) }) -join '`, `') + '`). The `shield_disabled` key is the value of `shield::site_key` (the host without "www."). The note gives the number of requests that the filter engine saw and blocked, from the page load to the last sample.')
+    $lines.Add('- The script cannot make Edge and Chrome put tabs to sleep. Thus in "20-tabs" all 20 tabs are live in these browsers. These browsers also do not tell when a page load is complete, so the script waits a fixed time before settling. Their figure includes their own interface (the browser process). In Nea, this is "app".')
+    $lines.Add('- "restore-50" starts with a session of 50 tabs. Only the active tab creates its view.')
+    $lines.Add('- Regression gate: `tools/measure.ps1 -Baseline docs/benchmarks-baseline.json` exits with code 1 if a scenario is more than its base figure plus the tolerance in the file. `-UpdateBaseline` writes new figures to the file.')
     foreach ($note in $script:Notes) { $lines.Add(''); $lines.Add("_$($note)_") }
     [IO.File]::WriteAllLines((Join-Path (Get-Location) $Report), $lines, (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Reporte: $Report"
+    Write-Host "Report: $Report"
 }
 if ($script:ShieldCache) { Remove-TempDir $script:ShieldCache }
 
@@ -531,27 +536,30 @@ foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Nea' })) { $curr
 $failed = @()
 if ($Baseline -and (Test-Path $Baseline) -and -not $UpdateBaseline) {
     $base = Get-Content -Raw -Path $Baseline | ConvertFrom-Json
+    # Baselines from before the scenarios had English names.
+    $legacy = @{ 'solo-programa' = 'app-only'; 'liviana' = 'light'; 'pesada-con-bloqueo' = 'heavy-blocking'; 'pesada-sin-bloqueo' = 'heavy-no-blocking'; '20-pestanas' = '20-tabs'; 'restaurar-50' = 'restore-50' }
     foreach ($entry in $base.scenarios.PSObject.Properties) {
-        if (-not $current.Contains($entry.Name)) { continue }
+        $name = if ($legacy.ContainsKey($entry.Name)) { $legacy[$entry.Name] } else { $entry.Name }
+        if (-not $current.Contains($name)) { continue }
         # A percentage of almost nothing is noise: never less than 2 MB of room.
         $limit = [Math]::Max($entry.Value.total_mb * (1 + $entry.Value.tolerance_percent / 100), $entry.Value.total_mb + 2)
-        $now = $current[$entry.Name]
-        $status = if ($now -gt $limit) { 'REGRESIÓN' } else { 'ok' }
-        Write-Host ("  {0,-24} {1,8:N1} MB  base {2:N1} MB  límite {3:N1} MB  {4}" -f $entry.Name, $now, $entry.Value.total_mb, $limit, $status)
-        if ($now -gt $limit) { $failed += $entry.Name }
+        $now = $current[$name]
+        $status = if ($now -gt $limit) { 'REGRESSION' } else { 'ok' }
+        Write-Host ("  {0,-24} {1,8:N1} MB  base {2:N1} MB  limit {3:N1} MB  {4}" -f $name, $now, $entry.Value.total_mb, $limit, $status)
+        if ($now -gt $limit) { $failed += $name }
     }
 }
 if ($Baseline -and $UpdateBaseline) {
     $scenarios = [ordered]@{}
     foreach ($name in $current.Keys) {
-        $tol = if ($name -like 'pesada-*') { $HeavyTolerance } else { $Tolerance }
+        $tol = if ($name -like 'heavy-*') { $HeavyTolerance } else { $Tolerance }
         $scenarios[$name] = [ordered]@{ total_mb = $current[$name]; tolerance_percent = $tol }
     }
     $doc = [ordered]@{ commit = $commit; date = (Get-Date -Format 'yyyy-MM-dd'); unit = 'MB, private working set'; scenarios = $scenarios }
     [IO.File]::WriteAllText((Join-Path (Get-Location) $Baseline), ($doc | ConvertTo-Json -Depth 5), (New-Object System.Text.UTF8Encoding($false)))
-    Write-Host "Baseline actualizado: $Baseline"
+    Write-Host "Baseline updated: $Baseline"
 }
 if ($failed.Count -gt 0) {
-    Write-Host ("Regresión de memoria en: " + ($failed -join ', ')) -ForegroundColor Red
+    Write-Host ("Memory regression in: " + ($failed -join ', ')) -ForegroundColor Red
     exit 1
 }

@@ -114,3 +114,8 @@ pub fn fill(webview: &ICoreWebView2, origin: &str, username: &str, password: &Se
         );
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/vault_watch.rs"]
+#[rustfmt::skip]
+mod tests;

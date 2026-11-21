@@ -34,7 +34,7 @@ impl<W> Tab<W> {
     pub fn label(&self) -> &str {
         if self.title.trim().is_empty() {
             let host = crate::omnibox::display_host(&self.url);
-            if host.is_empty() { "Nueva pestaña" } else { host }
+            if host.is_empty() { "New tab" } else { host }
         } else {
             &self.title
         }
@@ -273,3 +273,8 @@ impl<W> TabList<W> {
         self.tabs.insert(to, tab);
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/tabs.rs"]
+#[rustfmt::skip]
+mod tests;

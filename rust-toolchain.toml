@@ -1,0 +1,5 @@
+[toolchain]
+# Pinned so a new clippy lint on CI never reds a build that was green here.
+channel = "1.97.1"
+components = ["clippy", "rustfmt"]
+profile = "minimal"

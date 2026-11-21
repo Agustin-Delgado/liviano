@@ -68,13 +68,13 @@ impl App {
             if chord.is_empty() { label.to_string() } else { format!("{label} ({chord})") }
         };
         match hit {
-            Hit::Settings => Some(with_chord("Ajustes", Command::Settings)),
-            Hit::NewTab if !self.layout.vertical => Some(with_chord("Nueva pestaña", Command::NewTab)),
-            Hit::Extensions => Some("Extensiones".to_string()),
+            Hit::Settings => Some(with_chord("Settings", Command::Settings)),
+            Hit::NewTab if !self.layout.vertical => Some(with_chord("New tab", Command::NewTab)),
+            Hit::Extensions => Some("Extensions".to_string()),
             Hit::Group(group) => self.group_tip(group),
-            Hit::Nav(NavButton::Back) => Some(with_chord("Atrás", Command::Back)),
-            Hit::Nav(NavButton::Forward) => Some(with_chord("Adelante", Command::Forward)),
-            Hit::Nav(NavButton::Reload) => Some(with_chord("Recargar", Command::Reload)),
+            Hit::Nav(NavButton::Back) => Some(with_chord("Back", Command::Back)),
+            Hit::Nav(NavButton::Forward) => Some(with_chord("Forward", Command::Forward)),
+            Hit::Nav(NavButton::Reload) => Some(with_chord("Reload", Command::Reload)),
             _ => None,
         }
     }

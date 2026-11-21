@@ -225,7 +225,7 @@ impl Shared {
                     DWRITE_FONT_STYLE_NORMAL,
                     DWRITE_FONT_STRETCH_NORMAL,
                     font.size,
-                    &HSTRING::from("es-ar"),
+                    &HSTRING::from("en-us"),
                 )
                 .ok()?;
             let _ = format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP);
@@ -269,8 +269,8 @@ const CACHED_IMAGE_PIXELS: u32 = 64 * 64;
 /// favicon is 1 KB; hashing it is far cheaper than uploading it).
 fn image_key(pixels: &[u8], width: u32, height: u32) -> u64 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325 ^ ((width as u64) << 32 | height as u64);
-    for chunk in pixels.chunks_exact(8) {
-        h ^= u64::from_le_bytes(chunk.try_into().expect("8 bytes"));
+    for chunk in pixels.as_chunks::<8>().0 {
+        h ^= u64::from_le_bytes(*chunk);
         h = h.wrapping_mul(0x0100_0000_01b3);
     }
     h
@@ -655,3 +655,8 @@ pub fn fill_gdi(hdc: HDC, rect: RECT, color: Rgb) {
         let _ = DeleteObject(brush.into());
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/gfx.rs"]
+#[rustfmt::skip]
+mod tests;

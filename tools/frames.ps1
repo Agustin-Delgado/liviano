@@ -1,23 +1,26 @@
 <#
 .SYNOPSIS
-  Graba los cuadros intermedios de una animación de Nea en una tira PNG.
+  Records the intermediate frames of a Nea animation to one PNG image.
 
 .DESCRIPTION
-  Corre -Trigger (lo que arranca la animación: un comando del pipe de bench,
-  un PostMessage a una ventana propia) y enseguida captura las ventanas del
-  proceso con PrintWindow cada -IntervalMs, -Frames veces. Cada ventana en
-  capas se compone con la opacidad que tiene en ese momento
-  (GetLayeredWindowAttributes), así un fundido se ve como en pantalla.
-  Los cuadros se recortan a -Crop (x,y,ancho,alto relativos a la ventana
-  principal) y se pegan de izquierda a derecha, con el tiempo de cada uno
-  debajo. No manda teclas ni clics y no trae nada al frente.
+  The script runs -Trigger, which starts the animation. A trigger is a
+  bench pipe command or a PostMessage to a Nea window. Then the script
+  captures the windows of the process with PrintWindow, -Frames times, at
+  an interval of -IntervalMs. The script draws each layered window at its
+  opacity at that time (GetLayeredWindowAttributes). Thus a fade looks the
+  same as on the screen.
 
-  Si -Trigger usa Invoke-Nea, quien llama tiene que soltar antes su
-  conexión al pipe (Disconnect-Nea): el pipe atiende a uno por vez, y
-  este script suelta la suya al terminar.
+  The script cuts each frame to -Crop (x,y,width,height, relative to the
+  main window). It puts the frames from left to right, with the time of
+  each frame below it. The script sends no keys or clicks. It does not move
+  a window to the front.
+
+  If -Trigger uses Invoke-Nea, close your pipe connection first
+  (Disconnect-Nea). The pipe accepts only one client at a time. The script
+  closes its connection when it ends.
 
 .EXAMPLE
-  tools\frames.ps1 -ProcessId 1234 -Out docs\capturas\tira-campo.png -Crop 0,0,900,320 -Trigger { Invoke-Nea run @{ name = 'focus_address' } }
+  tools\frames.ps1 -ProcessId 1234 -Out $env:TEMP\nea-field-strip.png -Crop 0,0,900,320 -Trigger { Invoke-Nea run @{ name = 'focus_address' } }
 #>
 [CmdletBinding()]
 param(
@@ -228,10 +231,10 @@ for ($i = 0; $i -lt $Frames; $i++) {
     $frame = [NeaFrames]::Frame([uint32]$ProcessId, $box)
     if ($frame) { $shots.Add([pscustomobject]@{ At = $at; Image = $frame }) }
 }
-# A trigger that spoke over the bench pipe (toolsench.ps1) opened its own
-# connection in this script's scope: let go of it, the caller needs the pipe.
+# A trigger that used the bench pipe (tools\bench.ps1) opened a connection in
+# the scope of this script. Close it, because the caller needs the pipe.
 if (Get-Command Disconnect-Nea -ErrorAction SilentlyContinue) { Disconnect-Nea }
-if ($shots.Count -eq 0) { throw "El proceso $ProcessId no tiene ventanas visibles" }
+if ($shots.Count -eq 0) { throw "Process $ProcessId has no visible windows." }
 
 $w = [int]($shots[0].Image.Width * $Scale); $h = [int]($shots[0].Image.Height * $Scale)
 $gap = 8; $label = 22

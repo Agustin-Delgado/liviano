@@ -1,10 +1,10 @@
 ﻿<#
 .SYNOPSIS
-  Cliente del control por script de Nea: habla con el pipe local
-  del navegador, una petición JSON por línea.
+  Client for the Nea script control. It sends one JSON request per line
+  to the local pipe of the browser.
 
 .DESCRIPTION
-  Uso como comando (una petición por llamada):
+  Use the script as a command (one request for each call):
     tools\bench.ps1 open https://example.com/
     tools\bench.ps1 wait 20000
     tools\bench.ps1 state
@@ -12,7 +12,7 @@
     tools\bench.ps1 keys Ctrl+Shift+S
     tools\bench.ps1 raw '{"cmd":"click","selector":"a"}'
 
-  Uso como biblioteca (varias peticiones por la misma conexión):
+  Use the script as a library (many requests on one connection):
     . tools\bench.ps1
     Connect-Nea
     $tab = (Invoke-Nea open @{ url = 'https://example.com/' }).tab
@@ -20,9 +20,10 @@
     (Invoke-Nea text @{ tab = $tab }).text
     Disconnect-Nea
 
-  El navegador tiene que tener activo "Control por script" en Ajustes o
-  haberse iniciado con NEA_BENCH=1. NEA_BENCH_PIPE elige otro canal
-  (el script de medición lo usa para no chocar con el navegador de uso diario).
+  Turn on "Script control" in Settings, or start the browser with
+  NEA_BENCH=1. NEA_BENCH_PIPE selects a different pipe. The measurement
+  scripts use a different pipe, so they do not control the browser that
+  you use every day.
 #>
 
 $script:NeaConnection = $null
@@ -48,7 +49,7 @@ function Connect-Nea {
             break
         } catch {
             $stream.Dispose()
-            if ((Get-Date) -gt $deadline) { throw "No se pudo abrir el pipe $Pipe (¿está activo el control por script?)" }
+            if ((Get-Date) -gt $deadline) { throw "Cannot open the pipe $Pipe. Make sure that script control is on." }
             Start-Sleep -Milliseconds 200
         }
     }
@@ -74,7 +75,7 @@ function Send-NeaLine {
     $c = $script:NeaConnection
     $c.Writer.WriteLine($Line)
     $answer = $c.Reader.ReadLine()
-    if ($null -eq $answer) { throw 'El navegador cerró el pipe' }
+    if ($null -eq $answer) { throw 'The browser closed the pipe.' }
     $answer | ConvertFrom-Json
 }
 

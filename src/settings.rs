@@ -31,7 +31,7 @@ pub enum FieldPosition {
 #[serde(default)]
 pub struct Settings {
     pub theme: Theme,
-    /// Where the field opens (Ajustes > Campo).
+    /// Where the field opens (Settings > Field).
     pub field_position: FieldPosition,
     /// `{q}` is replaced by the encoded query.
     pub search_url: String,
@@ -66,7 +66,7 @@ pub struct Settings {
     pub bench_enabled: bool,
     /// Offer to save a password after a login (filling is always on request).
     pub passwords_offer: bool,
-    /// Origins where saving is never offered ("Nunca para este sitio").
+    /// Origins where saving is never offered ("Never for this site").
     pub passwords_never: BTreeSet<String>,
 }
 
@@ -95,7 +95,7 @@ impl Default for Settings {
     }
 }
 
-/// What the Ajustes window hands back, on top of the settings in force. The
+/// What the Settings window hands back, on top of the settings in force. The
 /// window edits a copy taken when it opened and has no control for the
 /// per-site lists the app changes from a tab (shield exceptions, "never for
 /// this site") nor for the update address: those stay as the app has them.
@@ -131,3 +131,8 @@ pub fn normalize_host(text: &str) -> Option<String> {
     (!host.is_empty() && !host.contains(char::is_whitespace) && host.contains(|c: char| c.is_ascii_alphanumeric()))
         .then(|| host.to_string())
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/settings.rs"]
+#[rustfmt::skip]
+mod tests;

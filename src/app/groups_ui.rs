@@ -25,7 +25,7 @@ use crate::{
 /// In a tab's menu.
 const MENU_NEW_GROUP: usize = 60;
 const MENU_LEAVE_GROUP: usize = 61;
-/// "Agregar al grupo ▸": the nth group listed.
+/// "Add to group ▸": the nth group listed.
 const MENU_JOIN_GROUP: usize = 100;
 /// In a label's menu.
 const MENU_RENAME: usize = 70;
@@ -44,7 +44,7 @@ pub(super) struct GroupsUi {
     /// A press on a label: the group, where it began, and whether it has
     /// become a drag.
     press: Option<(u64, i32, i32, bool)>,
-    /// "Nueva pestaña en el grupo": the group the tab typed in the field joins.
+    /// "New tab in group": the group the tab typed in the field joins.
     new_tab_in: Option<u64>,
 }
 
@@ -84,7 +84,7 @@ impl App {
         let first = self.tabs.members(group).first().and_then(|id| self.tabs.get(*id));
         let host = first.map(|t| crate::omnibox::display_host(&t.url)).unwrap_or("");
         let host = host.strip_prefix("www.").unwrap_or(host);
-        if host.is_empty() { "Grupo".to_string() } else { host.to_string() }
+        if host.is_empty() { "Group".to_string() } else { host.to_string() }
     }
 
     /// After a group changed: the strip is laid out again and saved.
@@ -141,10 +141,10 @@ impl App {
 
     pub(super) fn group_cue(&self, group: u64) -> (&'static str, String) {
         let name = self.tabs.group(group).map(|g| g.name.clone()).unwrap_or_default();
-        ("Nombre del grupo (Enter para guardar; vacío: sólo el color)", name)
+        ("Group name (Enter saves it; empty: color only)", name)
     }
 
-    /// "Nueva pestaña en el grupo": the field opens; what is typed there
+    /// "New tab in group": the field opens; what is typed there
     /// opens at the end of the group, in it.
     fn new_tab_in(&mut self, group: u64) {
         self.open_omnibar(Mode::NewTab);
@@ -209,7 +209,7 @@ impl App {
         let own = t.group;
         unsafe {
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_GROUP, w!("Agregar pestaña a un grupo nuevo"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_GROUP, w!("Add tab to new group"));
             let others: Vec<(usize, String)> = self
                 .group_order()
                 .into_iter()
@@ -223,10 +223,10 @@ impl App {
                 for (i, title) in others {
                     let _ = AppendMenuW(sub, MF_STRING, MENU_JOIN_GROUP + i, &wide(&title));
                 }
-                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Agregar al grupo"));
+                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Add to group"));
             }
             if own.is_some() {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_LEAVE_GROUP, w!("Quitar del grupo"));
+                let _ = AppendMenuW(menu, MF_STRING, MENU_LEAVE_GROUP, w!("Remove tab from group"));
             }
         }
     }
@@ -266,7 +266,7 @@ impl App {
         let Some(g) = self.tabs.group(group).cloned() else { return };
         let chosen = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_RENAME, w!("Renombrar grupo…"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_RENAME, w!("Rename group…"));
             if let Ok(colors) = CreatePopupMenu() {
                 for (i, color) in GroupColor::ALL.iter().enumerate() {
                     let check = if *color == g.color { MF_CHECKED } else { MF_UNCHECKED };
@@ -274,12 +274,12 @@ impl App {
                 }
                 let _ = AppendMenuW(menu, MF_POPUP, colors.0 as usize, w!("Color"));
             }
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_TAB_IN, w!("Nueva pestaña en el grupo"));
-            let fold = if g.collapsed { w!("Expandir grupo") } else { w!("Contraer grupo") };
+            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_TAB_IN, w!("New tab in group"));
+            let fold = if g.collapsed { w!("Expand group") } else { w!("Collapse group") };
             let _ = AppendMenuW(menu, MF_STRING, MENU_FOLD, fold);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_UNGROUP, w!("Desagrupar"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_GROUP, w!("Cerrar el grupo"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_UNGROUP, w!("Ungroup"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_GROUP, w!("Close group"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
@@ -366,8 +366,8 @@ impl App {
     pub(super) fn group_tip(&self, group: u64) -> Option<String> {
         let g = self.tabs.group(group)?;
         let count = self.tabs.members(group).len();
-        let tabs = if count == 1 { "1 pestaña".to_string() } else { format!("{count} pestañas") };
-        let action = if g.collapsed { "clic para expandir" } else { "clic para contraer" };
+        let tabs = if count == 1 { "1 tab".to_string() } else { format!("{count} tabs") };
+        let action = if g.collapsed { "click to expand" } else { "click to collapse" };
         Some(format!("{} · {tabs} · {action}", g.title()))
     }
 

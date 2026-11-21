@@ -78,3 +78,8 @@ pub fn execute_with_gesture(webview: &ICoreWebView2, script: &str) {
 pub fn toast_script(text: &str) -> String {
     format!("(() => {{ {TOAST} neaToast({}); }})();", js_string(text))
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/inject.rs"]
+#[rustfmt::skip]
+mod tests;

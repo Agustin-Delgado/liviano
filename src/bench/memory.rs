@@ -120,3 +120,8 @@ pub fn measure_tree(root: u32) -> TreeMemory {
     let total = root.private_ws + children.iter().map(|c| c.private_ws).sum::<u64>();
     TreeMemory { root, children, total }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/bench/memory.rs"]
+#[rustfmt::skip]
+mod tests;

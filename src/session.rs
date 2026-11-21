@@ -31,3 +31,8 @@ pub struct Session {
     /// them by position (see `tab_groups`).
     pub groups: Vec<crate::tab_groups::SavedGroup>,
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/session.rs"]
+#[rustfmt::skip]
+mod tests;

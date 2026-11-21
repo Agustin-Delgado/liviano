@@ -249,7 +249,13 @@ impl App {
             self.env_error = None;
             self.show_active();
         } else {
-            self.env_error = Some("El motor de páginas se cerró varias veces seguidas. Cerrá y abrí Nea.".to_string());
+            self.env_error =
+                Some("The page engine stopped many times in a row. Close Nea and open it again.".to_string());
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/engine_ui.rs"]
+#[rustfmt::skip]
+mod tests;

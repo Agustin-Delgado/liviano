@@ -54,6 +54,12 @@ mod web;
 mod webstore;
 mod widgets;
 
+// Shared by the tests that use the real Credential Manager.
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/support/credentials.rs"]
+#[rustfmt::skip]
+mod test_credentials;
+
 use windows::Win32::{
     System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
     UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},

@@ -3,7 +3,7 @@
 //! comes from here.
 //!
 //! The language is a web design system's (its brand tokens and component
-//! recipes; `docs/diseno.md` has the table):
+//! recipes; `docs/design.md` has the table):
 //! neutral greys on a shell, the page's ground a step lighter, one indigo
 //! for what is live or chosen, seven type steps and nothing heavier than
 //! medium. Where Search's layout ideas don't clash with it (tabs as soft
@@ -327,3 +327,8 @@ pub fn system_prefers_dark() -> bool {
     };
     status.is_ok() && value == 0
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/design.rs"]
+#[rustfmt::skip]
+mod tests;

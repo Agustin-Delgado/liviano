@@ -301,3 +301,8 @@ impl Cosmetic {
             + (self.by_token.capacity() + self.by_domain.capacity() + self.exceptions.capacity()) * 8
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/shield/cosmetic.rs"]
+#[rustfmt::skip]
+mod tests;

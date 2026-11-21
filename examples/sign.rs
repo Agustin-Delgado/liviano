@@ -36,30 +36,30 @@ fn main() -> ExitCode {
     }
     let [package_path, key_path] = positional.as_slice() else {
         return fail(
-            "uso: cargo run --example sign -- <paquete> <clave privada> [--version x.y.z] [--url dirección] [--out latest.json]",
+            "usage: cargo run --example sign -- <package> <private key> [--version x.y.z] [--url url] [--out latest.json]",
         );
     };
     let version = version.trim().trim_start_matches(['v', 'V']).to_string();
     if version.is_empty() || !version.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
-        return fail(&format!("versión inválida: {version} (se espera 1.2.3)"));
+        return fail(&format!("invalid version: {version} (expected 1.2.3)"));
     }
     let seed = match fs::read_to_string(key_path).ok().and_then(|t| update_sign::from_hex(&t)) {
         Some(bytes) => match Seed::from_slice(&bytes) {
             Ok(seed) => seed,
-            Err(_) => return fail("la clave privada tiene que ser 32 bytes en hexadecimal"),
+            Err(_) => return fail("the private key must be 32 bytes in hexadecimal"),
         },
-        None => return fail(&format!("no se pudo leer la clave privada {key_path}")),
+        None => return fail(&format!("cannot read the private key {key_path}")),
     };
     let keys = KeyPair::from_seed(seed);
     let package = match fs::read(package_path) {
         Ok(bytes) => bytes,
-        Err(error) => return fail(&format!("no se pudo leer {package_path}: {error}")),
+        Err(error) => return fail(&format!("cannot read {package_path}: {error}")),
     };
     let mut message = update_sign::signed_prefix(&version);
     message.extend_from_slice(&package);
     let signature = keys.sk.sign(&message, None);
     if keys.pk.verify(&message, &signature).is_err() {
-        return fail("la firma recién hecha no verifica");
+        return fail("the new signature does not verify");
     }
 
     let package_path = PathBuf::from(package_path);
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
     let out = out.unwrap_or_else(|| package_path.with_file_name("latest.json"));
     let text = serde_json::to_string_pretty(&manifest).unwrap_or_default();
     if let Err(error) = fs::write(&out, format!("{text}\n")) {
-        return fail(&format!("no se pudo escribir {}: {error}", out.display()));
+        return fail(&format!("cannot write {}: {error}", out.display()));
     }
     println!("{}", out.display());
 
@@ -81,7 +81,7 @@ fn main() -> ExitCode {
         update_sign::from_hex(include_str!("../keys/update-public.hex")).and_then(|b| PublicKey::from_slice(&b).ok());
     if embedded.as_ref() != Some(&keys.pk) {
         eprintln!(
-            "aviso: esta clave no es la de keys/update-public.hex; el programa compilado con ese archivo va a rechazar el paquete"
+            "warning: this key is not the key in keys/update-public.hex; a build with that file rejects the package"
         );
     }
     ExitCode::SUCCESS

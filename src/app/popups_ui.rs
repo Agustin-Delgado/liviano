@@ -10,7 +10,7 @@ use std::{
 use super::App;
 use crate::{inject, shield, shield::popups::Verdict, tabs::Live};
 
-const BLOCKED_NOTE: &str = "Ventana emergente bloqueada · Para permitirlas en este sitio: clic derecho en la pestaña";
+const BLOCKED_NOTE: &str = "Pop-up blocked · To allow pop-ups on this site, right-click the tab";
 /// A page that keeps trying gets one note, not one per attempt.
 const NOTE_EVERY: Duration = Duration::from_secs(4);
 
@@ -78,7 +78,7 @@ impl App {
         self.popups_allowed(private, shield::site_key(url))
     }
 
-    /// The tab menu's "Permitir ventanas emergentes en este sitio". From a
+    /// The tab menu's "Allow pop-ups on this site". From a
     /// private tab the choice lasts until the app closes.
     pub(super) fn toggle_popups(&mut self) {
         let Some(tab) = self.tabs.active_tab() else { return };
@@ -96,7 +96,7 @@ impl App {
             self.settings.popups_allowed.insert(site);
         }
         self.save_settings();
-        // An open Ajustes window holds a copy: its next change would undo this.
+        // An open Settings window holds a copy: its next change would undo this.
         crate::settings_window::sync(&self.settings);
     }
 }

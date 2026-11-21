@@ -1,31 +1,33 @@
 <#
 .SYNOPSIS
-  Latencia del campo: desde Enter hasta que la página empieza a navegar, en
-  frío y en caliente, más una pasada de uso pesado que junta los cuelgues.
+  Measures the latency of the field: the time from Enter to the start of
+  the page navigation. It measures cold and warm starts. A heavy-use pass
+  also collects the hangs.
 
 .DESCRIPTION
-  Cada corrida arranca Nea de cero con un NEA_DATA_DIR temporal, el
-  control por script en un pipe propio y NEA_TRACE=1, que deja en
-  trace.log una marca con hora para cada paso (Enter, vista pedida, vista
-  lista, NavigationStarting, ContentLoading, NavigationCompleted). El script
-  lee esas marcas: no mide desde afuera, así que no cuenta lo que tarda el
-  pipe en ir y volver.
+  Each run starts a new Nea with a temporary NEA_DATA_DIR. The run uses
+  script control on a separate pipe and NEA_TRACE=1. With NEA_TRACE=1, Nea
+  writes a timestamped mark for each step to trace.log. The steps are
+  Enter, view requested, view ready, NavigationStarting, ContentLoading and
+  NavigationCompleted. The script reads these marks. Thus the time of the
+  pipe round trip is not in the result.
 
-  El historial se siembra con -HistoryEntries entradas falsas (como uno de
-  años de uso) y las listas de bloqueo se bajan una vez y se copian a cada
-  corrida, como en measure.ps1.
+  The script fills the history with -HistoryEntries fake entries, as after
+  years of use. It downloads the block lists one time and copies them into
+  each run, as measure.ps1 does.
 
-  Casos:
-    frio            sin pestañas: el campo abierto al arrancar, Enter con el motor apagado
-    frio-sesion     con una sesión guardada: Ctrl+T y Enter apenas arranca
-    misma-pestana   Ctrl+L y Enter sobre una pestaña viva
-    pestana-nueva   Ctrl+T y Enter (con -Tabs pestañas abiertas detrás)
-    dormida         elegir una pestaña descartada (hasta que navega)
-  Con -Usage: -Tabs pestañas reales, cambios de pestaña, el campo, paneles y
-  el temporizador de sueño acelerado; al final, hang.log y los manejadores
-  lentos del trace.
+  Cases:
+    cold            no tabs: the field is open at startup, Enter with the engine off
+    cold-session    a saved session: Ctrl+T and Enter immediately after startup
+    same-tab        Ctrl+L and Enter on a live tab
+    new-tab         Ctrl+T and Enter (with -Tabs tabs open behind it)
+    sleeping        selection of a discarded tab (until it navigates)
+  -Usage opens -Tabs real tabs and does tab changes, field searches and
+  panel searches. It also uses a faster sleep timer. At the end, it shows
+  hang.log and the slow handlers from the trace.
 
-  Nada de esto toca el teclado ni el mouse del sistema: todo va por el pipe.
+  The script does not use the system keyboard or mouse. All commands go
+  through the pipe.
 #>
 param(
     [string]$Exe = '',
@@ -37,11 +39,11 @@ param(
     [switch]$Usage,
     [int]$UsageSec = 120,
     [string]$Report = '',
-    # Prefijo para guardar el trace de cada corrida (<prefijo>-<n>.log).
+    # The prefix for the saved trace of each run (<prefix>-<n>.log).
     [string]$KeepTrace = '',
-    # Lo que tarda una persona en escribir la dirección, entre abrir el campo
-    # y Enter. Con 0 el pipe escribe al instante: el peor caso, nadie llega
-    # a Enter antes de que el motor prepare la vista.
+    # The time that a person needs to type the address, from the open field to Enter.
+    # With 0, the pipe types immediately. This is the worst case: a person cannot
+    # press Enter before the engine has the view ready.
     [int]$TypingMs = 0
 )
 
@@ -54,12 +56,12 @@ $Exe = (Resolve-Path $Exe).Path
 
 $HeavyUrls = @(
     'https://www.infobae.com/', 'https://www.lanacion.com.ar/', 'https://www.clarin.com/', 'https://www.youtube.com/',
-    'https://es.wikipedia.org/wiki/Argentina', 'https://github.com/rust-lang/rust', 'https://www.reddit.com/',
+    'https://en.wikipedia.org/wiki/Argentina', 'https://github.com/rust-lang/rust', 'https://www.reddit.com/',
     'https://www.amazon.com/', 'https://www.mercadolibre.com.ar/', 'https://www.nytimes.com/', 'https://www.bbc.com/',
     'https://edition.cnn.com/', 'https://www.theguardian.com/international', 'https://elpais.com/', 'https://stackoverflow.com/questions',
     'https://news.ycombinator.com/', 'https://www.imdb.com/', 'https://www.espn.com/', 'https://www.booking.com/',
     'https://www.pagina12.com.ar/', 'https://www.perfil.com/', 'https://www.ambito.com/', 'https://www.tn.com.ar/',
-    'https://developer.mozilla.org/es/docs/Web/JavaScript', 'https://www.lemonde.fr/', 'https://www.spiegel.de/',
+    'https://developer.mozilla.org/en-US/docs/Web/JavaScript', 'https://www.lemonde.fr/', 'https://www.spiegel.de/',
     'https://www.cnet.com/', 'https://www.theverge.com/', 'https://www.wired.com/', 'https://www.weather.com/'
 )
 
@@ -79,7 +81,7 @@ function Remove-TempDir([string]$dir) {
     for ($i = 0; $i -lt 10; $i++) {
         try { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction Stop; return } catch { Start-Sleep -Milliseconds 500 }
     }
-    Write-Warning "No se pudo borrar $dir"
+    Write-Warning "Cannot delete $dir."
 }
 
 function Get-ProcessesMentioning([string]$name, [string]$marker) {
@@ -88,14 +90,14 @@ function Get-ProcessesMentioning([string]$name, [string]$marker) {
 
 function Write-History([string]$path, [int]$count) {
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
-    $words = 'noticias', 'deportes', 'receta', 'clima', 'mapa', 'video', 'docs', 'foro', 'tienda', 'banco', 'viaje', 'musica'
+    $words = 'news', 'sports', 'recipe', 'weather', 'map', 'video', 'docs', 'forum', 'shop', 'bank', 'travel', 'music'
     $sb = New-Object System.Text.StringBuilder
     [void]$sb.Append('[')
     for ($i = 0; $i -lt $count; $i++) {
         if ($i) { [void]$sb.Append(',') }
         $w = $words[$i % $words.Count]
-        $url = "https://www.sitio$($i % 997)-$w.com/$w/articulo-$i?ref=$($i * 7 % 1000)"
-        [void]$sb.Append("{`"url`":`"$url`",`"title`":`"$w $i - Sitio $($i % 997)`",`"visits`":$(1 + $i % 13),`"last`":$($now - $i * 37)}")
+        $url = "https://www.site$($i % 997)-$w.com/$w/article-$i?ref=$($i * 7 % 1000)"
+        [void]$sb.Append("{`"url`":`"$url`",`"title`":`"$w $i - Site $($i % 997)`",`"visits`":$(1 + $i % 13),`"last`":$($now - $i * 37)}")
     }
     [void]$sb.Append(']')
     [IO.File]::WriteAllText($path, $sb.ToString())
@@ -121,7 +123,7 @@ function Start-Run([hashtable]$settings, $session) {
     $script:Runs += $process.Id
     Connect-Nea -TimeoutSec 20
     $ping = Invoke-Nea ping
-    if ($ping.pid -ne $process.Id) { throw "El pipe lo atiende otro proceso ($($ping.pid))" }
+    if ($ping.pid -ne $process.Id) { throw "A different process ($($ping.pid)) answers on the pipe." }
     [pscustomobject]@{ Process = $process; Dir = $dir }
 }
 
@@ -157,12 +159,12 @@ function Measure-Marks($trace, [string]$from, [double]$after) {
     $start = $trace | Where-Object { $_.ms -gt $after -and $_.text -match $from } | Select-Object -First 1
     if (-not $start) { return $null }
     $nav = $trace | Where-Object { $_.ms -ge $start.ms -and $_.text -match 'navigation starting tab=(\d+) https?://' } | Select-Object -First 1
-    $result = [ordered]@{ navegacion = $null; contenido = $null; completa = $null }
+    $result = [ordered]@{ navigation = $null; content = $null; complete = $null }
     if ($nav) {
         $null = $nav.text -match 'tab=(\d+)'
         $tab = $Matches[1]
-        $result.navegacion = [Math]::Round($nav.ms - $start.ms, 1)
-        foreach ($pair in @(@('contenido', "content loading tab=$tab$"), @('completa', "navigation completed tab=$tab "))) {
+        $result.navigation = [Math]::Round($nav.ms - $start.ms, 1)
+        foreach ($pair in @(@('content', "content loading tab=$tab$"), @('complete', "navigation completed tab=$tab "))) {
             $hit = $trace | Where-Object { $_.ms -ge $nav.ms -and $_.text -match $pair[1] } | Select-Object -First 1
             if ($hit) { $result[$pair[0]] = [Math]::Round($hit.ms - $start.ms, 1) }
         }
@@ -174,7 +176,7 @@ function Wait-Navigation($run, [string]$from, [double]$after, [int]$timeoutSec =
     $deadline = (Get-Date).AddSeconds($timeoutSec)
     while ((Get-Date) -lt $deadline) {
         $m = Measure-Marks (Read-Trace $run) $from $after
-        if ($m -and $null -ne $m.completa) { return $m }
+        if ($m -and $null -ne $m.complete) { return $m }
     }
     Measure-Marks (Read-Trace $run) $from $after
 }
@@ -187,10 +189,10 @@ function Last-Ms($run) {
 $script:Results = New-Object System.Collections.Generic.List[object]
 
 function Add-Result([string]$case, $m) {
-    if (-not $m) { Write-Host "  $case  sin marcas"; return }
-    $row = [pscustomobject]@{ caso = $case; navegacion_ms = $m.navegacion; contenido_ms = $m.contenido; completa_ms = $m.completa }
+    if (-not $m) { Write-Host "  $case  no marks"; return }
+    $row = [pscustomobject]@{ case = $case; navigation_ms = $m.navigation; content_ms = $m.content; complete_ms = $m.complete }
     $script:Results.Add($row)
-    Write-Host ("  {0,-16} Enter->navegación {1,8} ms   ->contenido {2,8} ms   ->completa {3,8} ms" -f $case, $m.navegacion, $m.contenido, $m.completa)
+    Write-Host ("  {0,-16} Enter->navigation {1,8} ms   ->content {2,8} ms   ->complete {3,8} ms" -f $case, $m.navigation, $m.content, $m.complete)
 }
 
 function Submit-Field([string]$command, [string]$text) {
@@ -220,7 +222,7 @@ function Initialize-Cache {
             Get-ChildItem -LiteralPath (Join-Path $run.Dir 'shield') -File | Where-Object { $_.Extension -ne '.tmp' } | Copy-Item -Destination $cache
             $script:ShieldCache = $cache
         } else {
-            Write-Warning 'No se bajaron las listas: sólo la mínima incorporada.'
+            Write-Warning 'The download of the block lists failed. The runs use only the built-in minimal list.'
         }
     } finally { Stop-Run $run }
     $script:HistoryFile = Join-Path ([IO.Path]::GetTempPath()) ("nea-latency-history-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
@@ -230,37 +232,37 @@ function Initialize-Cache {
 Write-Host "Nea: $Exe"
 Initialize-Cache
 try {
-    if (Test-Wanted 'frio') {
+    if (Test-Wanted 'cold') {
         for ($r = 0; $r -lt $Repeat; $r++) {
             $run = Start-Run @{} $null
             try {
                 Start-Sleep -Seconds 2
-                # The field is already open (no tabs): type and Enter, engine off.
+                # The field is open because there are no tabs. Type and press Enter with the engine off.
                 if ($TypingMs -gt 0) {
-                    # The first keystroke, then the rest at a person's pace.
+                    # Type the first character, then the rest at the speed of a person.
                     Invoke-Nea type @{ text = $TargetUrl.Substring(0, 1) } | Out-Null
                     Start-Sleep -Milliseconds $TypingMs
                     Invoke-Nea type @{ text = $TargetUrl.Substring(1); submit = $true } | Out-Null
                 } else {
                     Invoke-Nea type @{ text = $TargetUrl; submit = $true } | Out-Null
                 }
-                Add-Result 'frio' (Wait-Navigation $run '^submit' 0)
+                Add-Result 'cold' (Wait-Navigation $run '^submit' 0)
             } finally { Stop-Run $run }
         }
     }
 
-    if (Test-Wanted 'frio-sesion') {
+    if (Test-Wanted 'cold-session') {
         $session = @{ tabs = @(@{ url = 'https://example.org/'; title = 'Example'; pinned = $false }); active = 0 }
         for ($r = 0; $r -lt $Repeat; $r++) {
             $run = Start-Run @{} $session
             try {
                 Submit-Field 'new_tab' $TargetUrl
-                Add-Result 'frio-sesion' (Wait-Navigation $run '^submit' 0)
+                Add-Result 'cold-session' (Wait-Navigation $run '^submit' 0)
             } finally { Stop-Run $run }
         }
     }
 
-    if ((Test-Wanted 'misma-pestana') -or (Test-Wanted 'pestana-nueva') -or (Test-Wanted 'dormida')) {
+    if ((Test-Wanted 'same-tab') -or (Test-Wanted 'new-tab') -or (Test-Wanted 'sleeping')) {
         $run = Start-Run @{} $null
         try {
             $first = (Invoke-Nea open @{ url = 'https://example.org/' }).tab
@@ -268,41 +270,41 @@ try {
             if ($Tabs -gt 0) { Open-Background $Tabs | Out-Null; Start-Sleep -Seconds 15 }
             Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
             Start-Sleep -Seconds 1
-            if (Test-Wanted 'misma-pestana') {
+            if (Test-Wanted 'same-tab') {
                 for ($r = 0; $r -lt $Repeat; $r++) {
                     $after = Last-Ms $run
                     $url = $TargetUrl + "?m=$r"
                     Submit-Field 'focus_address' $url
-                    Add-Result 'misma-pestana' (Wait-Navigation $run '^submit' $after)
+                    Add-Result 'same-tab' (Wait-Navigation $run '^submit' $after)
                 }
             }
-            if (Test-Wanted 'pestana-nueva') {
+            if (Test-Wanted 'new-tab') {
                 for ($r = 0; $r -lt $Repeat; $r++) {
                     $after = Last-Ms $run
                     Submit-Field 'new_tab' ($TargetUrl + "?n=$r")
-                    Add-Result 'pestana-nueva' (Wait-Navigation $run '^submit' $after)
+                    Add-Result 'new-tab' (Wait-Navigation $run '^submit' $after)
                     Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
                     Start-Sleep -Seconds 2
                 }
             }
-            if (Test-Wanted 'dormida') {
+            if (Test-Wanted 'sleeping') {
                 for ($r = 0; $r -lt $Repeat; $r++) {
                     Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
                     Start-Sleep -Milliseconds 500
                     Invoke-Nea discard | Out-Null
                     Start-Sleep -Seconds 2
                     $after = Last-Ms $run
-                    # The last tab is one opened in the background (discard only
-                    # takes those): now asleep, the switch wakes it.
+                    # The last tab opened in the background (discard affects only those tabs).
+                    # The tab is asleep, and the tab change wakes it.
                     Invoke-Nea run @{ name = 'go_to_tab_9' } | Out-Null
-                    Add-Result 'dormida' (Wait-Navigation $run '^command go_to_tab_9' $after)
+                    Add-Result 'sleeping' (Wait-Navigation $run '^command go_to_tab_9' $after)
                 }
             }
         } finally { Stop-Run $run }
     }
 
     if ($Usage) {
-        Write-Host "Uso pesado: $Tabs pestañas, $UsageSec s"
+        Write-Host "Heavy use: $Tabs tabs, $UsageSec s"
         $run = Start-Run @{ suspend_after_secs = 10; discard_after_secs = 30 } $null
         try {
             $first = (Invoke-Nea open @{ url = 'https://example.org/' }).tab
@@ -316,29 +318,29 @@ try {
                 Start-Sleep -Milliseconds 400
                 if ($i % 5 -eq 0) {
                     Invoke-Nea run @{ name = 'new_tab' } | Out-Null
-                    Invoke-Nea type @{ text = 'noticias deportes' } | Out-Null
+                    Invoke-Nea type @{ text = 'news sports' } | Out-Null
                     Invoke-Nea type @{ text = 'https://www.wikipedia.org/'; submit = $true } | Out-Null
                 }
                 if ($i % 7 -eq 0) {
                     Invoke-Nea run @{ name = 'history' } | Out-Null
-                    Invoke-Nea type @{ text = 'receta' } | Out-Null
+                    Invoke-Nea type @{ text = 'recipe' } | Out-Null
                     Invoke-Nea run @{ name = 'focus_address' } | Out-Null
-                    Invoke-Nea type @{ text = 'sitio12' } | Out-Null
+                    Invoke-Nea type @{ text = 'site12' } | Out-Null
                 }
                 if ($i % 9 -eq 0) { Invoke-Nea run @{ name = 'close_tab' } | Out-Null }
                 if ($i % 11 -eq 0) { Invoke-Nea run @{ name = 'reopen_tab' } | Out-Null }
             }
             $memory = Invoke-Nea memory
-            Write-Host ("  memoria: app {0:N1} MB, total {1:N1} MB, {2} procesos" -f ($memory.app / 1MB), ($memory.total / 1MB), @($memory.processes).Count)
+            Write-Host ("  memory: app {0:N1} MB, total {1:N1} MB, {2} processes" -f ($memory.app / 1MB), ($memory.total / 1MB), @($memory.processes).Count)
             $trace = Read-Trace $run
             $slow = $trace | Where-Object { $_.text -match '^slow (\S+) (\d+) ([\d.]+) ms' } | ForEach-Object {
                 $null = $_.text -match '^slow (\S+) (\d+) ([\d.]+) ms'
-                [pscustomobject]@{ que = $Matches[1]; ms = [double]$Matches[3] }
+                [pscustomobject]@{ what = $Matches[1]; ms = [double]$Matches[3] }
             }
-            Write-Host '  manejadores lentos (>4 ms), por tipo:'
-            $slow | Group-Object que | Sort-Object { ($_.Group | Measure-Object ms -Maximum).Maximum } -Descending | ForEach-Object {
+            Write-Host '  slow handlers (>4 ms), by kind:'
+            $slow | Group-Object what | Sort-Object { ($_.Group | Measure-Object ms -Maximum).Maximum } -Descending | ForEach-Object {
                 $stats = $_.Group | Measure-Object ms -Maximum -Sum -Average
-                Write-Host ("    {0,-32} {1,5} veces  máx {2,8:N1} ms  prom {3,7:N1} ms  total {4,9:N1} ms" -f $_.Name, $_.Count, $stats.Maximum, $stats.Average, $stats.Sum)
+                Write-Host ("    {0,-32} {1,5} times  max {2,8:N1} ms  avg {3,7:N1} ms  total {4,9:N1} ms" -f $_.Name, $_.Count, $stats.Maximum, $stats.Average, $stats.Sum)
             }
             $hang = Join-Path $run.Dir 'hang.log'
             if (Test-Path $hang) { Write-Host '  hang.log:'; Get-Content $hang | ForEach-Object { Write-Host "    $_" } }
@@ -352,12 +354,12 @@ try {
 }
 
 Write-Host ''
-Write-Host 'Mediana por caso (ms desde Enter):'
-$script:Results | Group-Object caso | ForEach-Object {
+Write-Host 'Median per case (ms since Enter):'
+$script:Results | Group-Object case | ForEach-Object {
     $median = { param($xs) $s = @($xs | Where-Object { $null -ne $_ } | Sort-Object); if ($s.Count) { $s[[int][Math]::Floor(($s.Count - 1) / 2)] } else { $null } }
-    $nav = & $median ($_.Group.navegacion_ms)
-    $content = & $median ($_.Group.contenido_ms)
-    $done = & $median ($_.Group.completa_ms)
-    Write-Host ("  {0,-16} navegación {1,8}   contenido {2,8}   completa {3,8}   ({4} corridas)" -f $_.Name, $nav, $content, $done, $_.Count)
+    $nav = & $median ($_.Group.navigation_ms)
+    $content = & $median ($_.Group.content_ms)
+    $done = & $median ($_.Group.complete_ms)
+    Write-Host ("  {0,-16} navigation {1,8}   content {2,8}   complete {3,8}   ({4} runs)" -f $_.Name, $nav, $content, $done, $_.Count)
 }
 if ($Report) { $script:Results | ConvertTo-Json | Set-Content -LiteralPath $Report -Encoding utf8 }

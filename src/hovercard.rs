@@ -41,13 +41,13 @@ pub const THUMB_WIDTH: i32 = WIDTH - 2 * PAD;
 /// What the card says a tab is doing, when it is worth saying.
 pub fn status_line(private: bool, asleep: bool, suspended: bool, kept_awake: bool) -> &'static str {
     if private {
-        "Privada: no queda en el historial"
+        "Private: not saved in history"
     } else if asleep {
-        "Dormida: se vuelve a cargar al abrirla"
+        "Asleep: reloads when you open it"
     } else if suspended {
-        "Suspendida: no usa procesador"
+        "Suspended: uses no processor time"
     } else if kept_awake {
-        "Siempre despierta (usa más memoria)"
+        "Always awake (uses more memory)"
     } else {
         ""
     }
@@ -57,7 +57,7 @@ pub fn status_line(private: bool, asleep: bool, suspended: bool, kept_awake: boo
 pub struct Card {
     pub title: String,
     pub host: String,
-    /// "Dormida", "Suspendida"…; empty when there is nothing to say.
+    /// "Asleep", "Suspended"…; empty when there is nothing to say.
     pub status: String,
     pub thumb: Option<Pixels>,
 }
@@ -306,3 +306,8 @@ unsafe extern "system" fn card_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/hovercard.rs"]
+#[rustfmt::skip]
+mod tests;

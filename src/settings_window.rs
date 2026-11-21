@@ -1,4 +1,4 @@
-//! Ajustes (Ctrl+,): one small native window with plain controls — no web
+//! Settings (Ctrl+,): one small native window with plain controls — no web
 //! view for the interface. The controls are the system's, framed in the
 //! app's look: the page's ground, edits and lists sitting in soft grey wells
 //! instead of a sunken edge, and buttons drawn by `widgets`. It edits a copy of the settings and hands every
@@ -85,14 +85,14 @@ const SS_NOTIFY: u32 = 0x0100;
 const SS_ENDELLIPSIS: u32 = 0x4000;
 const CLIENT_WIDTH: i32 = 780;
 const CLIENT_HEIGHT: i32 = 898;
-/// Where the tabs go: the first thing in Ajustes, since the shortcut alone
+/// Where the tabs go: the first thing in Settings, since the shortcut alone
 /// went unnoticed (and another program may hold it).
-const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "Arriba"), (true, "Al costado")];
+const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "On top"), (true, "On the side")];
 /// Where the field floats over the page.
 const FIELD_POSITIONS: [(FieldPosition, &str); 3] =
-    [(FieldPosition::Top, "Arriba"), (FieldPosition::Middle, "Al medio"), (FieldPosition::Bottom, "Abajo")];
-const THEMES: [(Theme, &str); 3] = [(Theme::System, "Del sistema"), (Theme::Light, "Claro"), (Theme::Dark, "Oscuro")];
-const OFFER_CHOICES: [(bool, &str); 2] = [(true, "Al iniciar sesión"), (false, "Nunca")];
+    [(FieldPosition::Top, "Top"), (FieldPosition::Middle, "Middle"), (FieldPosition::Bottom, "Bottom")];
+const THEMES: [(Theme, &str); 3] = [(Theme::System, "System"), (Theme::Light, "Light"), (Theme::Dark, "Dark")];
+const OFFER_CHOICES: [(bool, &str); 2] = [(true, "When I sign in"), (false, "Never")];
 
 /// What the Extensiones section asks of the app (with the selected row).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -139,7 +139,7 @@ struct State {
     field_position: HWND,
     /// Shortcuts another program registered system-wide: they never reach us.
     taken: Vec<shortcuts::Chord>,
-    /// "Importar…" was pressed: its menu opens after the state is released.
+    /// "Import…" was pressed: its menu opens after the state is released.
     status_after_import: bool,
     status: HWND,
     ext_list: HWND,
@@ -164,7 +164,7 @@ struct Colors {
 /// Creates one child control: class, text, style, extended style, rect,
 /// id, kind and whether it takes the heading font.
 type AddChild<'a> = dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32, i32), i32, Kind, bool) -> HWND + 'a;
-/// Who handles an extension command chosen in Ajustes.
+/// Who handles an extension command chosen in Settings.
 type ExtensionHandler = fn(ExtensionCommand, Option<usize>);
 /// Who applies the tab layout (vertical, collapsed).
 type LayoutHandler = fn(bool, bool);
@@ -440,7 +440,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let hwnd = CreateWindowExW(
             ex_style,
             w!("NeaSettings"),
-            w!("Ajustes — Nea"),
+            w!("Settings — Nea"),
             style,
             x.max(0),
             y.max(0),
@@ -512,11 +512,11 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let number_style = edit_style | ES_NUMBER as u32;
         let button_style = tab | BS_OWNERDRAW as u32;
 
-        // Left column: Pestañas first (where they go is the first thing
+        // Left column: Tabs first (where they go is the first thing
         // asked for), then General.
         let l = 24;
-        heading(&mut add, "Pestañas", (l, 18, 340, 22));
-        label(&mut add, "Ubicación", (l, 52, 140, 22));
+        heading(&mut add, "Tabs", (l, 18, 340, 22));
+        label(&mut add, "Position", (l, 52, 140, 22));
         let tab_layout = add(
             w!("COMBOBOX"),
             "",
@@ -539,16 +539,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Button,
             false,
         );
-        add(
-            w!("STATIC"),
-            "Ocultar las pestañas",
-            SS_NOTIFY,
-            none,
-            (l + 22, 84, 150, 22),
-            ID_COLLAPSED_LABEL,
-            Kind::Label,
-            false,
-        );
+        add(w!("STATIC"), "Hide tabs", SS_NOTIFY, none, (l + 22, 84, 150, 22), ID_COLLAPSED_LABEL, Kind::Label, false);
         let split = add(
             w!("BUTTON"),
             "",
@@ -559,16 +550,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Button,
             false,
         );
-        add(
-            w!("STATIC"),
-            "Vista dividida",
-            SS_NOTIFY,
-            none,
-            (l + 202, 84, 138, 22),
-            ID_SPLIT_LABEL,
-            Kind::Label,
-            false,
-        );
+        add(w!("STATIC"), "Split view", SS_NOTIFY, none, (l + 202, 84, 138, 22), ID_SPLIT_LABEL, Kind::Label, false);
 
         let preview = add(
             w!("BUTTON"),
@@ -582,7 +564,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         );
         add(
             w!("STATIC"),
-            "Vista previa de la página al pasar el mouse",
+            "Show a page preview on hover",
             SS_NOTIFY,
             none,
             (l + 22, 110, 318, 22),
@@ -592,7 +574,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         );
 
         heading(&mut add, "General", (l, 146, 340, 22));
-        label(&mut add, "Tema", (l, 180, 140, 22));
+        label(&mut add, "Theme", (l, 180, 140, 22));
         let theme = add(
             w!("COMBOBOX"),
             "",
@@ -603,24 +585,24 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Combo,
             false,
         );
-        label(&mut add, "Buscador por defecto (dirección con {q})", (l, 216, 340, 22));
+        label(&mut add, "Default search engine (address with {q})", (l, 216, 340, 22));
         let search = add(w!("EDIT"), "", edit_style, edge, (l, 238, 340, 26), ID_SEARCH, Kind::Edit, false);
 
-        label(&mut add, "Dormir las de fondo tras (segundos)", (l, 278, 260, 22));
+        label(&mut add, "Put tabs to sleep after (seconds)", (l, 278, 260, 22));
         let suspend = add(w!("EDIT"), "", number_style, edge, (l + 264, 274, 76, 26), ID_SUSPEND, Kind::Edit, false);
-        label(&mut add, "Descartarlas tras (minutos)", (l, 312, 260, 22));
+        label(&mut add, "Discard them after (minutes)", (l, 312, 260, 22));
         let discard = add(w!("EDIT"), "", number_style, edge, (l + 264, 308, 76, 26), ID_DISCARD, Kind::Edit, false);
-        label(&mut add, "Descartar ya con la memoria al (%)", (l, 346, 260, 22));
+        label(&mut add, "Discard them at memory use (%)", (l, 346, 260, 22));
         let pressure = add(w!("EDIT"), "", number_style, edge, (l + 264, 342, 76, 26), ID_PRESSURE, Kind::Edit, false);
-        label(&mut add, "Sitios que nunca se duermen (usan más memoria)", (l, 384, 340, 22));
+        label(&mut add, "Sites that never sleep (use more memory)", (l, 384, 340, 22));
         let list_style = tab | WS_VSCROLL.0 | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32;
         let awake_list = add(w!("LISTBOX"), "", list_style, edge, (l, 406, 340, 104), ID_AWAKE_LIST, Kind::List, false);
         let awake_edit = add(w!("EDIT"), "", edit_style, edge, (l, 518, 196, 26), ID_AWAKE_EDIT, Kind::Edit, false);
-        add(w!("BUTTON"), "Agregar", button_style, none, (l + 204, 518, 66, 26), ID_AWAKE_ADD, Kind::Button, false);
-        add(w!("BUTTON"), "Quitar", button_style, none, (l + 276, 518, 64, 26), ID_AWAKE_REMOVE, Kind::Button, false);
+        add(w!("BUTTON"), "Add", button_style, none, (l + 204, 518, 66, 26), ID_AWAKE_ADD, Kind::Button, false);
+        add(w!("BUTTON"), "Remove", button_style, none, (l + 276, 518, 64, 26), ID_AWAKE_REMOVE, Kind::Button, false);
 
-        heading(&mut add, "Contraseñas", (l, 566, 340, 22));
-        label(&mut add, "Ofrecer guardarlas", (l, 600, 140, 22));
+        heading(&mut add, "Passwords", (l, 566, 340, 22));
+        label(&mut add, "Offer to save", (l, 600, 140, 22));
         let passwords_offer = add(
             w!("COMBOBOX"),
             "",
@@ -631,10 +613,10 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Combo,
             false,
         );
-        add(w!("BUTTON"), "Importar…", button_style, none, (l, 632, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
+        add(w!("BUTTON"), "Import…", button_style, none, (l, 632, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
         add(
             w!("BUTTON"),
-            "Ver las guardadas…",
+            "Show saved…",
             button_style,
             none,
             (l + 118, 632, 150, 26),
@@ -642,12 +624,12 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Button,
             false,
         );
-        heading(&mut add, "Extensiones", (l, 688, 140, 22));
+        heading(&mut add, "Extensions", (l, 688, 140, 22));
         let ext_note = label(&mut add, "", (l + 150, 688, 582, 22));
         let ext_list = add(w!("LISTBOX"), "", list_style, edge, (l, 714, 732, 88), ID_EXT_LIST, Kind::List, false);
         add(
             w!("BUTTON"),
-            "Habilitar / deshabilitar",
+            "Enable / disable",
             button_style,
             none,
             (l, 810, 170, 26),
@@ -655,21 +637,12 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Button,
             false,
         );
+        add(w!("BUTTON"), "Pin / unpin", button_style, none, (l + 176, 810, 120, 26), ID_EXT_PIN, Kind::Button, false);
+        add(w!("BUTTON"), "Reload", button_style, none, (l + 302, 810, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
+        add(w!("BUTTON"), "Remove…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
         add(
             w!("BUTTON"),
-            "Fijar / desfijar",
-            button_style,
-            none,
-            (l + 176, 810, 120, 26),
-            ID_EXT_PIN,
-            Kind::Button,
-            false,
-        );
-        add(w!("BUTTON"), "Recargar", button_style, none, (l + 302, 810, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
-        add(w!("BUTTON"), "Quitar…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
-        add(
-            w!("BUTTON"),
-            "Cargar sin empaquetar…",
+            "Load unpacked…",
             button_style,
             none,
             (l + 478, 810, 170, 26),
@@ -678,20 +651,20 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             false,
         );
 
-        // Right column: Atajos.
+        // Right column: Shortcuts.
         let r = 400;
-        heading(&mut add, "Atajos", (r, 18, 356, 22));
+        heading(&mut add, "Shortcuts", (r, 18, 356, 22));
         let keys_style = list_style | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32;
         let keys_list = add(w!("LISTBOX"), "", keys_style, edge, (r, 48, 356, 298), ID_KEYS_LIST, Kind::List, false);
         let key_edit = add(w!("EDIT"), "", edit_style, edge, (r, 356, 176, 26), ID_KEY_EDIT, Kind::Edit, false);
-        add(w!("BUTTON"), "Asignar", button_style, none, (r + 184, 356, 80, 26), ID_KEY_ASSIGN, Kind::Button, false);
-        add(w!("BUTTON"), "Restablecer", button_style, none, (r + 270, 356, 86, 26), ID_KEY_RESET, Kind::Button, false);
-        label(&mut add, "Ej.: Ctrl+Shift+O o F6; varios con coma; vacío: sin atajo.", (r, 388, 356, 22));
-        let status = label(&mut add, "Los cambios se aplican y se guardan al momento.", (r, 418, 356, 22));
+        add(w!("BUTTON"), "Assign", button_style, none, (r + 184, 356, 80, 26), ID_KEY_ASSIGN, Kind::Button, false);
+        add(w!("BUTTON"), "Reset", button_style, none, (r + 270, 356, 86, 26), ID_KEY_RESET, Kind::Button, false);
+        label(&mut add, "Example: Ctrl+Shift+O or F6, F7. Empty: none.", (r, 388, 356, 22));
+        let status = label(&mut add, "Nea applies and saves changes immediately.", (r, 418, 356, 22));
 
-        // The field: where it floats, laid out as Pestañas' Ubicación.
-        heading(&mut add, "Campo", (r, 452, 140, 22));
-        label(&mut add, "Ubicación", (r, 486, 140, 22));
+        // The field: where it floats, laid out as the Position of Tabs.
+        heading(&mut add, "Field", (r, 452, 140, 22));
+        label(&mut add, "Position", (r, 486, 140, 22));
         let field_position = add(
             w!("COMBOBOX"),
             "",
@@ -706,7 +679,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         // The box carries no text of its own: a themed checkbox ignores the
         // text colour, so in dark mode its label would vanish. The label
         // beside it toggles it too.
-        heading(&mut add, "Actualizaciones", (r, 520, 140, 22));
+        heading(&mut add, "Updates", (r, 520, 140, 22));
         let updates = add(
             w!("BUTTON"),
             "",
@@ -719,7 +692,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         );
         add(
             w!("STATIC"),
-            "Buscar una vez por día",
+            "Check once a day",
             SS_NOTIFY,
             none,
             (r + 174, 520, 182, 22),
@@ -727,7 +700,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Label,
             false,
         );
-        heading(&mut add, "Privacidad", (r, 552, 140, 22));
+        heading(&mut add, "Privacy", (r, 552, 140, 22));
         let trackers = add(
             w!("BUTTON"),
             "",
@@ -740,7 +713,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         );
         add(
             w!("STATIC"),
-            "Bloquear cookies de terceros y rastreadores",
+            "Block third-party cookies and trackers",
             SS_NOTIFY,
             none,
             (r + 24, 578, 332, 22),
@@ -748,7 +721,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Kind::Label,
             false,
         );
-        heading(&mut add, "Pruebas", (r, 610, 140, 22));
+        heading(&mut add, "Testing", (r, 610, 140, 22));
         let bench = add(
             w!("BUTTON"),
             "",
@@ -761,7 +734,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         );
         add(
             w!("STATIC"),
-            "Control por script (canal local)",
+            "Script control (local pipe)",
             SS_NOTIFY,
             none,
             (r + 174, 610, 182, 22),
@@ -772,7 +745,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 638, 356, 22), -1, Kind::Label, false);
         add(
             w!("BUTTON"),
-            "Cerrar",
+            "Close",
             button_style,
             none,
             (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28),
@@ -882,14 +855,14 @@ fn fill_all(st: &mut State) {
     fill_bench(st);
 }
 
-/// "Versión 0.1.0", and the one waiting for the next launch if there is one.
+/// "Version 0.1.0", and the one waiting for the next launch if there is one.
 fn version_line() -> String {
-    let mut line = format!("Versión {}", updater::CURRENT_VERSION);
+    let mut line = format!("Version {}", updater::CURRENT_VERSION);
     if cfg!(debug_assertions) {
-        line.push_str(" (desarrollo)");
+        line.push_str(" (development)");
     }
     if let Some(next) = updater::pending_version() {
-        line.push_str(&format!(" · la {next} se instala al volver a abrir"));
+        line.push_str(&format!(" · {next} installs when you open Nea again"));
     }
     line
 }
@@ -906,9 +879,9 @@ fn toggle_updates(st: &mut State, flip: bool) -> Outcome {
     status(
         st,
         if st.settings.check_updates {
-            "Busca una versión nueva una vez por día."
+            "Nea checks for a new version once a day."
         } else {
-            "No busca versiones nuevas."
+            "Nea does not check for new versions."
         },
     );
     Outcome::Changed
@@ -925,7 +898,7 @@ fn toggle_bench(st: &mut State, flip: bool) -> Outcome {
         st.settings.bench_enabled = SendMessageW(st.bench, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
     }
     let on = st.settings.bench_enabled;
-    status(st, if on { "Control por script activo: sólo para pruebas." } else { "Control por script apagado." });
+    status(st, if on { "Script control is on. Use it only for testing." } else { "Script control is off." });
     Outcome::Changed
 }
 
@@ -952,11 +925,7 @@ fn toggle_trackers(st: &mut State, flip: bool) -> Outcome {
     let on = st.settings.block_trackers;
     status(
         st,
-        if on {
-            "Rastreadores y carteles de cookies bloqueados."
-        } else {
-            "Rastreadores y carteles de cookies permitidos."
-        },
+        if on { "Trackers and cookie banners are blocked." } else { "Trackers and cookie banners are allowed." },
     );
     Outcome::Changed
 }
@@ -974,9 +943,9 @@ fn fill_keys(st: &State) {
         .iter()
         .map(|c| {
             let chords = shortcuts::chords_of(&st.settings.shortcuts, *c);
-            let shown = if chords.is_empty() { "sin atajo".to_string() } else { shortcuts::format_chords(&chords) };
+            let shown = if chords.is_empty() { "none".to_string() } else { shortcuts::format_chords(&chords) };
             // A third field marks a chord another program holds.
-            let taken = if chords.iter().any(|ch| st.taken.contains(ch)) { "\tocupado" } else { "" };
+            let taken = if chords.iter().any(|ch| st.taken.contains(ch)) { "\ttaken" } else { "" };
             format!("{}\t{shown}{taken}", c.label())
         })
         .collect();
@@ -999,7 +968,7 @@ fn commit_field(st: &mut State, id: i32) -> Outcome {
                 s.search_url = text.trim().to_string();
                 None
             } else {
-                Some("El buscador tiene que empezar con https:// y llevar {q} donde va la búsqueda.")
+                Some("The search engine must start with https:// and have {q} where the search text goes.")
             }
         }
         ID_SUSPEND => match settings::parse_number(&text_of(st.suspend), 5..=86_400) {
@@ -1007,21 +976,21 @@ fn commit_field(st: &mut State, id: i32) -> Outcome {
                 s.suspend_after_secs = n;
                 None
             }
-            None => Some("Dormir: entre 5 y 86400 segundos."),
+            None => Some("Sleep: from 5 to 86400 seconds."),
         },
         ID_DISCARD => match settings::parse_number(&text_of(st.discard), 1..=10_080) {
             Some(n) => {
                 s.discard_after_secs = n * 60;
                 None
             }
-            None => Some("Descartar: entre 1 y 10080 minutos."),
+            None => Some("Discard: from 1 to 10080 minutes."),
         },
         ID_PRESSURE => match settings::parse_number(&text_of(st.pressure), 10..=100) {
             Some(n) => {
                 s.memory_pressure_percent = n as u32;
                 None
             }
-            None => Some("Memoria: un porcentaje entre 10 y 100."),
+            None => Some("Memory: a percentage from 10 to 100."),
         },
         _ => return Outcome::Nothing,
     };
@@ -1043,7 +1012,7 @@ fn commit_field(st: &mut State, id: i32) -> Outcome {
     {
         return Outcome::Nothing;
     }
-    status(st, "Guardado.");
+    status(st, "Saved.");
     Outcome::Changed
 }
 
@@ -1057,7 +1026,7 @@ fn commit_all_fields(st: &mut State) -> Outcome {
 
 fn add_awake(st: &mut State) -> Outcome {
     let Some(host) = settings::normalize_host(&text_of(st.awake_edit)) else {
-        status(st, "Escribí un sitio, por ejemplo meet.google.com.");
+        status(st, "Type a site, for example meet.google.com.");
         return Outcome::Nothing;
     };
     set_text(st.awake_edit, "");
@@ -1066,7 +1035,7 @@ fn add_awake(st: &mut State) -> Outcome {
     }
     let index = st.settings.keep_awake.iter().position(|h| *h == host);
     fill_awake(st, index);
-    status(st, &format!("{host} ya no se duerme."));
+    status(st, &format!("{host} does not sleep now."));
     Outcome::Changed
 }
 
@@ -1075,7 +1044,7 @@ fn remove_awake(st: &mut State) -> Outcome {
     let Some(host) = st.settings.keep_awake.iter().nth(index).cloned() else { return Outcome::Nothing };
     st.settings.keep_awake.remove(&host);
     fill_awake(st, Some(index));
-    status(st, &format!("{host} vuelve a dormirse como las demás."));
+    status(st, &format!("{host} sleeps like the other sites again."));
     Outcome::Changed
 }
 
@@ -1092,9 +1061,9 @@ fn toggle_split(st: &mut State, flip: bool) -> Outcome {
     status(
         st,
         if st.settings.split_view {
-            "Vista dividida: Ctrl+Alt+N o arrastrá una pestaña."
+            "Split view: press Ctrl+Alt+N or drag a tab."
         } else {
-            "Vista dividida apagada; los pares quedan guardados."
+            "Split view is off. Nea keeps the saved pairs."
         },
     );
     Outcome::Changed
@@ -1113,9 +1082,9 @@ fn toggle_preview(st: &mut State, flip: bool) -> Outcome {
     status(
         st,
         if st.settings.hover_preview {
-            "La tarjeta de cada pestaña muestra cómo estaba la página."
+            "The tab card shows a preview of the page."
         } else {
-            "La tarjeta muestra sólo el título y el estado."
+            "The tab card shows only the title and the status."
         },
     );
     Outcome::Changed
@@ -1132,7 +1101,7 @@ fn show_command(st: &State) {
         let taken: Vec<_> =
             chords.iter().filter(|c| st.taken.contains(c)).map(|c| shortcuts::format_chord(*c)).collect();
         if !taken.is_empty() {
-            status(st, &format!("{} lo usa otro programa: asignale otro.", taken.join(", ")));
+            status(st, &format!("Another program uses {}. Assign a different shortcut.", taken.join(", ")));
         }
     }
 }
@@ -1142,40 +1111,40 @@ fn describe_displaced(displaced: &[Command]) -> String {
         return String::new();
     }
     let names: Vec<String> = displaced.iter().map(|c| c.label()).collect();
-    format!(" Se quitó de: {}.", names.join(", "))
+    format!(" Removed from: {}.", names.join(", "))
 }
 
 fn assign_key(st: &mut State) -> Outcome {
     let Some(command) = selected_command(st) else {
-        status(st, "Elegí una acción de la lista.");
+        status(st, "Select an action in the list.");
         return Outcome::Nothing;
     };
     let text = text_of(st.key_edit);
     let Some(chords) = shortcuts::parse_chords(&text) else {
-        status(st, &format!("No reconozco «{}». Ej.: Ctrl+Shift+O, F6, Alt+Izquierda.", text.trim()));
+        status(st, &format!("Nea does not know '{}'. Example: Ctrl+Shift+O, F6, Alt+Left.", text.trim()));
         return Outcome::Nothing;
     };
     if let Some(bad) = chords.iter().find(|c| !shortcuts::is_usable(**c)) {
-        status(st, &format!("{} sola se escribiría en el campo: sumale Ctrl o Alt.", shortcuts::format_chord(*bad)));
+        status(st, &format!("{} alone types text in the field. Add Ctrl or Alt.", shortcuts::format_chord(*bad)));
         return Outcome::Nothing;
     }
     let displaced = shortcuts::assign(&mut st.settings.shortcuts, command, &chords);
     fill_keys(st);
     show_command(st);
-    let shown = if chords.is_empty() { "sin atajo".to_string() } else { shortcuts::format_chords(&chords) };
+    let shown = if chords.is_empty() { "none".to_string() } else { shortcuts::format_chords(&chords) };
     status(st, &format!("{}: {shown}.{}", command.label(), describe_displaced(&displaced)));
     Outcome::Changed
 }
 
 fn reset_key(st: &mut State) -> Outcome {
     let Some(command) = selected_command(st) else {
-        status(st, "Elegí una acción de la lista.");
+        status(st, "Select an action in the list.");
         return Outcome::Nothing;
     };
     let displaced = shortcuts::reset(&mut st.settings.shortcuts, command);
     fill_keys(st);
     show_command(st);
-    status(st, &format!("{}: atajo original.{}", command.label(), describe_displaced(&displaced)));
+    status(st, &format!("{}: default shortcut.{}", command.label(), describe_displaced(&displaced)));
     Outcome::Changed
 }
 
@@ -1199,9 +1168,9 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
                     status(
                         st,
                         if *on {
-                            "Se ofrece guardar la contraseña tras iniciar sesión."
+                            "Nea offers to save the password when you sign in."
                         } else {
-                            "No se ofrece guardar contraseñas nuevas."
+                            "Nea does not offer to save new passwords."
                         },
                     );
                     Outcome::Changed
@@ -1246,9 +1215,9 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
             status(
                 st,
                 if now {
-                    "Pestañas ocultas: Ctrl+K para ir a una, o volvé a mostrarlas acá."
+                    "Tabs are hidden. Press Ctrl+K to go to a tab, or show them here."
                 } else {
-                    "Pestañas a la vista."
+                    "Tabs are visible."
                 },
             );
             Outcome::Layout(vertical, now)
@@ -1304,9 +1273,9 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
 /// exception the choice has.
 fn field_position_note(position: FieldPosition) -> &'static str {
     match position {
-        FieldPosition::Top => "El campo se abre arriba.",
-        FieldPosition::Middle => "El campo se abre al medio; buscar en la página sigue arriba.",
-        FieldPosition::Bottom => "El campo se abre abajo y su lista hacia arriba.",
+        FieldPosition::Top => "The field opens at the top.",
+        FieldPosition::Middle => "The field opens in the middle. Find in page stays at the top.",
+        FieldPosition::Bottom => "The field opens at the bottom, and its list opens upward.",
     }
 }
 
@@ -1386,7 +1355,7 @@ fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
             if taken {
                 // The chord never reaches us: said in the row, in the
                 // private violet (the one non-grey ink the interface has).
-                let note = "otro programa";
+                let note = "Used by another program";
                 let note_w = g.measure(note, small);
                 let note_rect = RectF::new(inner.right - note_w - 1.0, inner.top, inner.right, inner.bottom);
                 g.text(note, note_rect, small, palette.private_mark);
@@ -1519,3 +1488,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         _ => default(),
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/settings_window.rs"]
+#[rustfmt::skip]
+mod tests;

@@ -1,18 +1,21 @@
 ﻿<#
 .SYNOPSIS
-    Compila, firma y empaqueta Nea en dist\.
+    Builds, signs and packages Nea into dist\.
 
 .DESCRIPTION
-    1. cargo build --release (o debug con -Dev: "Nea (desarrollo)").
-    2. Firma de código con signtool, si se pasa un certificado.
-    3. Paquete portable: Nea-<versión>-portable.zip (nea.exe, LICENSE, NOTICE).
-    4. Instalador por usuario: Nea-<versión>-setup.exe (el mismo programa;
-       por llevar "setup" en el nombre se instala al abrirlo, sin administrador).
-    5. Con -UpdateKey: latest.json firmado (Ed25519) para el actualizador.
-    6. SHA256SUMS.txt con el hash de cada archivo.
+    1. Runs cargo build --release. With -Dev, it makes a debug build named
+       "Nea (development)".
+    2. Signs the code with signtool, if you give a certificate.
+    3. Makes the portable package Nea-<version>-portable.zip (nea.exe,
+       LICENSE, NOTICE).
+    4. Makes the per-user installer Nea-<version>-setup.exe. This is the
+       same program. Because its name contains "setup", it installs itself
+       when you open it. It does not need administrator rights.
+    5. With -UpdateKey, makes a signed latest.json (Ed25519) for the updater.
+    6. Writes SHA256SUMS.txt with the hash of each file.
 
-    El zip es reproducible: entradas en orden fijo y con la fecha del último
-    commit (SOURCE_DATE_EPOCH si está definida).
+    The zip is reproducible. The entries have a fixed order and the date of
+    the last commit (or SOURCE_DATE_EPOCH, if it is set).
 
 .EXAMPLE
     .\build.ps1
@@ -22,18 +25,18 @@
 #>
 [CmdletBinding()]
 param(
-    # Compilación de desarrollo (debug): nombre y título "Nea (desarrollo)".
+    # Development build (debug): name and title "Nea (development)".
     [switch]$Dev,
-    # Certificado de firma de código (.pfx) y su contraseña...
+    # The code signing certificate (.pfx) and its password, or...
     [string]$CertificatePath,
     [string]$CertificatePassword,
-    # ...o la huella de uno instalado en el almacén del usuario.
+    # ...the thumbprint of a certificate in the certificate store of the user.
     [string]$CertificateThumbprint,
     [string]$TimestampUrl = 'http://timestamp.digicert.com',
-    # Clave privada Ed25519 de las actualizaciones (nunca dentro del repo).
+    # The Ed25519 private key for updates. Never keep this key in the repo.
     [string]$UpdateKey,
-    # Dirección pública de nea.exe en la versión publicada; por defecto,
-    # relativa al manifiesto.
+    # The public address of nea.exe in the published release. The default is
+    # an address relative to the manifest.
     [string]$PackageUrl,
     [string]$OutDir = 'dist'
 )
@@ -47,7 +50,7 @@ function Invoke-Native {
     # PowerShell would turn each line into an error and 'Stop' would abort.
     $ErrorActionPreference = 'Continue'
     & $File @Arguments
-    if ($LASTEXITCODE -ne 0) { throw "$File terminó con código $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "$File exited with code $LASTEXITCODE." }
 }
 
 function Find-SignTool {
@@ -64,7 +67,7 @@ function Find-SignTool {
 }
 
 $cargoToml = Get-Content Cargo.toml -Raw
-if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'No encontré la versión en Cargo.toml' }
+if ($cargoToml -notmatch '(?m)^version\s*=\s*"([^"]+)"') { throw 'Cargo.toml has no version.' }
 $version = $Matches[1]
 $profileDir = 'release'
 $prefix = 'Nea'
@@ -82,7 +85,7 @@ Copy-Item $built $exe
 # Code signing comes before the update signature: Ed25519 covers the final bytes.
 if ($CertificatePath -or $CertificateThumbprint) {
     $signtool = Find-SignTool
-    if (-not $signtool) { throw 'Hay certificado pero no encontré signtool.exe (Windows SDK).' }
+    if (-not $signtool) { throw 'You gave a certificate, but signtool.exe (Windows SDK) is not on this computer.' }
     $signArgs = @('sign', '/fd', 'SHA256', '/td', 'SHA256', '/tr', $TimestampUrl, '/d', 'Nea')
     if ($CertificatePath) {
         $signArgs += @('/f', $CertificatePath)
@@ -92,9 +95,9 @@ if ($CertificatePath -or $CertificateThumbprint) {
     }
     Invoke-Native $signtool ($signArgs + @($exe))
     Invoke-Native $signtool @('verify', '/pa', $exe)
-    Write-Host "== Firmado con signtool"
+    Write-Host "== Signed with signtool"
 } else {
-    Write-Warning 'Sin certificado de firma de código: nea.exe no va firmado y SmartScreen va a advertir a quien lo abra.'
+    Write-Warning 'No code signing certificate: nea.exe is not signed. SmartScreen shows a warning when a person opens it.'
 }
 
 $setup = Join-Path $OutDir "$prefix-$version-setup.exe"
@@ -133,9 +136,9 @@ if ($UpdateKey) {
         '--out', (Join-Path $OutDir 'latest.json'))
     if ($PackageUrl) { $signUpdate += @('--url', $PackageUrl) }
     Invoke-Native cargo $signUpdate
-    Write-Host "== latest.json firmado"
+    Write-Host "== latest.json signed"
 } else {
-    Write-Warning 'Sin -UpdateKey: no se generó latest.json (el actualizador no va a ver esta versión).'
+    Write-Warning 'No -UpdateKey: the script did not make latest.json. The updater cannot find this version.'
 }
 
 $sums = Get-ChildItem $OutDir -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name | ForEach-Object {
@@ -143,5 +146,5 @@ $sums = Get-ChildItem $OutDir -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt
 }
 [System.IO.File]::WriteAllLines((Join-Path (Resolve-Path $OutDir) 'SHA256SUMS.txt'), [string[]]$sums)
 
-Write-Host "== Listo en $OutDir\"
+Write-Host "== Done in $OutDir\"
 Get-ChildItem $OutDir -File | Sort-Object Name | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.Name }

@@ -1,0 +1,34 @@
+name: Feature request
+description: A missing feature or an improvement.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nea is small on purpose. Each feature uses memory and adds complexity. Describe the problem before the solution.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Tell what you want to do and cannot do now, or what is difficult.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Tell how the feature looks and how you use it. If a different browser does it well, give the browser and the method.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Give other possible solutions, or your current solution.
+  - type: checkboxes
+    id: check
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the issues and found no equal issue.
+          required: true

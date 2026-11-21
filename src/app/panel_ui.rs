@@ -69,7 +69,7 @@ fn info(text: impl Into<String>) -> (String, Row) {
     (text.into(), Row::Info)
 }
 
-/// "Título    dirección", the way the field's rows read.
+/// "Title    address", the way the field's rows read.
 fn page_label(title: &str, url: &str) -> String {
     let address = omnibox::strip_for_match(url);
     let title = if title.trim().is_empty() { address } else { title };
@@ -158,11 +158,11 @@ impl App {
                 if found.is_empty() {
                     rows.push(info(if query.trim().is_empty() {
                         format!(
-                            "Todavía no hay marcadores. {} marca la página actual.",
+                            "No bookmarks yet. {} bookmarks the current page.",
                             self.chord_hint(Command::ToggleBookmark)
                         )
                     } else {
-                        "Sin resultados".to_string()
+                        "No results".to_string()
                     }));
                 }
                 rows.extend(
@@ -178,21 +178,17 @@ impl App {
                     rows.push(if self.panels.confirm_clear {
                         (
                             format!(
-                                "¿Seguro? Enter otra vez borra las {} entradas del historial · Esc cancela",
+                                "Are you sure? Press Enter again to delete all {} history entries · Esc cancels",
                                 self.history.entries().len()
                             ),
                             Row::Panel(Item::ConfirmClearHistory),
                         )
                     } else {
-                        ("Borrar todo el historial…".to_string(), Row::Panel(Item::ClearHistory))
+                        ("Clear all history…".to_string(), Row::Panel(Item::ClearHistory))
                     });
                 }
                 if found.is_empty() {
-                    rows.push(info(if query.trim().is_empty() {
-                        "El historial está vacío"
-                    } else {
-                        "Sin resultados"
-                    }));
+                    rows.push(info(if query.trim().is_empty() { "History is empty" } else { "No results" }));
                 }
                 let (now, offset) = (unix_now(), local_offset());
                 rows.extend(found.into_iter().map(|e| {
@@ -206,7 +202,7 @@ impl App {
                 let list = self.panels.downloads.as_deref().unwrap_or_default();
                 let found = downloads::search(list, query);
                 if found.is_empty() {
-                    rows.push(info(if query.trim().is_empty() { "No hay descargas" } else { "Sin resultados" }));
+                    rows.push(info(if query.trim().is_empty() { "No downloads" } else { "No results" }));
                 }
                 rows.extend(found.into_iter().take(PANEL_LIMIT).map(|d| {
                     let exists = d.state != State::Completed || Path::new(&d.path).exists();
@@ -214,7 +210,7 @@ impl App {
                 }));
                 if self.tabs.active_tab().is_some_and(|t| matches!(t.live, Live::Ready(_))) {
                     rows.push((
-                        "Abrir las descargas del motor (pausar, reanudar, reintentar)".to_string(),
+                        "Open the engine's downloads (pause, resume, retry)".to_string(),
                         Row::Panel(Item::EngineDownloads),
                     ));
                 }
@@ -377,9 +373,9 @@ impl App {
         self.open_panel(PanelKind::Bookmarks);
         let name = if title.trim().is_empty() { omnibox::display_host(&url).to_string() } else { title };
         self.panels.notice = Some(if marked {
-            format!("★ Agregada a marcadores: {name}    {} la quita", self.chord_hint(Command::ToggleBookmark))
+            format!("★ Added to bookmarks: {name}    {} removes it", self.chord_hint(Command::ToggleBookmark))
         } else {
-            format!("Quitada de marcadores: {name}")
+            format!("Removed from bookmarks: {name}")
         });
         self.refresh_panel(PanelKind::Bookmarks, None);
     }

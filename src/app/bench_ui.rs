@@ -127,7 +127,7 @@ fn type_into_field(job: Job) -> Result<(), Job> {
     let edit = match with_app(|app| app.mode.is_some().then_some(app.omnibar.edit)) {
         None => return Err(job),
         Some(None) => {
-            job.reply.error("el campo no está abierto: abrilo antes con run focus_address, new_tab, switch_tab o find");
+            job.reply.error("the field is not open: open it first with run focus_address, new_tab, switch_tab or find");
             return Ok(());
         }
         Some(Some(edit)) => edit,
@@ -220,7 +220,7 @@ impl App {
                     match result.map(|_| serde_json::from_str::<String>(&json)) {
                         Ok(Ok(text)) => reply.ok(json!({ "text": text })),
                         Ok(Err(_)) => reply.ok(json!({ "text": "" })),
-                        Err(e) => reply.error(&format!("no se pudo leer la página: {e}")),
+                        Err(e) => reply.error(&format!("cannot read the page: {e}")),
                     }
                     Ok(())
                 }));
@@ -246,9 +246,9 @@ impl App {
                         let value: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
                         let value = &value["result"]["value"];
                         match (result, value.get("found").and_then(Value::as_bool)) {
-                            (Err(e), _) => reply.error(&format!("no se pudo ejecutar el clic: {e}")),
+                            (Err(e), _) => reply.error(&format!("cannot run the click: {e}")),
                             (_, Some(true)) => reply.ok(json!({ "clicked": shown })),
-                            _ => reply.error(&format!("ningún elemento coincide con «{shown}»")),
+                            _ => reply.error(&format!("no element matches '{shown}'")),
                         }
                         Ok(())
                     }));
@@ -264,10 +264,10 @@ impl App {
                 let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
                     let value: Value = serde_json::from_str(&json).unwrap_or(Value::Null);
                     match (result, value.get("found").and_then(Value::as_bool), value.get("error")) {
-                        (Err(e), _, _) => reply.error(&format!("no se pudo ejecutar el clic: {e}")),
-                        (_, _, Some(error)) => reply.error(&format!("selector inválido «{shown}»: {error}")),
+                        (Err(e), _, _) => reply.error(&format!("cannot run the click: {e}")),
+                        (_, _, Some(error)) => reply.error(&format!("invalid selector '{shown}': {error}")),
                         (_, Some(true), _) => reply.ok(json!({ "clicked": shown })),
-                        _ => reply.error(&format!("ningún elemento coincide con «{shown}»")),
+                        _ => reply.error(&format!("no element matches '{shown}'")),
                     }
                     Ok(())
                 }));
@@ -284,7 +284,7 @@ impl App {
                 };
                 let Some(command) = command else {
                     let asked = name.or(keys).unwrap_or_default();
-                    return reply.error(&format!("no hay ningún comando «{asked}»"));
+                    return reply.error(&format!("no command '{asked}'"));
                 };
                 // Answered first: a command may open a menu, whose loop
                 // would hold the answer until it closes.
@@ -328,8 +328,8 @@ impl App {
                 let ids: Vec<u64> = match tab {
                     Some(id) => match self.tabs.get(id) {
                         Some(t) if t.test => vec![id],
-                        Some(_) => return reply.error("sólo se cierran pestañas de prueba"),
-                        None => return reply.error(&format!("no hay ninguna pestaña {id}")),
+                        Some(_) => return reply.error("only test tabs can be closed"),
+                        None => return reply.error(&format!("no tab {id}")),
                     },
                     None => self.tabs.tabs.iter().filter(|t| t.test).map(|t| t.id).collect(),
                 };
@@ -352,7 +352,7 @@ impl App {
                 }
             }
             // Answered on the pipe thread; never queued.
-            Action::Ping | Action::Memory | Action::Type { .. } => reply.error("petición fuera de lugar"),
+            Action::Ping | Action::Memory | Action::Type { .. } => reply.error("request not expected here"),
         }
     }
 
@@ -360,8 +360,8 @@ impl App {
     fn bench_tab(&self, tab: Option<u64>) -> Result<u64, String> {
         match tab.or(self.tabs.active) {
             Some(id) if self.tabs.get(id).is_some() => Ok(id),
-            Some(id) => Err(format!("no hay ninguna pestaña {id}")),
-            None => Err("no hay ninguna pestaña activa".to_string()),
+            Some(id) => Err(format!("no tab {id}")),
+            None => Err("no active tab".to_string()),
         }
     }
 
@@ -370,7 +370,7 @@ impl App {
         let id = self.bench_tab(tab)?;
         match self.tabs.get(id).map(|t| &t.live) {
             Some(Live::Ready(web)) => Ok(web.webview.clone()),
-            _ => Err(format!("la pestaña {id} no tiene la página cargada (está dormida o creándose)")),
+            _ => Err(format!("tab {id} has no loaded page (it is asleep or not ready)")),
         }
     }
 
@@ -402,7 +402,7 @@ impl App {
         };
         let stream = match stream {
             Ok(stream) => stream,
-            Err(e) => return reply.error(&format!("no se pudo crear {}: {e}", path.display())),
+            Err(e) => return reply.error(&format!("cannot create {}: {e}", path.display())),
         };
         let held = stream.clone();
         let shown = path.display().to_string();
@@ -414,7 +414,7 @@ impl App {
                     let bytes = std::fs::metadata(&shown).map_or(0, |m| m.len());
                     reply.ok(json!({ "path": shown, "bytes": bytes }));
                 }
-                Err(e) => reply.error(&format!("no se pudo capturar la pestaña: {e}")),
+                Err(e) => reply.error(&format!("cannot capture the tab: {e}")),
             }
             Ok(())
         }));
@@ -440,7 +440,7 @@ impl App {
         let now = Instant::now();
         for waiter in std::mem::take(&mut self.bench.waiters) {
             let Some(tab) = self.tabs.get(waiter.tab) else {
-                waiter.reply.error(&format!("la pestaña {} se cerró", waiter.tab));
+                waiter.reply.error(&format!("tab {} closed", waiter.tab));
                 continue;
             };
             match self.bench.loaded.get(&waiter.tab) {
@@ -448,7 +448,7 @@ impl App {
                     waiter.reply.ok(json!({ "tab": tab.id, "ok": ok, "url": tab.url, "title": tab.title }));
                 }
                 _ if now >= waiter.deadline => {
-                    waiter.reply.error(&format!("la pestaña {} no terminó de cargar a tiempo", waiter.tab));
+                    waiter.reply.error(&format!("tab {} did not finish loading in time", waiter.tab));
                 }
                 _ => self.bench.waiters.push(waiter),
             }
@@ -472,14 +472,14 @@ impl App {
         collapsed: Option<bool>,
     ) -> Result<u64, String> {
         if let Some(missing) = tabs.iter().find(|id| self.tabs.get(**id).is_none()) {
-            return Err(format!("no hay ninguna pestaña {missing}"));
+            return Err(format!("no tab {missing}"));
         }
         let id = match group {
             Some(id) if self.tabs.group(id).is_some() => id,
-            Some(id) => return Err(format!("no hay ningún grupo {id}")),
+            Some(id) => return Err(format!("no group {id}")),
             None => {
-                let first = *tabs.first().ok_or("hacen falta pestañas para un grupo nuevo")?;
-                self.tabs.create_group(first).ok_or("una pestaña fijada no va en un grupo")?
+                let first = *tabs.first().ok_or("a new group needs tabs")?;
+                self.tabs.create_group(first).ok_or("a pinned tab cannot be in a group")?
             }
         };
         for &tab in tabs {
@@ -491,8 +491,7 @@ impl App {
             self.tabs.rename_group(id, &name);
         }
         if let Some(color) = color {
-            let color =
-                crate::tab_groups::GroupColor::from_name(&color).ok_or(format!("no hay ningún color «{color}»"))?;
+            let color = crate::tab_groups::GroupColor::from_name(&color).ok_or(format!("no color '{color}'"))?;
             self.tabs.set_group_color(id, color);
         }
         self.session_dirty = true;

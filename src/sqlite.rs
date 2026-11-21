@@ -16,6 +16,8 @@ use windows::{
 const SQLITE_OK: c_int = 0;
 const SQLITE_ROW: c_int = 100;
 const SQLITE_OPEN_READONLY: c_int = 0x1;
+#[cfg(all(test, nea_tests))]
+const SQLITE_OPEN_READWRITE_CREATE: c_int = 0x2 | 0x4;
 
 type Open = unsafe extern "system" fn(*const c_char, *mut *mut c_void, c_int, *const c_char) -> c_int;
 type Close = unsafe extern "system" fn(*mut c_void) -> c_int;
@@ -26,6 +28,9 @@ type Finalize = unsafe extern "system" fn(*mut c_void) -> c_int;
 type ColumnBlob = unsafe extern "system" fn(*mut c_void, c_int) -> *const c_void;
 type ColumnBytes = unsafe extern "system" fn(*mut c_void, c_int) -> c_int;
 type ColumnInt = unsafe extern "system" fn(*mut c_void, c_int) -> c_int;
+#[cfg(all(test, nea_tests))]
+type Exec =
+    unsafe extern "system" fn(*mut c_void, *const c_char, *const c_void, *mut c_void, *mut *mut c_char) -> c_int;
 
 /// The library, loaded. Dropping it unloads it.
 pub struct Sqlite {
@@ -38,6 +43,8 @@ pub struct Sqlite {
     column_blob: ColumnBlob,
     column_bytes: ColumnBytes,
     column_int: ColumnInt,
+    #[cfg(all(test, nea_tests))]
+    exec: Exec,
 }
 
 impl Sqlite {
@@ -66,6 +73,8 @@ impl Sqlite {
                 column_blob: function!("sqlite3_column_blob"),
                 column_bytes: function!("sqlite3_column_bytes"),
                 column_int: function!("sqlite3_column_int"),
+                #[cfg(all(test, nea_tests))]
+                exec: function!("sqlite3_exec"),
             })
         }
     }
@@ -80,6 +89,11 @@ impl Sqlite {
 
     pub fn open_read_only(&self, path: &std::path::Path) -> Option<Db<'_>> {
         self.open_with(path, SQLITE_OPEN_READONLY)
+    }
+
+    #[cfg(all(test, nea_tests))]
+    pub fn create(&self, path: &std::path::Path) -> Option<Db<'_>> {
+        self.open_with(path, SQLITE_OPEN_READWRITE_CREATE)
     }
 }
 
@@ -143,6 +157,15 @@ impl Db<'_> {
         }
         Some(())
     }
+
+    #[cfg(all(test, nea_tests))]
+    pub fn execute(&self, sql: &str) -> bool {
+        let sql = CString::new(sql).unwrap();
+        unsafe {
+            (self.lib.exec)(self.handle, sql.as_ptr(), std::ptr::null(), std::ptr::null_mut(), std::ptr::null_mut())
+                == SQLITE_OK
+        }
+    }
 }
 
 impl Drop for Db<'_> {
@@ -152,3 +175,8 @@ impl Drop for Db<'_> {
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/sqlite.rs"]
+#[rustfmt::skip]
+mod tests;

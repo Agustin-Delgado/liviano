@@ -1,4 +1,4 @@
-//! Control by script: a local named pipe, off unless Ajustes or
+//! Control by script: a local named pipe, off unless Settings or
 //! `NEA_BENCH=1` turn it on. Its own thread reads one JSON request per
 //! line; what needs the window is queued for the UI thread (one posted
 //! message, as engine events are), which answers through a channel. Memory
@@ -301,7 +301,7 @@ fn answer(line: &str) -> String {
                 .unwrap_or_else(|e| e.into_inner())
                 .push_back(Job { action: request.action, reply: Reply { id: request.id, tx } });
             post();
-            rx.recv_timeout(timeout).unwrap_or_else(|_| protocol::error(&id, "la ventana no respondió a tiempo"))
+            rx.recv_timeout(timeout).unwrap_or_else(|_| protocol::error(&id, "the window did not answer in time"))
         }
     }
 }
@@ -319,3 +319,8 @@ pub fn memory_report() -> Value {
         "processes": std::iter::once(&tree.root).chain(tree.children.iter()).collect::<Vec<_>>(),
     })
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/bench.rs"]
+#[rustfmt::skip]
+mod tests;

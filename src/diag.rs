@@ -174,7 +174,7 @@ impl Drop for Doing {
         DETAIL.store(detail, Ordering::Relaxed);
         SINCE.store(since, Ordering::Relaxed);
         if took >= SLOW_AFTER {
-            log(Log::Hang, format!("{} lento: {} ({}) tardó {} ms", stamp(), self.name, self.detail, took.as_millis()));
+            log(Log::Hang, format!("{} slow: {} ({}) took {} ms", stamp(), self.name, self.detail, took.as_millis()));
         }
         if took >= TRACE_SLOW_AFTER && tracing() {
             let (name, detail) = (*self.name, self.detail);
@@ -187,12 +187,12 @@ impl Drop for Doing {
 fn current() -> String {
     let name = NAME.load(Ordering::Relaxed);
     if name.is_null() {
-        return "nada marcado (entre mensajes o dentro del motor)".to_string();
+        return "nothing marked (between messages or inside the engine)".to_string();
     }
     // Only promoted 'static literals are ever stored.
     let name = unsafe { *name };
     let since = now_ms().saturating_sub(SINCE.load(Ordering::Relaxed));
-    format!("{name} ({}) desde hace {since} ms", DETAIL.load(Ordering::Relaxed))
+    format!("{name} ({}) for {since} ms", DETAIL.load(Ordering::Relaxed))
 }
 
 /// Local time with milliseconds, for every line.
@@ -210,7 +210,7 @@ fn version() -> &'static str {
 
 fn panic_line(info: &std::panic::PanicHookInfo<'_>) -> String {
     let thread = std::thread::current();
-    let mut line = format!("{} panic v{} hilo {}: ", stamp(), version(), thread.name().unwrap_or("?"));
+    let mut line = format!("{} panic v{} thread {}: ", stamp(), version(), thread.name().unwrap_or("?"));
     if let Some(location) = info.location() {
         let _ = write!(line, "{}:{}:{}: ", location.file(), location.line(), location.column());
     }
@@ -219,8 +219,8 @@ fn panic_line(info: &std::panic::PanicHookInfo<'_>) -> String {
         .downcast_ref::<&str>()
         .map(|s| s.to_string())
         .or_else(|| info.payload().downcast_ref::<String>().cloned())
-        .unwrap_or_else(|| "(sin mensaje)".to_string());
-    let _ = write!(line, "{message} | haciendo: {}", current());
+        .unwrap_or_else(|| "(no message)".to_string());
+    let _ = write!(line, "{message} | doing: {}", current());
     line.replace(['\r', '\n'], " ")
 }
 
@@ -323,10 +323,10 @@ fn watch() {
                 }
             }
             Verdict::Hung { for_ms } => {
-                log(Log::Hang, format!("{} colgado hace {for_ms} ms, haciendo: {}", stamp(), current()));
+                log(Log::Hang, format!("{} hung for {for_ms} ms, doing: {}", stamp(), current()));
             }
             Verdict::Recovered { after_ms } => {
-                log(Log::Hang, format!("{} respondió de nuevo tras ~{after_ms} ms", stamp()));
+                log(Log::Hang, format!("{} answered again after ~{after_ms} ms", stamp()));
             }
         }
         flush();
@@ -405,7 +405,7 @@ mod seh {
         let mut line = Line { bytes: [0; 256], len: 0 };
         let _ = write!(
             line,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} excepcion v{} codigo 0x{code:08X} en 0x{address:X} (nea.exe+0x{:X})\r\n",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} exception v{} code 0x{code:08X} at 0x{address:X} (nea.exe+0x{:X})\r\n",
             t.wYear,
             t.wMonth,
             t.wDay,
@@ -433,3 +433,8 @@ mod seh {
         EXCEPTION_CONTINUE_SEARCH
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/diag.rs"]
+#[rustfmt::skip]
+mod tests;

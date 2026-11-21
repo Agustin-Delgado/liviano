@@ -89,3 +89,8 @@ pub fn strip_for_match(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     rest.strip_prefix("www.").unwrap_or(rest)
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/omnibox.rs"]
+#[rustfmt::skip]
+mod tests;

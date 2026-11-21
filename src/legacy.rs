@@ -177,3 +177,8 @@ pub fn migrate() {
         vault::Store::default().take_from(&old);
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/legacy.rs"]
+#[rustfmt::skip]
+mod tests;

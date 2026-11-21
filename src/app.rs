@@ -334,7 +334,7 @@ fn message_loop() {
             if !more {
                 break;
             }
-            let _doing = crate::diag::doing(&"mensaje", msg.message as u64);
+            let _doing = crate::diag::doing(&"message", msg.message as u64);
             if crate::settings_window::pre_translate(&msg) {
                 continue;
             }
@@ -425,7 +425,7 @@ fn apply_window_theme(hwnd: HWND, palette: &Palette) {
 }
 
 fn on_omnibar(signal: Signal) {
-    let _doing = crate::diag::doing(&"campo", 0);
+    let _doing = crate::diag::doing(&"field", 0);
     if let Signal::Submit { .. } = signal {
         crate::diag::trace(|| "submit".to_string());
     }
@@ -474,7 +474,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_PAINT => {
-            let _doing = crate::diag::doing(&"pintar", 0);
+            let _doing = crate::diag::doing(&"paint", 0);
             let mut ps = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             if with_app(|app| app.paint(hdc, ps.rcPaint)).is_none() {
@@ -557,18 +557,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_RBUTTONUP => {
             let (x, y) = x_y(lparam);
-            let _doing = crate::diag::doing(&"menú de pestaña", 0);
+            let _doing = crate::diag::doing(&"tab menu", 0);
             with_app(|app| app.context_menu(x, y));
             LRESULT(0)
         }
         WM_TIMER => {
             match wparam.0 {
                 TIMER_SLEEP => {
-                    let _doing = crate::diag::doing(&"timer:dormir", 0);
+                    let _doing = crate::diag::doing(&"timer:sleep", 0);
                     with_app(|app| app.sleep_tick());
                 }
                 TIMER_SAVE => {
-                    let _doing = crate::diag::doing(&"timer:guardar", 0);
+                    let _doing = crate::diag::doing(&"timer:save", 0);
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
@@ -620,7 +620,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_CLOSE => {
-            let _doing = crate::diag::doing(&"cerrar", 0);
+            let _doing = crate::diag::doing(&"close", 0);
             with_app(|app| app.shutdown());
             crate::diag::flush_now();
             unsafe {
@@ -695,7 +695,7 @@ impl App {
             return Some(error);
         }
         match self.tabs.active_tab() {
-            None => Some("Ctrl+L para escribir una dirección o buscar"),
+            None => Some("Press Ctrl+L to enter an address or search"),
             Some(_) => None,
         }
     }
@@ -836,11 +836,11 @@ impl App {
             let bounds = shown.iter().find(|(id, _)| *id == tab.id).map(|(_, r)| *r);
             match (&mut tab.live, bounds) {
                 (Live::Ready(web), Some(bounds)) => {
-                    let _doing = crate::diag::doing(&"vista:mostrar", tab.id);
+                    let _doing = crate::diag::doing(&"view:show", tab.id);
                     web.show(bounds)
                 }
                 (Live::Ready(web), None) => {
-                    let _doing = crate::diag::doing(&"vista:ocultar", tab.id);
+                    let _doing = crate::diag::doing(&"view:hide", tab.id);
                     web.hide()
                 }
                 (Live::Asleep, Some(_)) => wake.push(tab.id),
@@ -894,7 +894,7 @@ impl App {
         shield::start();
         let extensions = self.extensions_for_environment();
         if let Err(err) = web::create_environment(&storage::engine_dir(), extensions) {
-            self.env_error = Some(format!("No se pudo iniciar WebView2: {err}"));
+            self.env_error = Some(format!("Cannot start WebView2: {err}"));
             self.invalidate();
         }
     }
@@ -925,7 +925,7 @@ impl App {
             return;
         }
         if let Some(Live::Ready(web)) = self.tabs.active_tab().map(|t| &t.live) {
-            let _doing = crate::diag::doing(&"vista:foco", 0);
+            let _doing = crate::diag::doing(&"view:focus", 0);
             web.focus();
         } else {
             // Also while the page is still being created: the keyboard leaves
@@ -1066,7 +1066,7 @@ impl App {
                 self.warm_environment_ready();
             }
             Event::EnvironmentReady(Err(err)) => {
-                self.env_error = Some(format!("No se pudo iniciar WebView2 ({err}). Instalá el runtime de WebView2."));
+                self.env_error = Some(format!("Cannot start WebView2 ({err}). Install the WebView2 Runtime."));
                 self.invalidate();
             }
             Event::ControllerReady(engine_ui::SPARE, result) => self.spare_ready(result),
@@ -1227,7 +1227,7 @@ impl App {
     // ---------- commands ----------
 
     fn run(&mut self, command: Command) {
-        let _doing = crate::diag::doing(&"comando", 0);
+        let _doing = crate::diag::doing(&"command", 0);
         crate::diag::trace(|| format!("command {}", command.name()));
         match command {
             Command::FocusAddress => {
@@ -1349,7 +1349,7 @@ impl App {
                     }
                     shield::set_disabled(&self.settings.shield_disabled);
                     self.save_settings();
-                    // An open Ajustes window holds a copy: its next change would undo this.
+                    // An open Settings window holds a copy: its next change would undo this.
                     crate::settings_window::sync(&self.settings);
                     // Bypassing the cache: what loaded while blocking was off
                     // sits there and is served without passing the filters.
@@ -1513,36 +1513,27 @@ impl App {
         unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, &wide(if pinned { "Desfijar" } else { "Fijar" }));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_DUPLICATE, w!("Duplicar"));
-            let _ = AppendMenuW(
-                menu,
-                MF_STRING | check(awake),
-                MENU_KEEP_AWAKE,
-                w!("Mantener sitio despierto (usa más memoria)"),
-            );
+            let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, &wide(if pinned { "Unpin tab" } else { "Pin tab" }));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_DUPLICATE, w!("Duplicate tab"));
+            let _ =
+                AppendMenuW(menu, MF_STRING | check(awake), MENU_KEEP_AWAKE, w!("Keep site awake (uses more memory)"));
             if let Some(on) = shielded {
-                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_SHIELD, w!("Bloqueo de anuncios en este sitio"));
+                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_SHIELD, w!("Block ads on this site"));
             }
             if let Some(on) = popups {
-                let _ = AppendMenuW(
-                    menu,
-                    MF_STRING | check(on),
-                    MENU_POPUPS,
-                    w!("Permitir ventanas emergentes en este sitio"),
-                );
+                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_POPUPS, w!("Allow pop-ups on this site"));
             }
             if paired {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_UNSPLIT, w!("Deshacer vista dividida"));
+                let _ = AppendMenuW(menu, MF_STRING, MENU_UNSPLIT, w!("Close split view"));
             } else if can_split {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Abrir al lado de la página actual"));
+                let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Open next to the current page"));
             }
             self.append_group_items(menu, id);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_TAB_LAYOUT, &wide(frame_ui::layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, w!("Cerrar"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Cerrar las demás"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, w!("Close tab"));
+            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Close other tabs"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
@@ -1615,18 +1606,16 @@ impl App {
             self.with_active_web(|w| w.find_stop());
         }
         let (cue, text, select_all) = match mode {
-            Mode::Address => (
-                "Escribí una dirección o buscá",
-                self.tabs.active_tab().map(|t| t.url.clone()).unwrap_or_default(),
-                true,
-            ),
-            Mode::NewTab => ("Nueva pestaña: dirección o búsqueda", String::new(), false),
-            Mode::NewPrivateTab => ("Nueva pestaña privada: dirección o búsqueda", String::new(), false),
-            Mode::Switch => ("Ir a una pestaña abierta", String::new(), false),
-            Mode::Find => ("Buscar en la página", String::new(), false),
+            Mode::Address => {
+                ("Search or enter address", self.tabs.active_tab().map(|t| t.url.clone()).unwrap_or_default(), true)
+            }
+            Mode::NewTab => ("New tab: search or enter address", String::new(), false),
+            Mode::NewPrivateTab => ("New private tab: search or enter address", String::new(), false),
+            Mode::Switch => ("Switch to tab", String::new(), false),
+            Mode::Find => ("Find in page", String::new(), false),
             Mode::Panel(kind) => (kind.cue(), String::new(), false),
             Mode::Split => {
-                ("Al lado: dirección, búsqueda o pestaña abierta (Enter vacío: la misma página)", String::new(), false)
+                ("Split view: search, address or open tab (empty Enter: the same page)", String::new(), false)
             }
             Mode::RenameGroup(group) => {
                 let (cue, name) = self.group_cue(group);
@@ -1708,14 +1697,14 @@ impl App {
     }
 
     fn set_rows(&mut self, rows: Vec<(String, Row)>) {
-        let _doing = crate::diag::doing(&"campo:filas", rows.len() as u64);
+        let _doing = crate::diag::doing(&"field:rows", rows.len() as u64);
         let labels: Vec<String> = rows.iter().map(|(label, _)| label.clone()).collect();
         self.rows = rows.into_iter().map(|(_, row)| row).collect();
         {
-            let _doing = crate::diag::doing(&"campo:lista", 0);
+            let _doing = crate::diag::doing(&"field:list", 0);
             self.omnibar.set_rows(&labels);
         }
-        let _doing = crate::diag::doing(&"campo:ubicar", 0);
+        let _doing = crate::diag::doing(&"field:place", 0);
         self.omnibar.place(self.omnibar_frame());
     }
 
@@ -1734,7 +1723,7 @@ impl App {
             Mode::Address | Mode::NewTab | Mode::NewPrivateTab => {
                 let (start, end) = self.omnibar.selection();
                 let caret_at_end = start == end && end == text.encode_utf16().count();
-                let _doing = crate::diag::doing(&"campo:historial", 0);
+                let _doing = crate::diag::doing(&"field:history", 0);
                 if typing_forward
                     && caret_at_end
                     && let Some(completion) = self.history.inline_completion(&text)
@@ -1757,7 +1746,7 @@ impl App {
                 rows
             }
             Mode::Panel(kind) => {
-                let _doing = crate::diag::doing(&"campo:panel", 0);
+                let _doing = crate::diag::doing(&"field:panel", 0);
                 self.panel_rows(kind, &text)
             }
             Mode::Split => self.split_rows(&text),
@@ -1772,8 +1761,8 @@ impl App {
             _ => None,
         });
         let label = match status {
-            Some((_, 0)) | None => "Sin coincidencias".to_string(),
-            Some((index, count)) => format!("{} de {count}    Enter: siguiente · Shift+Enter: anterior", index.max(1)),
+            Some((_, 0)) | None => "No matches".to_string(),
+            Some((index, count)) => format!("{} of {count}    Enter: next · Shift+Enter: previous", index.max(1)),
         };
         self.set_rows(vec![(label, Row::Info)]);
     }
@@ -1973,3 +1962,8 @@ fn get_clipboard(hwnd: HWND) -> Option<String> {
         text
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/app.rs"]
+#[rustfmt::skip]
+mod tests;

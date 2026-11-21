@@ -28,7 +28,7 @@ pub enum Hit {
     Window(WindowButton),
     /// Back, forward or reload, beside them.
     Nav(NavButton),
-    /// The gear: Ajustes, always there.
+    /// The gear: Settings, always there.
     Settings,
 }
 
@@ -109,7 +109,7 @@ pub struct GroupInfo<'a> {
     pub id: u64,
     pub name: &'a str,
     /// What its header says in the column: the name, or for an unnamed
-    /// group the site of its first tab ("Grupo" when there is none).
+    /// group the site of its first tab ("Group" when there is none).
     pub title: String,
     pub color: GroupColor,
     /// Folded: only its label shows.
@@ -189,7 +189,7 @@ pub struct Layout {
     pub extensions: Rect,
     /// The pinned extensions beside it, in order.
     pub extension_marks: Vec<Rect>,
-    /// The gear that opens Ajustes: at the right end of a top strip and of
+    /// The gear that opens Settings: at the right end of a top strip and of
     /// the caption row, at the foot of the column.
     pub settings: Rect,
     /// The window's caption band and buttons (there is no title bar).
@@ -214,6 +214,11 @@ impl Metrics {
     fn px(&self, v: i32) -> i32 {
         (v as f32 * self.scale).round() as i32
     }
+}
+
+#[cfg(all(test, nea_tests))]
+pub fn layout(tabs: &[TabInfo], width: i32, height: i32, vertical: bool, collapsed: bool, m: &Metrics) -> Layout {
+    layout_with(tabs, &[], width, height, vertical, collapsed, m, None)
 }
 
 /// `extensions`: with `Some(pinned)`, the strip also holds the extensions
@@ -942,7 +947,7 @@ fn paint_controls(g: &Painter, p: &Paint) {
             let (_, cy) = plus.center();
             draw_plus(g, RectF::new(mark_x, cy - px(8.0), mark_x + px(16.0), cy + px(8.0)), px(4.5), ink, p.scale);
             let text = RectF::new(mark_x + px(24.0), plus.top, plus.right - px(8.0), plus.bottom);
-            g.text("Nueva pestaña", text, Font::new(px(size::TEXT), size::REGULAR, Align::Leading), ink);
+            g.text("New tab", text, Font::new(px(size::TEXT), size::REGULAR, Align::Leading), ink);
         } else {
             draw_plus(g, plus, px(5.0), ink, p.scale);
         }
@@ -1454,3 +1459,8 @@ impl Motion {
         self.spin
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/tabbar.rs"]
+#[rustfmt::skip]
+mod tests;

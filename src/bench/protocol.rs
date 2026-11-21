@@ -106,7 +106,7 @@ pub const DEFAULT_WAIT_MS: u64 = 15_000;
 
 impl Request {
     pub fn parse(line: &str) -> Result<Request, String> {
-        serde_json::from_str(line.trim()).map_err(|e| format!("petición inválida: {e}"))
+        serde_json::from_str(line.trim()).map_err(|e| format!("invalid request: {e}"))
     }
 
     /// The longest the reply may take.
@@ -152,3 +152,8 @@ pub fn click_script(selector: &str) -> String {
          catch (e) {{ return {{ error: String(e && e.message || e) }}; }} }})()"
     )
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/bench/protocol.rs"]
+#[rustfmt::skip]
+mod tests;

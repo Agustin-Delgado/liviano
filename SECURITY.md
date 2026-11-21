@@ -1,48 +1,49 @@
-# Seguridad
+# Security
 
-## Cómo reportar una vulnerabilidad
+## Report a vulnerability
 
-**No abras un issue público.** Un fallo de seguridad se reporta en privado, así
-quien usa Nea tiene la corrección antes de que el problema se conozca.
+**Do not open a public issue.** Report a security problem privately. Then
+the users of Nea get the fix before other people know about the problem.
 
-En el repositorio de GitHub, pestaña *Security* → *Report a vulnerability*
-([enlace directo](https://github.com/Agustin-Delgado/nea/security/advisories/new)).
-Es un aviso de seguridad privado y el único canal: lo ve sólo quien mantiene
-el proyecto.
+In the GitHub repository, go to the *Security* tab → *Report a vulnerability*
+([direct link](https://github.com/Agustin-Delgado/nea/security/advisories/new)).
+This makes a private security advisory. It is the only channel. Only the
+maintainer of the project can see it.
 
-Incluí, si podés:
+If possible, include these items:
 
-- la versión de Nea (Ajustes → Actualizaciones) y de Windows;
-- qué pasa y qué esperabas que pasara;
-- los pasos para reproducirlo, o una prueba de concepto;
-- el impacto que le ves (qué podría hacer quien lo aproveche).
+- The version of Nea (Settings → Updates) and of Windows.
+- What happens and what you expected.
+- The steps to reproduce the problem, or a proof of concept.
+- The impact: what an attacker can do with the problem.
 
-## Qué pasa después
+## Next steps
 
-1. Respondemos dentro de los **3 días hábiles** para confirmar que lo recibimos.
-2. Lo evaluamos y te contamos la severidad y el plan dentro de los **10 días**.
-3. Publicamos la corrección por el actualizador firmado y, después, un aviso
-   que te acredita (salvo que prefieras quedar anónimo).
+1. We confirm that we received the report within **3 business days**.
+2. We assess the report. Within **10 days**, we tell you the severity and the
+   plan.
+3. We publish the fix through the signed updater. Then we publish an advisory
+   that credits you. If you prefer, the advisory does not name you.
 
-Pedimos no divulgar el problema hasta que la corrección esté publicada, o
-hasta 90 días desde el reporte, lo que ocurra primero.
+Do not disclose the problem until the fix is published or for 90 days after
+the report. The shorter period applies.
 
-## Alcance
+## Scope
 
-Interesan especialmente:
+These areas are of special interest:
 
-- el actualizador: verificación de la firma Ed25519, reemplazo del ejecutable,
-  descargas (`src/updater.rs`, `src/http.rs`);
-- el instalador por usuario (`src/installer.rs`);
-- la inyección de scripts en las páginas (modo lectura, ocultar elementos,
-  video flotante);
-- cualquier forma de que una página lea o cambie datos locales de Nea.
+- The updater: the Ed25519 signature check, the replacement of the
+  executable and the downloads (`src/updater.rs`, `src/http.rs`).
+- The per-user installer (`src/installer.rs`).
+- The script injection into pages (reader mode, hide element, floating
+  video).
+- Any way for a page to read or change the local data of Nea.
 
-Los fallos del motor WebView2 en sí se reportan a Microsoft
-(<https://msrc.microsoft.com>); si afectan a Nea de una forma particular,
-avisanos también.
+Report problems in the WebView2 engine itself to Microsoft
+(<https://msrc.microsoft.com>). If they affect Nea in a specific way, also
+tell us.
 
-## Versiones con soporte
+## Supported versions
 
-Sólo la última versión publicada recibe correcciones: el actualizador la
-instala sola una vez por día.
+Only the latest published version gets fixes. The updater installs it
+automatically once a day.

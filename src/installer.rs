@@ -97,10 +97,10 @@ fn env_path(name: &str) -> Option<PathBuf> {
 fn places() -> Result<Places, String> {
     let dir = env_path("NEA_INSTALL_DIR")
         .or_else(|| env_path("LOCALAPPDATA").map(|p| p.join("Programs").join(storage::APP_NAME)))
-        .ok_or("No se encontró %LOCALAPPDATA%.")?;
+        .ok_or("Cannot find %LOCALAPPDATA%.")?;
     let menu = env_path("NEA_START_MENU_DIR")
         .or_else(|| env_path("APPDATA").map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs")))
-        .ok_or("No se encontró %APPDATA%.")?;
+        .ok_or("Cannot find %APPDATA%.")?;
     let key = std::env::var("NEA_UNINSTALL_KEY")
         .ok()
         .filter(|k| k.len() > 9 && k[..9].eq_ignore_ascii_case(r"Software\"))
@@ -205,7 +205,7 @@ fn write_uninstall_entry(key_path: &str, exe: &Path, dir: &Path) -> Result<(), S
             None,
         );
         if status != ERROR_SUCCESS {
-            return Err(format!("No se pudo crear la entrada en Aplicaciones ({}).", status.0));
+            return Err(format!("Cannot create the entry in Apps ({}).", status.0));
         }
         let mut failed = None;
         for (name, value) in uninstall_values(exe, dir, size) {
@@ -223,7 +223,7 @@ fn write_uninstall_entry(key_path: &str, exe: &Path, dir: &Path) -> Result<(), S
         }
         let _ = RegCloseKey(key);
         match failed {
-            Some(name) => Err(format!("No se pudo escribir {name} en la entrada de Aplicaciones.")),
+            Some(name) => Err(format!("Cannot write {name} in the Apps entry.")),
             None => Ok(()),
         }
     }
@@ -234,7 +234,7 @@ fn create_shortcut(path: &Path, target: &Path, dir: &Path) -> windows::core::Res
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(target))?;
         link.SetWorkingDirectory(&HSTRING::from(dir))?;
-        link.SetDescription(&HSTRING::from("Navegador web"))?;
+        link.SetDescription(&HSTRING::from("Web browser"))?;
         link.SetIconLocation(&HSTRING::from(target), 0)?;
         link.cast::<IPersistFile>()?.Save(&HSTRING::from(path), true)
     }
@@ -250,18 +250,17 @@ fn same_file(a: &Path, b: &Path) -> bool {
 /// The copy, the license, the shortcut and the entry in Apps. Returns the
 /// installed executable.
 fn install_files(exe: &Path, places: &Places) -> Result<PathBuf, String> {
-    fs::create_dir_all(&places.dir).map_err(|e| format!("No se pudo crear {}: {e}", places.dir.display()))?;
+    fs::create_dir_all(&places.dir).map_err(|e| format!("Cannot create {}: {e}", places.dir.display()))?;
     let target = places.dir.join(EXE_NAME);
     // Installing over an open Nea works: the running file steps aside.
     if !same_file(exe, &target) {
-        updater::replace_exe(&target, exe).map_err(|e| format!("No se pudo copiar el programa: {e}"))?;
+        updater::replace_exe(&target, exe).map_err(|e| format!("Cannot copy the program: {e}"))?;
     }
     let _ = fs::write(places.dir.join("LICENSE.txt"), include_str!("../LICENSE"));
     if let Some(menu) = places.shortcut.parent() {
         let _ = fs::create_dir_all(menu);
     }
-    create_shortcut(&places.shortcut, &target, &places.dir)
-        .map_err(|e| format!("No se pudo crear el acceso directo: {e}"))?;
+    create_shortcut(&places.shortcut, &target, &places.dir).map_err(|e| format!("Cannot create the shortcut: {e}"))?;
     write_uninstall_entry(&places.key, &target, &places.dir)?;
     Ok(target)
 }
@@ -271,8 +270,8 @@ fn install(exe: &Path, quiet: bool) -> Result<(), String> {
     if webview2_version().is_none()
         && !quiet
         && message(
-            "Nea usa el motor WebView2 de Microsoft, que no está instalado en este equipo. \
-             Sin él no puede mostrar páginas.\n\n¿Abrir la descarga oficial de WebView2?",
+            "Nea uses the Microsoft WebView2 engine, which is not installed on this computer. \
+             Without it, Nea cannot show pages.\n\nOpen the official WebView2 download?",
             MB_YESNO | MB_ICONWARNING,
         )
     {
@@ -280,7 +279,10 @@ fn install(exe: &Path, quiet: bool) -> Result<(), String> {
     }
     let target = install_files(exe, &places)?;
     if !quiet
-        && message("Nea quedó instalado: está en el menú Inicio.\n\n¿Abrirlo ahora?", MB_YESNO | MB_ICONINFORMATION)
+        && message(
+            "Nea is installed. You can find it in the Start menu.\n\nOpen Nea now?",
+            MB_YESNO | MB_ICONINFORMATION,
+        )
     {
         let _ = std::process::Command::new(&target).spawn();
     }
@@ -313,7 +315,7 @@ fn remove_install_dir(dir: &Path, exe: &Path) -> Result<(), String> {
         }
         run_after_exit(&format!("del /f /q \"{}\"", parked.display()));
     }
-    fs::remove_dir_all(dir).map_err(|e| format!("No se pudo borrar {}: {e}", dir.display()))
+    fs::remove_dir_all(dir).map_err(|e| format!("Cannot delete {}: {e}", dir.display()))
 }
 
 fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
@@ -331,7 +333,7 @@ fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
         let data = storage::data_dir();
         message(
             &format!(
-                "Nea se desinstaló.\n\nTus marcadores, historial y ajustes quedan en {}. Borrá esa carpeta si no los querés guardar.",
+                "Nea is uninstalled.\n\nYour bookmarks, history and settings stay in {}. Delete that folder if you do not want to keep them.",
                 data.display()
             ),
             MB_OK | MB_ICONINFORMATION,
@@ -384,3 +386,8 @@ pub fn move_legacy_install() -> Option<i32> {
     run_after_exit(&format!("rmdir /s /q \"{}\"", legacy.dir.display()));
     Some(0)
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/installer.rs"]
+#[rustfmt::skip]
+mod tests;

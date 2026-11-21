@@ -298,51 +298,41 @@ fn count(n: usize, one: &str, many: &str) -> String {
     if n == 1 { format!("1 {one}") } else { format!("{n} {many}") }
 }
 
-fn could(n: usize) -> &'static str {
-    if n == 1 { "pudo" } else { "pudieron" }
-}
-
 /// What the person reads after an import.
 pub fn report(outcomes: &[Outcome], added: usize, existing: usize, failed_to_save: usize) -> String {
     let mut lines = Vec::new();
     if added > 0 {
-        lines.push(format!("Se importaron {}.", count(added, "contraseña", "contraseñas")));
+        lines.push(format!("Imported {}.", count(added, "password", "passwords")));
     }
     if existing == 1 {
-        lines.push("1 cuenta ya estaba guardada y no se tocó.".to_string());
+        lines.push("1 account was already saved. Nea did not change it.".to_string());
     } else if existing > 1 {
-        lines.push(format!("{existing} cuentas ya estaban guardadas y no se tocaron."));
+        lines.push(format!("{existing} accounts were already saved. Nea did not change them."));
     }
     if failed_to_save > 0 {
-        lines.push(format!(
-            "{} no se {} guardar en el Administrador de credenciales.",
-            count(failed_to_save, "contraseña", "contraseñas"),
-            could(failed_to_save)
-        ));
+        lines.push(format!("Cannot save {} in Credential Manager.", count(failed_to_save, "password", "passwords")));
     }
     for outcome in outcomes {
         if outcome.app_bound > 0 {
             lines.push(format!(
-                "No se {} importar {} de {name} (cifrado ligado a la aplicación); exportalas a CSV desde {name} e importá el CSV.",
-                could(outcome.app_bound),
-                count(outcome.app_bound, "contraseña", "contraseñas"),
+                "Cannot import {} from {name} (app-bound encryption). Export them to a CSV in {name}, then import the CSV.",
+                count(outcome.app_bound, "password", "passwords"),
                 name = outcome.name
             ));
         }
         if outcome.failed > 0 {
             lines.push(format!(
-                "{} de {} no se {} descifrar.",
-                count(outcome.failed, "contraseña", "contraseñas"),
-                outcome.name,
-                could(outcome.failed)
+                "Cannot decrypt {} from {}.",
+                count(outcome.failed, "password", "passwords"),
+                outcome.name
             ));
         }
         if outcome.unreadable {
-            lines.push(format!("No se pudo leer el perfil de {}.", outcome.name));
+            lines.push(format!("Cannot read the {} profile.", outcome.name));
         }
     }
     if lines.is_empty() {
-        lines.push("No había contraseñas para importar.".to_string());
+        lines.push("No passwords to import.".to_string());
     }
     lines.join("\n\n")
 }
@@ -363,13 +353,13 @@ pub fn run(owner: HWND, at: Option<POINT>) {
     let chosen = unsafe {
         let Ok(menu) = CreatePopupMenu() else { return };
         for (i, browser) in found.iter().enumerate() {
-            let _ = AppendMenuW(menu, MF_STRING, i + 1, &wide(&format!("Desde {}", browser.name)));
+            let _ = AppendMenuW(menu, MF_STRING, i + 1, &wide(&format!("From {}", browser.name)));
         }
         if found.is_empty() {
-            let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("No se encontraron otros navegadores"));
+            let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("No other browsers found"));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_CSV, w!("Desde un archivo CSV…"));
+        let _ = AppendMenuW(menu, MF_STRING, MENU_CSV, w!("From a CSV file…"));
         let point = at.unwrap_or_else(|| {
             let mut point = POINT::default();
             let _ = GetCursorPos(&mut point);
@@ -395,12 +385,12 @@ pub fn run(owner: HWND, at: Option<POINT>) {
         }
     };
     unsafe {
-        MessageBoxW(Some(owner), &wide(&text), w!("Importar contraseñas — Nea"), MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(Some(owner), &wide(&text), w!("Import passwords — Nea"), MB_OK | MB_ICONINFORMATION);
     }
 }
 
 fn import_csv(store: &Store, path: &Path) -> String {
-    let Ok(bytes) = std::fs::read(path) else { return "No se pudo leer el archivo.".to_string() };
+    let Ok(bytes) = std::fs::read(path) else { return "Cannot read the file.".to_string() };
     let text = Secret::new(String::from_utf8(bytes).unwrap_or_else(|e| {
         let mut bytes = e.into_bytes();
         let lossy = String::from_utf8_lossy(&bytes).into_owned();
@@ -408,18 +398,14 @@ fn import_csv(store: &Store, path: &Path) -> String {
         lossy
     }));
     let Some((logins, skipped)) = logins_from_csv(text.expose()) else {
-        return "El archivo no parece una exportación de contraseñas: le faltan las columnas url y password."
-            .to_string();
+        return "The file is not a password export. It has no url and password columns.".to_string();
     };
     let (added, existing, failed) = import(store, &logins);
     let mut message = report(&[], added, existing, failed);
     if skipped > 0 {
-        message.push_str(&format!(
-            "\n\n{} sin dirección web o sin contraseña.",
-            count(skipped, "fila quedó afuera", "filas quedaron afuera")
-        ));
+        message.push_str(&format!("\n\nSkipped {} with no web address or no password.", count(skipped, "row", "rows")));
     }
-    message.push_str("\n\nConviene borrar el archivo CSV: guarda las contraseñas sin cifrar.");
+    message.push_str("\n\nDelete the CSV file. It keeps the passwords without encryption.");
     message
 }
 
@@ -429,15 +415,14 @@ fn pick_csv(owner: HWND) -> Option<PathBuf> {
     let comdlg32 = Library::load(w!("comdlg32.dll"))?;
     let open: OpenFn = unsafe { comdlg32.function(c"GetOpenFileNameW") }?;
     let mut buffer = vec![0u16; 1024];
-    let filter: Vec<u16> =
-        "Contraseñas exportadas (*.csv)\0*.csv\0Todos los archivos\0*.*\0\0".encode_utf16().collect();
+    let filter: Vec<u16> = "Exported passwords (*.csv)\0*.csv\0All files\0*.*\0\0".encode_utf16().collect();
     let mut dialog = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner,
         lpstrFilter: PCWSTR(filter.as_ptr()),
         lpstrFile: PWSTR(buffer.as_mut_ptr()),
         nMaxFile: buffer.len() as u32,
-        lpstrTitle: w!("Importar contraseñas desde un CSV"),
+        lpstrTitle: w!("Import passwords from a CSV"),
         Flags: OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR,
         ..Default::default()
     };
@@ -446,3 +431,8 @@ fn pick_csv(owner: HWND) -> Option<PathBuf> {
         PathBuf::from(String::from_utf16_lossy(&buffer[..len]))
     })
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/vault_import.rs"]
+#[rustfmt::skip]
+mod tests;

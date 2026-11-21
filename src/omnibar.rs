@@ -1918,3 +1918,8 @@ fn set_hovered(list: HWND, row: Option<usize>) {
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/omnibar.rs"]
+#[rustfmt::skip]
+mod tests;

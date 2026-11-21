@@ -14,7 +14,7 @@ use serde::{Serialize, de::DeserializeOwned};
 pub const APP_NAME: &str = "Nea";
 /// What the window, the shortcut and the installed entry are called. A debug
 /// build says so, so it is never mistaken for the published one.
-pub const DISPLAY_NAME: &str = if cfg!(debug_assertions) { "Nea (desarrollo)" } else { "Nea" };
+pub const DISPLAY_NAME: &str = if cfg!(debug_assertions) { "Nea (development)" } else { "Nea" };
 
 /// Set when the folders of the former name could not be moved this launch
 /// (`legacy`): the session reads and writes them where they are.
@@ -160,3 +160,8 @@ fn write_loop() {
         CHANGED.notify_all();
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/storage.rs"]
+#[rustfmt::skip]
+mod tests;

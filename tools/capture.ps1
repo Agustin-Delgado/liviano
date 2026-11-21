@@ -1,22 +1,25 @@
 <#
 .SYNOPSIS
-  Captura las ventanas de un proceso de Nea en un PNG, sin activarlas.
+  Captures the windows of a Nea process to a PNG file. The script does not
+  activate the windows.
 
 .DESCRIPTION
-  Usa PrintWindow con PW_RENDERFULLCONTENT sobre cada ventana visible de
-  primer nivel del proceso (la principal, el campo flotante, la barra de
-  contraseñas, Ajustes) y las compone en el orden en que están apiladas, así
-  la captura muestra lo mismo que la pantalla aunque la ventana esté tapada.
-  No manda teclas ni clics y no trae la ventana al frente.
+  The script runs PrintWindow with PW_RENDERFULLCONTENT on each visible
+  top-level window of the process. These windows include the main window,
+  the floating field, the password prompt and Settings. The script puts
+  the windows together in their stacking order. Thus the capture shows the
+  same image as the screen, also when a different window covers Nea. The
+  script sends no keys or clicks. It does not move the window to the front.
 
-  PrintWindow no ve lo que dibuja DWM (esquinas redondeadas, sombra, borde):
-  las esquinas se recortan aquí con -Corner (el radio de Windows 11, 8 px a
-  100 %) para que la captura se parezca a la pantalla. -Corner 0 lo apaga.
+  PrintWindow does not capture what DWM draws (rounded corners, shadow and
+  border). The script cuts the corners with -Corner, so that the capture
+  looks like the screen. The default is the Windows 11 radius, 8 px at
+  100 %. -Corner 0 stops the corner cut.
 
 .EXAMPLE
-  tools\capture.ps1 -ProcessId 1234 -Out docs\capturas\claro-horizontal.png
+  tools\capture.ps1 -ProcessId 1234 -Out $env:TEMP\nea-light-top.png
 .EXAMPLE
-  tools\capture.ps1 -ProcessId 1234 -Out ajustes.png -Class NeaSettings
+  tools\capture.ps1 -ProcessId 1234 -Out settings.png -Class NeaSettings
 #>
 [CmdletBinding()]
 param(
@@ -173,7 +176,7 @@ public static class NeaCapture {
 
 $shots = [NeaCapture]::Windows([uint32]$ProcessId)
 if ($Class) { $shots = @($shots | Where-Object { $_.Class -eq $Class }) }
-if (-not $shots -or $shots.Count -eq 0) { throw "El proceso $ProcessId no tiene ventanas visibles" }
+if (-not $shots -or $shots.Count -eq 0) { throw "Process $ProcessId has no visible windows." }
 # The base is the biggest window (the browser, or the one asked for).
 $base = $shots | Sort-Object { ($_.Frame.Right - $_.Frame.Left) * ($_.Frame.Bottom - $_.Frame.Top) } -Descending | Select-Object -First 1
 $width = $base.Frame.Right - $base.Frame.Left

@@ -21,7 +21,7 @@
     article = null;
   }
   if (!article || !article.content) {
-    neaToast("Esta página no tiene un artículo para leer");
+    neaToast("This page has no article to read");
     return "none";
   }
 

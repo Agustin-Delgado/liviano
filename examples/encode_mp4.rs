@@ -66,7 +66,7 @@ fn parse_args() -> std::result::Result<Options, String> {
     let (mut gif, mut fps, mut quality, mut width, mut from, mut to) = (false, None, 70, None, 0, None);
     while let Some(arg) = args.next() {
         let mut number = |name: &str| -> std::result::Result<u64, String> {
-            args.next().and_then(|v| v.parse().ok()).ok_or_else(|| format!("{name} necesita un número"))
+            args.next().and_then(|v| v.parse().ok()).ok_or_else(|| format!("{name} needs a number"))
         };
         match arg.as_str() {
             "--gif" => gif = true,
@@ -79,14 +79,14 @@ fn parse_args() -> std::result::Result<Options, String> {
         }
     }
     let [timeline, out] = <[PathBuf; 2]>::try_from(positional)
-        .map_err(|_| "uso: encode_mp4 <timeline.txt> <salida.mp4|salida.gif> [--gif] [--fps N] ...".to_string())?;
+        .map_err(|_| "usage: encode_mp4 <timeline.txt> <output.mp4|output.gif> [--gif] [--fps N] ...".to_string())?;
     let fps = fps.unwrap_or(if gif { 12 } else { 30 }).clamp(1, 60);
     Ok(Options { timeline, out, gif, fps, quality: quality.min(100), width, from, to })
 }
 
 /// (capture time in ms, PNG path), sorted by time.
 fn read_timeline(path: &Path) -> std::result::Result<Vec<(u64, PathBuf)>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut frames: Vec<(u64, PathBuf)> = text
         .lines()
@@ -98,7 +98,7 @@ fn read_timeline(path: &Path) -> std::result::Result<Vec<(u64, PathBuf)>, String
         .collect();
     frames.sort_by_key(|(ms, _)| *ms);
     if frames.is_empty() {
-        return Err(format!("{} no tiene cuadros", path.display()));
+        return Err(format!("{} has no frames", path.display()));
     }
     Ok(frames)
 }
@@ -286,7 +286,7 @@ fn encode_mp4(options: &Options, frames: &[(u64, PathBuf)], picks: &[usize]) -> 
             sample.SetSampleDuration(duration)?;
             writer.WriteSample(stream, &sample)?;
             if n % 300 == 0 {
-                eprintln!("  {n}/{} cuadros", picks.len());
+                eprintln!("  {n}/{} frames", picks.len());
             }
         }
         writer.Finalize()?;
@@ -388,7 +388,7 @@ fn encode_gif(options: &Options, frames: &[(u64, PathBuf)], picks: &[usize]) -> 
             frame.WriteSource(&indexed, &rect)?;
             frame.Commit()?;
             if i % 50 == 0 {
-                eprintln!("  {i}/{} cuadros GIF", runs.len());
+                eprintln!("  {i}/{} GIF frames", runs.len());
             }
         }
         encoder.Commit()?;
@@ -421,7 +421,7 @@ fn main() {
     let times: Vec<u64> = clip.iter().map(|(ms, _)| *ms).collect();
     let picks = resample(&times, options.from.max(times[0]), to, options.fps);
     eprintln!(
-        "{} capturas -> {} cuadros a {} fps ({:.1} s)",
+        "{} captures -> {} frames at {} fps ({:.1} s)",
         clip.len(),
         picks.len(),
         options.fps,
@@ -437,8 +437,13 @@ fn main() {
             println!("{} ({:.1} MB)", options.out.display(), bytes as f64 / 1_048_576.0);
         }
         Err(e) => {
-            eprintln!("no se pudo codificar: {e}");
+            eprintln!("cannot encode: {e}");
             std::process::exit(1);
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/examples/encode_mp4.rs"]
+#[rustfmt::skip]
+mod tests;

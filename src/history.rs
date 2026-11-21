@@ -189,3 +189,8 @@ fn contains_folded(text: &str, lower: &str) -> bool {
     }
     text.to_lowercase().contains(lower)
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/history.rs"]
+#[rustfmt::skip]
+mod tests;

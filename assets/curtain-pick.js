@@ -85,7 +85,7 @@
   box.style.cssText =
     "position:fixed;display:none;box-sizing:border-box;background:rgba(214,51,51,.16);border:2px solid #d63333;border-radius:3px;pointer-events:none";
   const tip = document.createElement("div");
-  tip.textContent = "Clic: ocultar  ·  ↑ ↓: elegir el contenedor  ·  Esc: salir";
+  tip.textContent = "Click: hide  ·  ↑ ↓: select the container  ·  Esc: exit";
   tip.style.cssText =
     "position:fixed;left:50%;top:12px;transform:translateX(-50%);font:13px/1.4 'Segoe UI',system-ui,sans-serif;color:#fff;background:rgba(32,32,36,.92);padding:7px 14px;border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.25);white-space:nowrap;pointer-events:none";
   root.append(box, tip);

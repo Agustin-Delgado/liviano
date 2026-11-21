@@ -1,32 +1,32 @@
 Nea
-Copyright (c) 2026 Los autores de Nea. Licencia MIT (ver LICENSE).
+Copyright (c) 2026 The Nea authors. MIT license (see LICENSE).
 
-Referencia funcional: Search, de driceroland (https://github.com/driceroland/Search),
-licencia MIT. Nea reproduce sus ideas en Windows; no incluye su código, su
-nombre ni su ícono.
+Functional reference: Search, by driceroland (https://github.com/driceroland/Search),
+MIT license. Nea uses its ideas on Windows. Nea does not contain its code,
+its name or its icon.
 
-Componentes de terceros incluidos en el ejecutable
---------------------------------------------------
+Third-party components in the executable
+----------------------------------------
 
 Mozilla Readability 0.6.0 (assets/readability/Readability.js)
-  Copyright (c) 2010 Arc90 Inc. y colaboradores de Mozilla Readability.
-  Apache License 2.0 (texto completo en assets/readability/LICENSE.md).
-  Se usa sin modificar para el modo lectura.
+  Copyright (c) 2010 Arc90 Inc. and Mozilla Readability contributors.
+  Apache License 2.0 (full text in assets/readability/LICENSE.md).
+  Nea uses it without changes for reader mode.
 
-WebView2 SDK: cargador estático (WebView2LoaderStatic.lib, vía webview2-com-sys)
-  Copyright (c) Microsoft Corporation. Licencia del SDK de WebView2 (de tipo BSD).
+WebView2 SDK: static loader (WebView2LoaderStatic.lib, through webview2-com-sys)
+  Copyright (c) Microsoft Corporation. WebView2 SDK license (BSD type).
 
 webview2-com, webview2-com-sys, webview2-com-macros
-  Copyright (c) Microsoft Corporation y colaboradores. Licencia MIT.
+  Copyright (c) Microsoft Corporation and contributors. MIT license.
 
-windows, windows-core y crates asociados (windows-rs)
-  Copyright (c) Microsoft Corporation. Licencia MIT o Apache 2.0.
+windows, windows-core and related crates (windows-rs)
+  Copyright (c) Microsoft Corporation. MIT or Apache 2.0 license.
 
 ed25519-compact
-  Copyright (c) 2020-2026 Frank Denis. Licencia MIT.
+  Copyright (c) 2020-2026 Frank Denis. MIT license.
 
 serde, serde_json
-  Copyright (c) David Tolnay y colaboradores. Licencia MIT o Apache 2.0.
+  Copyright (c) David Tolnay and contributors. MIT or Apache 2.0 license.
 
-El runtime de WebView2 (el motor de Microsoft Edge) no se distribuye con
-Nea: se usa el que está instalado en Windows.
+Nea does not include the WebView2 runtime (the Microsoft Edge engine). Nea
+uses the runtime that is installed in Windows.

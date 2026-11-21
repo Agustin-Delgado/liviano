@@ -75,21 +75,21 @@ pub fn list(webview: &ICoreWebView2) {
         push(Event::Extension(HostEvent::Listed(Ok(engine))));
     });
     if !started {
-        push(Event::Extension(HostEvent::Listed(Err("el motor no admite extensiones".to_string()))));
+        push(Event::Extension(HostEvent::Listed(Err("the engine does not support extensions".to_string()))));
     }
 }
 
 /// Loads an unpacked folder into the profile (also how a store package,
 /// already unpacked, is installed). The profile keeps it between runs.
 /// Adding a path that is already loaded reloads it in place — same id,
-/// storage kept — which is what "Recargar" and a store update use; removing
-/// it first would reload it too, but wipes its storage (docs/extensiones.md).
+/// storage kept — which is what "Reload" and a store update use; removing
+/// it first would reload it too, but wipes its storage (docs/extensions.md).
 pub fn add(webview: &ICoreWebView2, folder: &str) {
     match profile(webview) {
         Some(profile) => add_with(&profile, folder),
         None => push(Event::Extension(HostEvent::Added(
             folder.to_string(),
-            Err("el motor no admite extensiones".to_string()),
+            Err("the engine does not support extensions".to_string()),
         ))),
     }
 }
@@ -122,8 +122,8 @@ fn add_with(profile: &ICoreWebView2Profile7, folder: &str) {
     let path = folder.to_string();
     let handler = ProfileAddBrowserExtensionCompletedHandler::create(Box::new(move |result, extension| {
         let outcome = match (result, extension) {
-            (Ok(()), Some(extension)) => id_and_name(&extension).ok_or_else(|| "sin datos".to_string()),
-            (Ok(()), None) => Err("sin datos".to_string()),
+            (Ok(()), Some(extension)) => id_and_name(&extension).ok_or_else(|| "no data".to_string()),
+            (Ok(()), None) => Err("no data".to_string()),
             (Err(error), _) => Err(describe(&error)),
         };
         push(Event::Extension(HostEvent::Added(path.clone(), outcome)));

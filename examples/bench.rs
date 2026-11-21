@@ -28,19 +28,19 @@ use std::{
 use protocol::{Action, Request};
 use serde_json::{Value, json};
 
-const USAGE: &str = "uso: bench [--pipe NOMBRE] <comando> [argumentos]
+const USAGE: &str = "usage: bench [--pipe NAME] <command> [arguments]
   ping | state | memory | shield | discard | quit
   open <url> [--background]
   wait [--tab N] [--timeout MS]
   text [--tab N]
-  screenshot [--tab N] [--path ARCHIVO.png]
+  screenshot [--tab N] [--path FILE.png]
   click <selector> [--tab N]
-  run <nombre> | run --keys <atajo>
-  type <texto> [--submit]
+  run <name> | run --keys <shortcut>
+  type <text> [--submit]
   close [--tab N]
-  raw <json>            una petición tal cual
-  stdin                 una petición JSON por línea desde la entrada
-  memtree <pid> [pid…]  memoria privada de esos procesos y sus hijos (sin el pipe)";
+  raw <json>            send one request as it is
+  stdin                 read one JSON request per line from the input
+  memtree <pid> [pid…]  private memory of these processes and their children (no pipe)";
 
 struct Args {
     positional: Vec<String>,
@@ -73,7 +73,7 @@ impl Args {
     }
 
     fn number(&self, name: &str) -> Result<Option<u64>, String> {
-        self.value(name).map(|v| v.parse::<u64>().map_err(|_| format!("{name} espera un número"))).transpose()
+        self.value(name).map(|v| v.parse::<u64>().map_err(|_| format!("{name} needs a number"))).transpose()
     }
 }
 
@@ -88,20 +88,18 @@ fn action(args: &Args) -> Result<Action, String> {
         "discard" => Action::Discard,
         "shield" => Action::Shield,
         "quit" => Action::Quit,
-        "open" => {
-            Action::Open { url: word(1).ok_or("open necesita una dirección")?, background: args.has("--background") }
-        }
+        "open" => Action::Open { url: word(1).ok_or("open needs an address")?, background: args.has("--background") },
         "wait" => Action::Wait { tab, timeout_ms: args.number("--timeout")? },
         "text" => Action::Text { tab },
         "screenshot" => Action::Screenshot { tab, path: args.value("--path").map(str::to_string) },
-        "click" => Action::Click { tab, selector: word(1).ok_or("click necesita un selector CSS")?, gesture: false },
+        "click" => Action::Click { tab, selector: word(1).ok_or("click needs a CSS selector")?, gesture: false },
         "run" => match args.value("--keys") {
             Some(keys) => Action::Run { name: None, keys: Some(keys.to_string()) },
-            None => Action::Run { name: Some(word(1).ok_or("run necesita un comando o --keys")?), keys: None },
+            None => Action::Run { name: Some(word(1).ok_or("run needs a command or --keys")?), keys: None },
         },
         "type" => Action::Type { text: word(1).unwrap_or_default(), submit: args.has("--submit") },
         "close" => Action::Close { tab },
-        other => return Err(format!("comando desconocido: {other}\n{USAGE}")),
+        other => return Err(format!("unknown command: {other}\n{USAGE}")),
     })
 }
 
@@ -117,7 +115,7 @@ fn connect(name: &str) -> Result<File, String> {
         match OpenOptions::new().read(true).write(true).open(name) {
             Ok(file) => return Ok(file),
             Err(e) if Instant::now() >= deadline => {
-                return Err(format!("no se pudo abrir {name}: {e} (¿está activo el control por script?)"));
+                return Err(format!("cannot open {name}: {e} (is script control on?)"));
             }
             Err(_) => std::thread::sleep(Duration::from_millis(150)),
         }
@@ -130,10 +128,10 @@ fn exchange(file: &File, reader: &mut BufReader<&File>, line: &str) -> Result<Va
         .write_all(line.trim().as_bytes())
         .and_then(|_| writer.write_all(b"\n"))
         .and_then(|_| writer.flush())
-        .map_err(|e| format!("no se pudo escribir en el pipe: {e}"))?;
+        .map_err(|e| format!("cannot write to the pipe: {e}"))?;
     let mut answer = String::new();
-    reader.read_line(&mut answer).map_err(|e| format!("no se pudo leer el pipe: {e}"))?;
-    serde_json::from_str(&answer).map_err(|e| format!("respuesta ilegible ({e}): {answer}"))
+    reader.read_line(&mut answer).map_err(|e| format!("cannot read the pipe: {e}"))?;
+    serde_json::from_str(&answer).map_err(|e| format!("unreadable response ({e}): {answer}"))
 }
 
 /// Private working set of every listed process and its descendants, each
@@ -167,7 +165,7 @@ fn main() -> ExitCode {
         return match pids {
             Ok(pids) if !pids.is_empty() => print_and_code(&memtree(&pids)),
             _ => {
-                eprintln!("memtree necesita uno o más pid");
+                eprintln!("memtree needs one or more PIDs");
                 ExitCode::from(2)
             }
         };

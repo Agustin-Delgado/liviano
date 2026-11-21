@@ -68,3 +68,8 @@ impl Bookmarks {
         found
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/bookmarks.rs"]
+#[rustfmt::skip]
+mod tests;

@@ -20,6 +20,7 @@ use crate::{
 
 /// Kept apart from the default profile, so an InPrivate session never shares
 /// the off-the-record state of anything else the engine might create.
+// The profile folder is in the user data: keep its name.
 const PROFILE_NAME: &str = "Privado";
 
 /// Same as `web::create_controller`, with the controller options that make
@@ -111,7 +112,7 @@ pub(super) fn saved_groups<W>(list: &TabList<W>) -> Vec<crate::tab_groups::Saved
 /// The window title for the active tab (`label`, and whether it is private).
 pub(super) fn window_title(active: Option<(&str, bool)>) -> String {
     match active {
-        Some((label, true)) => format!("{label} — {} (pestaña privada)", crate::storage::DISPLAY_NAME),
+        Some((label, true)) => format!("{label} — {} (private tab)", crate::storage::DISPLAY_NAME),
         Some((label, false)) => format!("{label} — {}", crate::storage::DISPLAY_NAME),
         None => crate::storage::DISPLAY_NAME.to_string(),
     }
@@ -131,3 +132,8 @@ impl App {
         if self.tabs.has_private() { web.close() } else { close_last(web) }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/private_tabs.rs"]
+#[rustfmt::skip]
+mod tests;

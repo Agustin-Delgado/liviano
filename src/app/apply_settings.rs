@@ -1,4 +1,4 @@
-//! Ajustes, as the app receives them: each change from the settings window
+//! Settings, as the app receives them: each change from the settings window
 //! is applied at once — theme, shortcuts, timers — and written to settings.json.
 
 use super::{App, with_app};

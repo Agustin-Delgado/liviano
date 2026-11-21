@@ -344,7 +344,7 @@ pub fn attach(webview: &ICoreWebView2) -> Result<()> {
         webview.AddScriptToExecuteOnDocumentCreated(&HSTRING::from(boot_script()), &handler)?;
         webview.add_WebResourceRequested(
             &WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
-                let _doing = crate::diag::doing(&"filtro:solicitud", 0);
+                let _doing = crate::diag::doing(&"filter:request", 0);
                 let Some(args) = args else { return Ok(()) };
                 let mut uri = PWSTR::null();
                 args.Request()?.Uri(&mut uri)?;
@@ -381,3 +381,8 @@ pub fn attach(webview: &ICoreWebView2) -> Result<()> {
     }
     Ok(())
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/shield/mod.rs"]
+#[rustfmt::skip]
+mod tests;

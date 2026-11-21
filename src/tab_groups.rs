@@ -69,15 +69,15 @@ impl GroupColor {
     /// What the menu calls it.
     pub fn label(self) -> &'static str {
         match self {
-            GroupColor::Grey => "Gris",
-            GroupColor::Blue => "Azul",
-            GroupColor::Red => "Rojo",
-            GroupColor::Yellow => "Amarillo",
-            GroupColor::Green => "Verde",
-            GroupColor::Pink => "Rosa",
-            GroupColor::Purple => "Violeta",
-            GroupColor::Cyan => "Cian",
-            GroupColor::Orange => "Naranja",
+            GroupColor::Grey => "Grey",
+            GroupColor::Blue => "Blue",
+            GroupColor::Red => "Red",
+            GroupColor::Yellow => "Yellow",
+            GroupColor::Green => "Green",
+            GroupColor::Pink => "Pink",
+            GroupColor::Purple => "Purple",
+            GroupColor::Cyan => "Cyan",
+            GroupColor::Orange => "Orange",
         }
     }
 }
@@ -98,7 +98,7 @@ impl Group {
     /// What a menu or the field calls it.
     pub fn title(&self) -> String {
         if self.name.trim().is_empty() {
-            format!("Grupo sin nombre ({})", self.color.label().to_lowercase())
+            format!("Unnamed group ({})", self.color.label().to_lowercase())
         } else {
             self.name.clone()
         }
@@ -387,3 +387,29 @@ impl<W> TabList<W> {
         self.normalize_groups();
     }
 }
+
+#[cfg(all(test, nea_tests))]
+pub(crate) fn contiguous<W>(list: &TabList<W>) -> bool {
+    let mut seen: Vec<u64> = Vec::new();
+    let mut previous: Option<u64> = None;
+    for tab in &list.tabs {
+        if tab.group != previous {
+            if let Some(g) = tab.group {
+                if seen.contains(&g) {
+                    return false;
+                }
+                seen.push(g);
+            }
+            previous = tab.group;
+        }
+        if tab.pinned && tab.group.is_some() {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/tab_groups.rs"]
+#[rustfmt::skip]
+mod tests;

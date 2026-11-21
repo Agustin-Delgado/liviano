@@ -405,10 +405,10 @@ def build():
 
     DOCS.mkdir(parents=True, exist_ok=True)
     light[256].save(DOCS / "logo-256.png")
-    dark[256].save(DOCS / "logo-256-oscuro.png")
+    dark[256].save(DOCS / "logo-256-dark.png")
     small = [16, 20, 24, 32, 40, 48, 64]
-    size_row([light[s] for s in small], LIGHT_BG, 1).save(DOCS / "tamanos-claro.png")
-    size_row([dark[s] for s in small], DARK_BG, 1).save(DOCS / "tamanos-oscuro.png")
+    size_row([light[s] for s in small], LIGHT_BG, 1).save(DOCS / "sizes-light.png")
+    size_row([dark[s] for s in small], DARK_BG, 1).save(DOCS / "sizes-dark.png")
     tiny = [16, 20, 24, 32, 48]
     stacked(
         [
@@ -417,7 +417,7 @@ def build():
             size_row([dark[s] for s in tiny], LIGHT_BG, 8),
             size_row([dark[s] for s in tiny], DARK_BG, 8),
         ]
-    ).save(DOCS / "tamanos-chicos-ampliados.png")
+    ).save(DOCS / "small-sizes-enlarged.png")
 
 
 if __name__ == "__main__":

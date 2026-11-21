@@ -1,13 +1,13 @@
 //! Extensions as the person meets them: the puzzle button and its native
-//! menu, the pinned ones beside it, "Instalar extensión" in the field when a
+//! menu, the pinned ones beside it, "Install extension" in the field when a
 //! Web Store link is pasted, the developer's unpacked folders, and the
-//! section in Ajustes. What is installed lives in `extensions::Registry`;
+//! section in Settings. What is installed lives in `extensions::Registry`;
 //! what the engine has loaded is brought in line with it (`sync_extensions`)
 //! whenever a view exists to reach the profile through.
 //!
 //! WebView2 draws no extension UI (no toolbar, no popup bubble, no side
 //! panel), so a popup, options page or side panel opens as a tab
-//! (docs/extensiones.md).
+//! (docs/extensions.md).
 
 use std::path::PathBuf;
 
@@ -134,9 +134,7 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
                     if let Some(name) = name
                         && confirm(
                             hwnd,
-                            &format!(
-                                "¿Quitar «{name}»?\n\nSe borran sus datos y deja de funcionar en todas las pestañas."
-                            ),
+                            &format!("Remove '{name}'?\n\nNea deletes its data, and it stops working in all tabs."),
                         )
                     {
                         with_app(|app| app.remove_extension(index, &name));
@@ -155,7 +153,7 @@ fn confirm(owner: HWND, text: &str) -> bool {
         MessageBoxW(
             Some(owner),
             &HSTRING::from(text),
-            w!("Extensiones — Nea"),
+            w!("Extensions — Nea"),
             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
         ) == IDYES
     }
@@ -167,7 +165,7 @@ fn pick_folder(owner: HWND) -> Option<PathBuf> {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
         let options = dialog.GetOptions().ok()?;
         dialog.SetOptions(options | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM).ok()?;
-        let _ = dialog.SetTitle(w!("Cargar extensión sin empaquetar: elegí la carpeta con manifest.json"));
+        let _ = dialog.SetTitle(w!("Load unpacked extension: select the folder with manifest.json"));
         dialog.Show(Some(owner)).ok()?;
         let item = dialog.GetResult().ok()?;
         let path = item.GetDisplayName(SIGDN_FILESYSPATH).ok()?;
@@ -197,7 +195,7 @@ fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
 }
 
 fn source_label(extension: &Extension) -> &'static str {
-    if extension.unpacked() { "sin empaquetar" } else { "Chrome Web Store" }
+    if extension.unpacked() { "Unpacked" } else { "Chrome Web Store" }
 }
 
 impl App {
@@ -225,8 +223,8 @@ impl App {
     pub(super) fn extension_row(&self, text: &str) -> Option<(String, Row)> {
         let id = webstore::extension_id_from_link(text)?;
         let label = match self.extensions.registry.find_store(&id).map(|i| &self.extensions.registry.extensions[i]) {
-            Some(installed) => format!("Actualizar la extensión «{}» desde la Chrome Web Store", installed.name),
-            None => format!("Instalar extensión de la Chrome Web Store    {id}"),
+            Some(installed) => format!("Update the extension '{}' from the Chrome Web Store", installed.name),
+            None => format!("Install extension from the Chrome Web Store    {id}"),
         };
         Some((label, Row::InstallExtension(id)))
     }
@@ -260,7 +258,7 @@ impl App {
         self.refresh_extension_views();
     }
 
-    /// Strip, Ajustes and storage after a change of the list.
+    /// Strip, Settings and storage after a change of the list.
     fn refresh_extension_views(&mut self) {
         self.relayout_soft();
         self.sync_settings_extensions();
@@ -338,7 +336,7 @@ impl App {
                 extension_host::apply(&webview, plan.enable, plan.remove);
                 self.extensions.registry.save();
             }
-            HostEvent::Listed(Err(error)) => self.extension_notice(format!("Extensiones: {error}")),
+            HostEvent::Listed(Err(error)) => self.extension_notice(format!("Extensions: {error}")),
             HostEvent::Added(path, result) => {
                 self.extensions.adding.retain(|p| *p != path);
                 if let Some(at) = self.extensions.restore.iter().position(|(p, _)| *p == path) {
@@ -362,11 +360,11 @@ impl App {
                             extension_host::apply(&webview, vec![(id, false)], Vec::new());
                         }
                         self.save_extensions();
-                        self.extension_notice(format!("Extensión lista: {name}"));
+                        self.extension_notice(format!("Extension ready: {name}"));
                     }
                     Err(error) => {
                         let name = self.extensions.registry.extensions[index].name.clone();
-                        self.extension_notice(format!("No se pudo cargar «{name}»: {error}"));
+                        self.extension_notice(format!("Cannot load '{name}': {error}"));
                     }
                 }
             }
@@ -381,7 +379,7 @@ impl App {
             return;
         }
         self.extensions.installing.push(id.to_string());
-        self.extension_notice("Descargando la extensión de la Chrome Web Store…".to_string());
+        self.extension_notice("Downloading the extension from the Chrome Web Store…".to_string());
         extensions::install_in_background(self.hwnd.0 as isize, id.to_string(), browser_version());
     }
 
@@ -401,19 +399,19 @@ impl App {
                             // folder loads it, or reloads it in place.
                             if let Some(webview) = self.any_webview() {
                                 self.load_folder(&webview, &path);
-                                self.extension_notice(format!("Instalada: {name}. Cargándola…"));
+                                self.extension_notice(format!("Installed: {name}. Loading…"));
                             } else {
                                 self.extensions.synced = false;
-                                self.extension_notice(format!("Instalada: {name}. Se carga con la próxima pestaña."));
+                                self.extension_notice(format!("Installed: {name}. It loads with the next tab."));
                             }
                         }
                         Some(false) => self.extension_notice(format!(
-                            "Instalada: {name}. Se activa al reiniciar Nea: sin extensiones el motor arranca sin ellas, para ahorrar memoria."
+                            "Installed: {name}. It starts when you restart Nea. With no extensions, the engine starts without extension support to save memory."
                         )),
-                        None => self.extension_notice(format!("Instalada: {name}.")),
+                        None => self.extension_notice(format!("Installed: {name}.")),
                     }
                 }
-                Err(error) => self.extension_notice(format!("No se pudo instalar la extensión: {error}")),
+                Err(error) => self.extension_notice(format!("Cannot install the extension: {error}")),
             }
         }
     }
@@ -432,11 +430,11 @@ impl App {
                         }
                         None => self.extensions.synced = false,
                     },
-                    Some(false) => self.extension_notice(format!("Agregada: {name}. Se activa al reiniciar Nea.")),
-                    None => self.extension_notice(format!("Agregada: {name}.")),
+                    Some(false) => self.extension_notice(format!("Added: {name}. It starts when you restart Nea.")),
+                    None => self.extension_notice(format!("Added: {name}.")),
                 }
             }
-            Err(error) => self.extension_notice(format!("No se pudo cargar {}: {error}", folder.display())),
+            Err(error) => self.extension_notice(format!("Cannot load {}: {error}", folder.display())),
         }
     }
 
@@ -453,12 +451,8 @@ impl App {
         if self.extensions.engine_on == Some(true) {
             self.sync_extensions();
         }
-        let state = if enabled { "habilitada" } else { "deshabilitada" };
-        let tail = if self.restart_needed() {
-            " Reiniciá Nea para que el cambio libere o active el soporte de extensiones."
-        } else {
-            ""
-        };
+        let state = if enabled { "enabled" } else { "disabled" };
+        let tail = if self.restart_needed() { " Restart Nea to turn extension support on or off." } else { "" };
         self.extension_notice(format!("{name}: {state}.{tail}"));
     }
 
@@ -473,7 +467,7 @@ impl App {
         let Some(extension) = self.extensions.registry.extensions.get_mut(index) else { return };
         if let Err(error) = extensions::refresh(extension) {
             let name = extension.name.clone();
-            self.extension_notice(format!("No se pudo recargar «{name}»: {error}"));
+            self.extension_notice(format!("Cannot reload '{name}': {error}"));
             return;
         }
         let (path, name) = (extension.path.clone(), extension.name.clone());
@@ -481,9 +475,9 @@ impl App {
         match (self.extensions.engine_on, self.any_webview()) {
             (Some(true), Some(webview)) => {
                 self.load_folder(&webview, &path);
-                self.extension_notice(format!("Recargando «{name}»…"));
+                self.extension_notice(format!("Reloading '{name}'…"));
             }
-            _ => self.extension_notice(format!("«{name}» se recarga cuando el motor tenga extensiones.")),
+            _ => self.extension_notice(format!("'{name}' reloads when the engine has extension support.")),
         }
     }
 
@@ -498,7 +492,7 @@ impl App {
         }
         extensions::delete_files(&extension);
         self.save_extensions();
-        self.extension_notice(format!("Quitada: {name}"));
+        self.extension_notice(format!("Removed: {name}"));
     }
 
     /// Opens one of the extension's pages in a tab next to the active one.
@@ -524,7 +518,7 @@ impl App {
     }
 
     /// The puzzle button's menu: every extension with what can be done with
-    /// it, then installing and Ajustes.
+    /// it, then installing and Settings.
     pub(super) fn extensions_menu(&mut self) {
         let store_here = self
             .tabs
@@ -549,9 +543,9 @@ impl App {
                 let base = MENU_BASE + i * MENU_STRIDE;
                 let usable = engine_on && extension.enabled && extension.engine_id.is_some();
                 let pages = [
-                    (ITEM_POPUP, &extension.popup, "Abrir su ventana emergente (en una pestaña)"),
-                    (ITEM_OPTIONS, &extension.options, "Opciones"),
-                    (ITEM_SIDE_PANEL, &extension.side_panel, "Panel lateral (en una pestaña)"),
+                    (ITEM_POPUP, &extension.popup, "Open pop-up (in a tab)"),
+                    (ITEM_OPTIONS, &extension.options, "Options"),
+                    (ITEM_SIDE_PANEL, &extension.side_panel, "Side panel (in a tab)"),
                 ];
                 for (item, page, label) in pages {
                     if page.is_some() {
@@ -561,35 +555,32 @@ impl App {
                 if pages.iter().any(|(_, p, _)| p.is_some()) {
                     append(sub, MF_SEPARATOR, 0, "");
                 }
-                append(sub, MF_STRING | check(extension.enabled), base + ITEM_ENABLED, "Habilitada");
-                append(sub, MF_STRING | check(extension.pinned), base + ITEM_PINNED, "Fijar junto al botón");
+                append(sub, MF_STRING | check(extension.enabled), base + ITEM_ENABLED, "Enabled");
+                append(sub, MF_STRING | check(extension.pinned), base + ITEM_PINNED, "Pin next to the button");
                 if extension.unpacked() {
-                    append(sub, MF_STRING, base + ITEM_RELOAD, "Recargar desde la carpeta");
+                    append(sub, MF_STRING, base + ITEM_RELOAD, "Reload from folder");
                 }
-                append(sub, MF_STRING, base + ITEM_REMOVE, "Quitar…");
+                append(sub, MF_STRING, base + ITEM_REMOVE, "Remove…");
                 append(sub, MF_SEPARATOR, 0, "");
-                let about = format!("Versión {} · {}", extension.version, source_label(extension));
+                let about = format!("Version {} · {}", extension.version, source_label(extension));
                 append(sub, MF_STRING | MF_GRAYED, MENU_NOTE, &about);
-                let title = if extension.enabled {
-                    extension.name.clone()
-                } else {
-                    format!("{} (deshabilitada)", extension.name)
-                };
+                let title =
+                    if extension.enabled { extension.name.clone() } else { format!("{} (disabled)", extension.name) };
                 let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, &HSTRING::from(title));
             }
             if !self.extensions.registry.extensions.is_empty() {
                 append(menu, MF_SEPARATOR, 0, "");
             }
             if store_here.is_some() {
-                append(menu, MF_STRING, MENU_INSTALL_HERE, "Instalar la extensión de esta página");
+                append(menu, MF_STRING, MENU_INSTALL_HERE, "Install extension from this page");
             }
-            append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Cargar extensión sin empaquetar…");
-            append(menu, MF_STRING, MENU_SETTINGS, "Extensiones en Ajustes…");
+            append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Load unpacked extension…");
+            append(menu, MF_STRING, MENU_SETTINGS, "Extensions in Settings…");
             append(menu, MF_SEPARATOR, 0, "");
             let note = if self.restart_needed() {
-                "Reiniciá Nea para aplicar los cambios de extensiones"
+                "Restart Nea to apply the extension changes"
             } else {
-                "Cada extensión habilitada suma procesos y memoria"
+                "Each enabled extension adds processes and memory"
             };
             append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, note);
 
@@ -636,7 +627,7 @@ impl App {
         }
     }
 
-    // ---------- Ajustes ----------
+    // ---------- Settings ----------
 
     /// Wires the Extensiones section of an open settings window.
     pub(super) fn attach_settings_extensions(&mut self) {
@@ -655,9 +646,9 @@ impl App {
                 if !e.version.is_empty() {
                     parts.push(e.version.clone());
                 }
-                parts.push(if e.enabled { "habilitada" } else { "deshabilitada" }.to_string());
+                parts.push(if e.enabled { "enabled" } else { "disabled" }.to_string());
                 if e.pinned {
-                    parts.push("fijada".to_string());
+                    parts.push("pinned".to_string());
                 }
                 parts.push(source_label(e).to_string());
                 parts.join("  ·  ")
@@ -665,12 +656,12 @@ impl App {
             .collect();
         let enabled = self.extensions.registry.extensions.iter().filter(|e| e.enabled).count();
         let note = if self.restart_needed() {
-            "Reiniciá Nea para aplicar los cambios: el soporte de extensiones se decide al arrancar el motor."
-                .to_string()
+            "Restart Nea to apply the changes. The engine sets extension support when it starts.".to_string()
         } else if enabled == 0 {
-            "Sin extensiones habilitadas el motor arranca sin soporte de extensiones: no gastan memoria.".to_string()
+            "With no enabled extensions, the engine starts without extension support and uses no memory for it."
+                .to_string()
         } else {
-            format!("{enabled} habilitada(s). Cada una suma procesos propios y memoria (en torno a 20-40 MB).")
+            format!("{enabled} enabled. Each one adds its own processes and memory (about 20-40 MB).")
         };
         settings_window::set_extensions(&rows, &note);
     }

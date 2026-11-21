@@ -275,7 +275,7 @@ impl App {
             .iter()
             .filter(|t| !shown.contains(&t.id) && (fuzzy_match(text, t.label()) || fuzzy_match(text, &t.url)))
             .take(6)
-            .map(|t| (format!("Pestaña: {}    {}", t.label(), omnibox::display_host(&t.url)), Row::Switch(t.id)));
+            .map(|t| (format!("Tab: {}    {}", t.label(), omnibox::display_host(&t.url)), Row::Switch(t.id)));
         let history = self.history.suggest(text, 6, unix_now()).into_iter().map(|e| {
             let address = omnibox::strip_for_match(&e.url);
             let title = if e.title.is_empty() { address } else { &e.title };

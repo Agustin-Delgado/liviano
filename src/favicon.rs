@@ -254,3 +254,8 @@ fn fetch(view: &ICoreWebView2, window: isize) {
         let _ = view.GetFavicon(COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, &handler);
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/favicon.rs"]
+#[rustfmt::skip]
+mod tests;

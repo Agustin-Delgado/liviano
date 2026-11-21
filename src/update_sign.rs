@@ -19,7 +19,7 @@ pub fn signed_prefix(version: &str) -> Vec<u8> {
 }
 
 // The app only reads signatures; writing them is the signing tool's job.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg_attr(not(all(test, nea_tests)), allow(dead_code))]
 pub fn to_hex(bytes: &[u8]) -> String {
     const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);

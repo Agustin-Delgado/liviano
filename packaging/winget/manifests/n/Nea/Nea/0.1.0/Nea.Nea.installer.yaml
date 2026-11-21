@@ -1,4 +1,4 @@
-# Ejemplo, sin publicar (ver Nea.Nea.yaml).
+# Sample, not published (see Nea.Nea.yaml).
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
 PackageIdentifier: Nea.Nea
 PackageVersion: 0.1.0

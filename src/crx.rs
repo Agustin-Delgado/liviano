@@ -70,16 +70,16 @@ impl Error {
     /// What the person is told.
     pub fn describe(&self) -> String {
         match self {
-            Error::NotCrx => "lo descargado no es un paquete de extensión (CRX)".to_string(),
-            Error::UnsupportedVersion(v) => format!("formato CRX{v} no soportado (sólo CRX3)"),
-            Error::Malformed => "el paquete está dañado".to_string(),
-            Error::NoDeveloperProof => "el paquete no trae la firma del desarrollador".to_string(),
-            Error::NotFromWebStore => "el paquete no está firmado por la Chrome Web Store".to_string(),
-            Error::BadSignature => "la firma del paquete no es válida".to_string(),
+            Error::NotCrx => "the download is not an extension package (CRX)".to_string(),
+            Error::UnsupportedVersion(v) => format!("CRX{v} format not supported (CRX3 only)"),
+            Error::Malformed => "the package is damaged".to_string(),
+            Error::NoDeveloperProof => "the package has no developer signature".to_string(),
+            Error::NotFromWebStore => "the Chrome Web Store did not sign the package".to_string(),
+            Error::BadSignature => "the package signature is not valid".to_string(),
             Error::WrongId { expected, found } => {
-                format!("el paquete es de otra extensión ({found}, se esperaba {expected})")
+                format!("the package is for a different extension ({found}, expected {expected})")
             }
-            Error::Crypto => "no se pudo verificar la firma en este equipo".to_string(),
+            Error::Crypto => "cannot verify the signature on this computer".to_string(),
         }
     }
 }
@@ -175,6 +175,12 @@ pub fn parse(file: &[u8]) -> Result<Package<'_>, Error> {
 /// letter from 'a' to 'p'.
 pub fn id_from_hash(hash: &[u8]) -> String {
     hash.iter().take(16).flat_map(|b| [b >> 4, b & 0x0f]).map(|n| (b'a' + n) as char).collect()
+}
+
+/// The id Chromium gives an extension with this public key (DER).
+#[cfg(all(test, nea_tests))]
+pub fn id_from_key(public_key: &[u8]) -> Option<String> {
+    sha256(&[public_key]).map(|h| id_from_hash(&h))
 }
 
 /// An id as the store and the engine write it: 32 letters a-p.
@@ -380,3 +386,14 @@ pub fn base64(data: &[u8]) -> String {
     }
     out
 }
+
+/// Not part of the format: used by the tests to build packages.
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/support/crx_testing.rs"]
+#[rustfmt::skip]
+pub(crate) mod testing;
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/crx.rs"]
+#[rustfmt::skip]
+mod tests;

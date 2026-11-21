@@ -1,5 +1,5 @@
 //! Real fades for the app's own top-level popups (the field, the hover
-//! card, the password bar, the split hint, Ajustes): the window is layered
+//! card, the password bar, the split hint, Settings): the window is layered
 //! and its whole-window opacity moves, children included, so a native edit
 //! fades with the panel it sits in. A fade can also carry a short slide (a
 //! toast's rise).
@@ -134,7 +134,7 @@ pub fn fade_in(hwnd: HWND, spec: Spec, max: u8, rise: i32) {
     anim::drive(step);
 }
 
-/// Like `fade_in`, for a main window (Ajustes): layered only while it
+/// Like `fade_in`, for a main window (Settings): layered only while it
 /// fades, as any other window afterwards.
 pub fn fade_in_window(hwnd: HWND, spec: Spec) {
     fade_in(hwnd, spec, 255, 0);

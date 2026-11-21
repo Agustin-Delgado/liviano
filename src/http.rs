@@ -93,9 +93,9 @@ fn open(handle: *mut core::ffi::c_void, what: &str) -> Result<Handle, String> {
 /// Streams the body of a 200 response into `sink`, at most `limit` bytes.
 /// Redirects are followed (WinHTTP never follows https to http).
 pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
-    let parsed = parse(url).ok_or_else(|| format!("dirección inválida: {url}"))?;
+    let parsed = parse(url).ok_or_else(|| format!("invalid address: {url}"))?;
     if !allowed(&parsed) {
-        return Err(format!("solo https: {url}"));
+        return Err(format!("https only: {url}"));
     }
     unsafe {
         let agent = HSTRING::from(format!("Nea/{}", env!("CARGO_PKG_VERSION")));
@@ -119,8 +119,8 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             ),
             "WinHttpOpenRequest",
         )?;
-        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|e| format!("sin conexión ({})", e.code()))?;
-        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|e| format!("sin respuesta ({})", e.code()))?;
+        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|e| format!("no connection ({})", e.code()))?;
+        WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|e| format!("no response ({})", e.code()))?;
         let mut status = 0u32;
         let mut size = std::mem::size_of::<u32>() as u32;
         WinHttpQueryHeaders(
@@ -146,9 +146,14 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             }
             total += read as u64;
             if total > limit {
-                return Err(format!("respuesta de más de {limit} bytes"));
+                return Err(format!("response larger than {limit} bytes"));
             }
             sink.write_all(&buffer[..read as usize]).map_err(|e| e.to_string())?;
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/http.rs"]
+#[rustfmt::skip]
+mod tests;

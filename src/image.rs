@@ -163,3 +163,8 @@ pub fn stream_bytes(stream: &IStream) -> Option<Vec<u8>> {
         Some(data)
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/image.rs"]
+#[rustfmt::skip]
+mod tests;

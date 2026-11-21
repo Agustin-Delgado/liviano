@@ -1,82 +1,82 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo/nea-dark.svg">
-    <img src="assets/logo/nea.svg" width="96" height="96" alt="Logo de Nea: una pluma blanca sobre un cuadrado grafito">
+    <img src="assets/logo/nea.svg" width="96" height="96" alt="Nea logo: a white feather on a graphite square">
   </picture>
 </p>
 
 <h1 align="center">Nea</h1>
 
-<p align="center">Nea. Un navegador para Windows que gasta poca memoria: una fila de pestañas, un campo y la página.</p>
+<p align="center">Nea is a Windows browser that uses little memory. It has one tab strip, one field and the page.</p>
 
 <p align="center">
-  <a href="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml"><img src="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml/badge.svg" alt="Compilación"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/licencia-MIT-blue" alt="Licencia MIT"></a>
-  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4" alt="Windows 10 y 11">
+  <a href="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml"><img src="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4" alt="Windows 10 and 11">
 </p>
 
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="docs/muestra/01-pestanas-arriba-oscuro.png">
-  <img src="docs/muestra/01-pestanas-arriba-claro.png" alt="Nea con las pestañas arriba y una página abierta">
+  <source media="(prefers-color-scheme: dark)" srcset="docs/showcase/01-tabs-top-dark.png">
+  <img src="docs/showcase/01-tabs-top-light.png" alt="Nea with the tab strip on top and a page open">
 </picture>
 
-Sin barra de herramientas, sin página de inicio, sin cuentas y sin
-telemetría. Todo pasa por un único campo que sirve para direcciones y
-búsquedas. Está escrito en Rust, con interfaz Win32 nativa dibujada con
-Direct2D, y usa el motor WebView2 que ya trae Windows.
+Nea has no toolbar, no start page, no accounts and no telemetry. You use one
+field for addresses and searches. Nea is written in Rust. Its native Win32
+interface is drawn with Direct2D. It uses the WebView2 engine that Windows
+already includes.
 
-## Por qué gasta poca memoria
+## Why Nea uses little memory
 
-El programa propio ocupa unos pocos MB. Las pestañas de fondo se duermen y,
-pasado un rato, se descartan: queda sólo su dirección y su título. Al abrir,
-sólo se crea la vista de la pestaña activa.
+The program itself uses a few MB. Background tabs go to sleep. After some
+time, Nea discards them and keeps only their address and title. At startup,
+Nea creates only the view of the active tab.
 
-Memoria privada de todo el árbol de procesos, con las mismas páginas y un
-perfil limpio en cada navegador:
+The table shows the private memory of the full process tree. Each browser
+opened the same pages with a clean profile.
 
-| Escenario | Nea | Edge | Chrome |
+| Scenario | Nea | Edge | Chrome |
 |---|---:|---:|---:|
-| Pestaña en blanco | 87 MB | 184 MB | 240 MB |
-| Página liviana (example.com) | 110 MB | 201 MB | 247 MB |
-| Página pesada, con bloqueo de anuncios | 395 MB | 641 MB | 784 MB |
-| 20 pestañas (19 dormidas en Nea) | 183 MB | 451 MB | 491 MB |
+| Blank tab | 87 MB | 184 MB | 240 MB |
+| Light page (example.com) | 110 MB | 201 MB | 247 MB |
+| Heavy page, with ad blocking | 395 MB | 641 MB | 784 MB |
+| 20 tabs (19 asleep in Nea) | 183 MB | 451 MB | 491 MB |
 
-Método, versiones y el resto de los escenarios en
-[docs/medicion.md](docs/medicion.md).
+The method, the versions and the other scenarios are in
+[docs/benchmarks.md](docs/benchmarks.md).
 
-## Funciones
+## Features
 
-- **Campo único** para direcciones y búsquedas, con autocompletado del
-  historial local. Nada sale hasta presionar Enter.
-- **Pestañas arriba o al costado**, ocultables, con fijadas, grupos de
-  colores y cambio de pestaña por nombre.
-- **Vista dividida**: dos páginas lado a lado.
-- **Pestañas privadas** con su propio perfil InPrivate.
-- **Modo lectura**, **video flotante** y **ocultar elementos** por sitio.
-- **Contraseñas** en el Administrador de credenciales de Windows, con
-  importación desde Chrome, Edge, Brave, Vivaldi, Opera, Arc o CSV.
-- **Marcadores, historial y descargas** en paneles que se abren desde el campo.
-- **Extensiones de Chrome** desde la Web Store, con
-  [limitaciones conocidas](docs/extensiones.md).
-- **Tema claro, oscuro o del sistema**, con animaciones que respetan la
-  configuración de Windows.
-- **Actualización diaria** firmada con Ed25519.
+- **One field** for addresses and searches, with suggestions from the local
+  history. Nea sends nothing until you press Enter.
+- **Tab strip on top or on the side.** You can hide it. It has pinned tabs,
+  colored groups and a search for tabs by name.
+- **Split view**: two pages side by side.
+- **Private tabs** with their own InPrivate profile.
+- **Reader mode**, **floating video** and **hide element** for each site.
+- **Passwords** in Windows Credential Manager. You can import them from
+  Chrome, Edge, Brave, Vivaldi, Opera, Arc or a CSV file.
+- **Bookmarks, history and downloads** in panels that open from the field.
+- **Chrome extensions** from the Web Store, with
+  [known limitations](docs/extensions.md).
+- **Light, dark or system theme.** The animations obey the Windows setting.
+- **Daily updates** with an Ed25519 signature.
 
-Estado de cada función y capturas: [docs/funciones.md](docs/funciones.md).
-Recorrido con una foto por función y un video: [docs/muestra](docs/muestra/README.md).
+The status of each feature and the screenshots are in
+[docs/features.md](docs/features.md). The [showcase](docs/showcase/README.md)
+has one screenshot for each feature and a video.
 
-## Instalación
+## Install
 
-Todavía no hay una versión publicada: por ahora se compila desde el código.
+There is no published release yet. Build Nea from the source code.
 
-Requisitos:
+Requirements:
 
-- Windows 10 u 11 (x64);
-- [Rust](https://rustup.rs) estable, con el destino `x86_64-pc-windows-msvc`;
-- las herramientas de compilación de Visual Studio (MSVC) con el Windows SDK,
-  que trae `rc.exe` para el ícono y el manifiesto;
-- el [runtime de WebView2](https://developer.microsoft.com/microsoft-edge/webview2/),
-  que ya viene con Windows 11 y con casi todos los Windows 10 actualizados.
+- Windows 10 or 11 (x64).
+- Stable [Rust](https://rustup.rs), with the `x86_64-pc-windows-msvc` target.
+- The Visual Studio build tools (MSVC) with the Windows SDK. The SDK supplies
+  `rc.exe` for the icon and the manifest.
+- The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+  Windows 11 and almost all updated Windows 10 installations include it.
 
 ```powershell
 git clone https://github.com/Agustin-Delgado/nea.git
@@ -85,80 +85,80 @@ cargo build --release
 .\target\release\nea.exe
 ```
 
-`nea.exe --install` lo instala para el usuario actual, sin permisos de
-administrador. El instalador, el paquete portable y la firma están en
-[docs/compilar.md](docs/compilar.md).
+`nea.exe --install` installs Nea for the current user. It does not need
+administrator rights. [docs/building.md](docs/building.md) explains the
+installer, the portable package and the signature.
 
-## Atajos
+## Shortcuts
 
-| Acción | Atajo |
+| Action | Shortcut |
 |---|---|
-| Campo único | Ctrl+L |
-| Cambiar de pestaña por nombre | Ctrl+K |
-| Nueva / cerrar / reabrir pestaña | Ctrl+T / Ctrl+W / Ctrl+Shift+T |
-| Nueva pestaña privada | Ctrl+Shift+N |
-| Pestañas arriba o al costado / ocultarlas | Ctrl+Shift+S / Ctrl+S |
-| Buscar en la página | Ctrl+F |
-| Modo lectura | Ctrl+Shift+R |
-| Vista dividida | Ctrl+Alt+N |
-| Marcadores / historial / descargas | Ctrl+Shift+O / Ctrl+Y / Ctrl+Shift+J |
-| Ajustes | Ctrl+, |
+| Field | Ctrl+L |
+| Switch to tab by name | Ctrl+K |
+| New tab / close tab / reopen closed tab | Ctrl+T / Ctrl+W / Ctrl+Shift+T |
+| New private tab | Ctrl+Shift+N |
+| Tab strip on top or on the side / hide tabs | Ctrl+Shift+S / Ctrl+S |
+| Find in page | Ctrl+F |
+| Reader mode | Ctrl+Shift+R |
+| Split view | Ctrl+Alt+N |
+| Bookmarks / history / downloads | Ctrl+Shift+O / Ctrl+Y / Ctrl+Shift+J |
+| Settings | Ctrl+, |
 
-Todos se cambian en Ajustes. Lista completa: [docs/atajos.md](docs/atajos.md).
+You can change all shortcuts in Settings. The full list is in
+[docs/shortcuts.md](docs/shortcuts.md).
 
-## Privacidad
+## Privacy
 
-Sin cuentas, sin sincronización, sin telemetría y sin reporte de fallos. Lo
-único que sale a la red son las páginas que se piden, sus íconos, las listas
-de filtros y la comprobación diaria de actualización (que se puede apagar).
+Nea has no accounts, no sync, no telemetry and no crash reports. Nea sends
+only these items to the network: the pages that you open, their icons, the
+filter lists and the daily update check. You can turn off the update check.
 
-- **Anuncios y rastreadores:** bloqueados a nivel de red con EasyList y
+- **Ads and trackers:** Nea blocks them at the network level with EasyList and
   EasyPrivacy.
-- **Rastreadores y cookies de terceros:** la prevención de rastreo del motor
-  en nivel estricto.
-- **Carteles de cookies:** ocultos antes de pintarse, con la EasyList Cookie
-  List.
-- **Ventanas emergentes:** bloqueadas las que nadie pidió y las de anuncios;
-  los inicios de sesión con ventana siguen funcionando.
+- **Trackers and third-party cookies:** Nea uses the strict level of the
+  engine's tracking prevention.
+- **Cookie banners:** Nea hides them before they appear. It uses the EasyList
+  Cookie List.
+- **Pop-ups:** Nea blocks pop-ups that nobody asked for and ad pop-ups.
+  Sign-in pop-ups continue to work.
 
-El bloqueo y las ventanas emergentes se permiten por sitio desde el menú de
-la pestaña. Detalle y dónde se guarda cada dato:
-[docs/privacidad.md](docs/privacidad.md).
+You can allow ads and pop-ups for one site from the tab menu.
+[docs/privacy.md](docs/privacy.md) gives the details and the location of each
+data file.
 
-## Documentación
+## Documentation
 
-- [Funciones](docs/funciones.md): qué hace, cómo se ve y qué está verificado.
-- [Atajos](docs/atajos.md).
-- [Privacidad y datos](docs/privacidad.md).
-- [Compilar, instalar y publicar](docs/compilar.md): `build.ps1`, control por
-  script, diagnóstico y actualizaciones.
-- [Medición de memoria](docs/medicion.md).
-- [Extensiones](docs/extensiones.md).
-- [Diseño y movimiento](docs/diseno.md).
-- [Muestra](docs/muestra/README.md): fotos y video.
+- [Features](docs/features.md): what Nea does, how it looks and what is verified.
+- [Shortcuts](docs/shortcuts.md).
+- [Privacy and data](docs/privacy.md).
+- [Build, install and publish](docs/building.md): `build.ps1`, script control,
+  diagnostics and updates.
+- [Memory benchmarks](docs/benchmarks.md).
+- [Extensions](docs/extensions.md).
+- [Design and motion](docs/design.md).
+- [Showcase](docs/showcase/README.md): screenshots and video.
 
-## Estado
+## Status
 
-El código está completo, pero falta lo que sólo puede resolver una persona
-antes de la primera versión:
+The code is complete. Before the first release, a person must do these tasks:
 
-- **Clave de firma de producción.** La pública de `keys/update-public.hex` es
-  de desarrollo; hay que generar el par de producción y guardar la privada
-  fuera del repositorio ([cómo](docs/compilar.md#firmar-una-versión)).
-- **Certificado de firma de código.** Sin él, SmartScreen advierte al abrir
-  el instalador y el programa.
-- **Primera release y winget.** El actualizador ya apunta a los releases de
-  este repositorio; el manifiesto de `packaging/winget/` necesita la dirección
-  y el hash de esa release.
+- **Production signing key.** The public key in `keys/update-public.hex` is a
+  development key. Make the production key pair and keep the private key
+  outside the repository ([how](docs/building.md#sign-a-release)).
+- **Code signing certificate.** Without it, SmartScreen shows a warning when
+  you open the installer and the program.
+- **First release and winget.** The updater already uses the releases of this
+  repository. The manifest in `packaging/winget/` needs the URL and the hash
+  of that release.
 
-## Contribuir
+## Contributing
 
-Ver [CONTRIBUTING.md](CONTRIBUTING.md). Para reportar una vulnerabilidad,
-[SECURITY.md](SECURITY.md): por favor, no abras un issue público.
+Read [CONTRIBUTING.md](CONTRIBUTING.md). To report a vulnerability, read
+[SECURITY.md](SECURITY.md). Do not open a public issue.
 
-## Licencia
+## License
 
-[MIT](LICENSE). Las ideas vienen del navegador
-[Search](https://github.com/driceroland/Search), de driceroland (MIT), que
-sirvió de referencia funcional; Nea no contiene su código, su nombre ni
-su ícono. Componentes de terceros en [NOTICE](NOTICE).
+[MIT](LICENSE). The ideas come from the
+[Search](https://github.com/driceroland/Search) browser by driceroland (MIT).
+Search was a functional reference. Nea does not contain its code, its name or
+its icon. The third-party components are in [NOTICE](NOTICE).

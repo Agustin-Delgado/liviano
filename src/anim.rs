@@ -4,7 +4,7 @@
 //! whole UI thread.
 //!
 //! The curves and durations come from a web design system and its
-//! component library (`docs/diseno.md` lists each one), so a popover, a
+//! component library (`docs/design.md` lists each one), so a popover, a
 //! menu or a toast moves here as it moves on the web.
 //!
 //! The clock is a single thread timer that exists only while something
@@ -139,7 +139,7 @@ impl Curve {
     }
 }
 
-/// The named curves. Sources in `docs/diseno.md`.
+/// The named curves. Sources in `docs/design.md`.
 #[allow(dead_code)] // a catalogue: not every curve has a user yet
 pub mod curves {
     use super::{CubicBezier, Curve};
@@ -212,7 +212,7 @@ impl Spec {
 }
 
 /// Every movement the interface makes, named for what moves. Sources in
-/// `docs/diseno.md`.
+/// `docs/design.md`.
 #[allow(dead_code)] // a catalogue: menus are still the system's
 pub mod specs {
     use super::{Spec, curves::*};
@@ -290,6 +290,11 @@ pub fn refresh_reduced() {
 
 pub fn reduced() -> bool {
     REDUCED.with(|r| r.get())
+}
+
+#[cfg(all(test, nea_tests))]
+pub fn set_reduced(on: bool) {
+    REDUCED.with(|r| r.set(on));
 }
 
 // ---------- values that move ----------
@@ -440,6 +445,11 @@ impl<K: Eq + Hash + Copy> Levels<K> {
     /// Forgets what is at rest on 0.
     pub fn prune(&mut self, now: Instant) {
         self.map.retain(|_, t| t.moving(now) || t.target() != 0.0);
+    }
+
+    #[cfg(all(test, nea_tests))]
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 }
 
@@ -693,3 +703,8 @@ pub fn report_frame(took: Duration) {
 pub fn stats() -> Stats {
     CLOCK.with(|c| c.borrow().stats)
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/anim.rs"]
+#[rustfmt::skip]
+mod tests;

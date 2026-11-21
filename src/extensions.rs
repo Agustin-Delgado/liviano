@@ -175,13 +175,13 @@ fn text_at(value: &Value, path: &[&str]) -> Option<String> {
 }
 
 /// The UI languages to try for `__MSG_name__`, best first.
-const LOCALES: &[&str] = &["es_419", "es", "en", "en_US"];
+const LOCALES: &[&str] = &["en", "en_US"];
 
 /// Reads what the app shows of a manifest. `messages` maps a locale folder
 /// to its messages.json, for names like `__MSG_extName__`.
 pub fn manifest_info(manifest: &str, messages: &dyn Fn(&str) -> Option<String>) -> Result<ManifestInfo, String> {
-    let value: Value = serde_json::from_str(manifest).map_err(|e| format!("manifest.json no es válido: {e}"))?;
-    let name = text_at(&value, &["name"]).ok_or("al manifest.json le falta el nombre")?;
+    let value: Value = serde_json::from_str(manifest).map_err(|e| format!("manifest.json is not valid: {e}"))?;
+    let name = text_at(&value, &["name"]).ok_or("manifest.json has no name")?;
     let default_locale = text_at(&value, &["default_locale"]);
     let name = localize(&name, default_locale.as_deref(), messages);
     Ok(ManifestInfo {
@@ -220,15 +220,15 @@ fn read_text(path: &Path) -> Option<String> {
 }
 
 pub fn read_manifest(folder: &Path) -> Result<ManifestInfo, String> {
-    let manifest = read_text(&folder.join("manifest.json")).ok_or("la carpeta no tiene manifest.json")?;
+    let manifest = read_text(&folder.join("manifest.json")).ok_or("the folder has no manifest.json")?;
     manifest_info(&manifest, &|locale| read_text(&folder.join("_locales").join(locale).join("messages.json")))
 }
 
 /// Writes the developer's public key into the manifest as `key`, which is
 /// what makes the engine give an unpacked store package its store id.
 pub fn with_key(manifest: &str, public_key: &[u8]) -> Result<String, String> {
-    let mut value: Value = serde_json::from_str(manifest).map_err(|e| format!("manifest.json no es válido: {e}"))?;
-    let object = value.as_object_mut().ok_or("manifest.json no es un objeto")?;
+    let mut value: Value = serde_json::from_str(manifest).map_err(|e| format!("manifest.json is not valid: {e}"))?;
+    let object = value.as_object_mut().ok_or("manifest.json is not an object")?;
     object.insert("key".to_string(), Value::String(crx::base64(public_key)));
     serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
 }
@@ -245,7 +245,7 @@ pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extens
     let result = (|| {
         unzip::extract(verified.archive, &staging)?;
         let manifest_path = staging.join("manifest.json");
-        let manifest = read_text(&manifest_path).ok_or("el paquete no trae manifest.json")?;
+        let manifest = read_text(&manifest_path).ok_or("the package has no manifest.json")?;
         fs::write(&manifest_path, with_key(&manifest, &verified.public_key)?).map_err(|e| e.to_string())?;
         read_manifest(&staging)
     })();
@@ -258,7 +258,7 @@ pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extens
     };
     let target = into.join(id);
     let _ = fs::remove_dir_all(&target);
-    fs::rename(&staging, &target).map_err(|e| format!("no se pudo instalar en {}: {e}", target.display()))?;
+    fs::rename(&staging, &target).map_err(|e| format!("cannot install in {}: {e}", target.display()))?;
     let mut extension = Extension {
         path: target.to_string_lossy().into_owned(),
         store_id: Some(id.to_string()),
@@ -278,7 +278,7 @@ pub fn from_unpacked(folder: &Path) -> Result<Extension, String> {
     Ok(extension)
 }
 
-/// Re-reads the manifest of an installed extension (after "Recargar").
+/// Re-reads the manifest of an installed extension (after "Reload").
 pub fn refresh(extension: &mut Extension) -> Result<(), String> {
     let info = read_manifest(Path::new(&extension.path))?;
     extension.apply(info);
@@ -376,3 +376,8 @@ pub fn plan(registry: &Registry, engine: &EngineList) -> Plan {
     }
     plan
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/extensions.rs"]
+#[rustfmt::skip]
+mod tests;
