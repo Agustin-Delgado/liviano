@@ -1405,6 +1405,7 @@ impl Omnibar {
                     Some(&blend(255)),
                     ULW_ALPHA,
                 );
+                anim::mark("field");
                 if !IsWindowVisible(self.backdrop).as_bool() {
                     let _ = SetWindowPos(
                         self.backdrop,
@@ -1761,6 +1762,7 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
                 });
             }
             if moving {
+                anim::mark("rows");
                 anim::repaint(item.hwndItem, Some(item.rcItem));
             }
             LRESULT(1)

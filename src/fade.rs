@@ -228,6 +228,7 @@ fn apply(hwnd: HWND, fading: &Fading, now: Instant) {
 /// One frame for every fading popup; false once none is left.
 fn step() -> bool {
     let now = Instant::now();
+    anim::mark("fade");
     let mut done: Vec<(HWND, Fading)> = Vec::new();
     FADING.with(|f| {
         let mut f = f.borrow_mut();

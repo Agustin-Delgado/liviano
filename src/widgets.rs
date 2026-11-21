@@ -113,6 +113,7 @@ fn follow(hwnd: HWND, hot: bool, pressed: bool) -> (f32, f32) {
         (hover.get(key, now), press.get(key, now), hover.moving(now) || press.moving(now))
     });
     if moving {
+        anim::mark("widget");
         anim::repaint(hwnd, None);
     }
     (h, p)

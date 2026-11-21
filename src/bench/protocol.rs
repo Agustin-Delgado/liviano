@@ -70,6 +70,9 @@ pub enum Action {
     },
     /// Closes the window as the person would (the session is saved).
     Quit,
+    /// The frame marks since the last request (what moved and when, in
+    /// microseconds), for the frame rate and pacing of each animation.
+    Frames,
     /// Rests the pointer's hover on what is at (x, y) of the strip, in
     /// client pixels, without moving the mouse: for captures of hover
     /// states. A point outside the strip clears it.

@@ -102,6 +102,7 @@ pub fn pipe_name() -> String {
 /// Starts or stops the pipe; doing what is already done is harmless.
 pub fn set_enabled(hwnd: HWND, on: bool) {
     WINDOW.store(hwnd.0 as isize, Ordering::SeqCst);
+    crate::anim::keep_marks(on);
     if on { start(pipe_name()) } else { stop() }
 }
 

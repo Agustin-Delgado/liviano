@@ -292,6 +292,11 @@ impl App {
                 self.run(command);
             }
             Action::State => reply.ok(self.bench_state()),
+            Action::Frames => {
+                let marks: Vec<Value> =
+                    crate::anim::take_marks().into_iter().map(|(what, us)| json!([what, us])).collect();
+                reply.ok(json!({ "marks": marks }));
+            }
             Action::Hover { x, y } => {
                 let hit = self.layout.hit(x, y);
                 self.set_hover(hit);

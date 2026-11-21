@@ -750,6 +750,7 @@ impl App {
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
         if next.is_some() || self.motion_was_running {
+            crate::anim::mark("strip");
             crate::anim::frame_shown(started);
         }
         if next.is_none() && self.motion_was_running {

@@ -16,8 +16,9 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     hash::Hash,
+    sync::atomic::{AtomicBool, Ordering},
     time::{Duration, Instant},
 };
 
@@ -702,6 +703,50 @@ pub fn report_frame(took: Duration) {
 
 pub fn stats() -> Stats {
     CLOCK.with(|c| c.borrow().stats)
+}
+
+// ---------- frame marks ----------
+
+/// The most marks kept between two reads; older ones are dropped.
+const MARKS_CAP: usize = 8192;
+
+/// Marks are kept only while script control is on.
+static MARKING: AtomicBool = AtomicBool::new(false);
+
+thread_local! {
+    static MARKS: RefCell<VecDeque<(&'static str, u64)>> = const { RefCell::new(VecDeque::new()) };
+}
+
+/// Script control turned on or off: marks start or stop being kept.
+pub fn keep_marks(on: bool) {
+    MARKING.store(on, Ordering::Relaxed);
+    if !on {
+        MARKS.with(|m| *m.borrow_mut() = VecDeque::new());
+    }
+}
+
+/// `what` put a frame out now (a window painted a frame of its motion, a
+/// fade set its opacity). Script control reads the marks to measure the
+/// frame rate and the pacing of each animation.
+pub fn mark(what: &'static str) {
+    if MARKING.load(Ordering::Relaxed) {
+        push_mark(what, crate::diag::now_us());
+    }
+}
+
+fn push_mark(what: &'static str, us: u64) {
+    MARKS.with(|m| {
+        let mut m = m.borrow_mut();
+        if m.len() >= MARKS_CAP {
+            m.pop_front();
+        }
+        m.push_back((what, us));
+    });
+}
+
+/// The marks since the last call, oldest first (microseconds from start).
+pub fn take_marks() -> Vec<(&'static str, u64)> {
+    MARKS.with(|m| std::mem::take(&mut *m.borrow_mut()).into())
 }
 
 #[cfg(all(test, nea_tests))]

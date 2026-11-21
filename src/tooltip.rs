@@ -181,6 +181,7 @@ fn step() -> bool {
         let moving = s.level.moving(now);
         let Some(drawn) = s.drawn.as_ref() else { return false };
         update(drawn, Some(level_alpha(level)), false);
+        anim::mark("tooltip");
         if !moving && s.level.target() == 0.0 {
             unsafe {
                 let _ = ShowWindow(drawn.hwnd, SW_HIDE);
