@@ -38,6 +38,9 @@ param(
     # The public address of nea.exe in the published release. The default is
     # an address relative to the manifest.
     [string]$PackageUrl,
+    # Stop if -UpdateKey is not the key in keys\update-public.hex. The release
+    # workflow uses it: the installed copies reject a package with a different key.
+    [switch]$RequireEmbeddedKey,
     [string]$OutDir = 'dist'
 )
 
@@ -135,6 +138,7 @@ if ($UpdateKey) {
     $signUpdate = @('run', '--quiet', '--example', 'sign', '--', $exe, $UpdateKey, '--version', $version,
         '--out', (Join-Path $OutDir 'latest.json'))
     if ($PackageUrl) { $signUpdate += @('--url', $PackageUrl) }
+    if ($RequireEmbeddedKey) { $signUpdate += @('--check-key') }
     Invoke-Native cargo $signUpdate
     Write-Host "== latest.json signed"
 } else {

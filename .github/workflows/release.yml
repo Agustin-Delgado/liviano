@@ -1,0 +1,134 @@
+name: Release
+
+# A pushed tag `vX.Y.Z` publishes a release. A manual run is a dry run by
+# default: it builds and signs, keeps the files as a workflow artifact and
+# does not publish.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Build and sign only. Do not create a release.
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  release:
+    name: Build, sign and publish
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The release must contain the version that the tag names. The updater
+      # compares versions, and the version is inside the update signature.
+      - name: Check the version
+        shell: bash
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          if [ -z "$version" ]; then
+            echo "::error::Cargo.toml has no version."
+            exit 1
+          fi
+          if [ "$GITHUB_REF_TYPE" = "tag" ]; then
+            tag="$GITHUB_REF_NAME"
+            if [ "$tag" != "v$version" ]; then
+              echo "::error::The tag is $tag, but Cargo.toml has version $version. Push the tag v$version."
+              exit 1
+            fi
+          elif [ "$DRY_RUN" = "true" ]; then
+            tag="v$version"
+            echo "::notice::Dry run of $tag from $GITHUB_REF_NAME. No release is created."
+          else
+            echo "::error::A release needs a tag. Push a tag vX.Y.Z, or run with dry_run."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "PUBLISH=$([ "$DRY_RUN" = "true" ] && echo 0 || echo 1)" >> "$GITHUB_ENV"
+
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustc --version
+
+      # build.ps1 builds nea.exe, the setup copy, the portable zip, latest.json
+      # and SHA256SUMS.txt. The keys are in files only during this step.
+      # Code signing is optional: without CODE_SIGNING_PFX, nea.exe is not
+      # signed and SmartScreen shows a warning when a person opens it.
+      - name: Build and sign
+        shell: pwsh
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+          CODE_SIGNING_PFX: ${{ secrets.CODE_SIGNING_PFX }}
+          CODE_SIGNING_PASSWORD: ${{ secrets.CODE_SIGNING_PASSWORD }}
+        run: |
+          if (-not $env:UPDATE_SIGNING_KEY) { throw 'The secret UPDATE_SIGNING_KEY is missing.' }
+          $key = Join-Path $env:RUNNER_TEMP 'update.key'
+          $pfx = Join-Path $env:RUNNER_TEMP 'code-signing.pfx'
+          try {
+            [System.IO.File]::WriteAllText($key, $env:UPDATE_SIGNING_KEY)
+            $buildArgs = @{
+              UpdateKey          = $key
+              RequireEmbeddedKey = $true
+              PackageUrl         = "https://github.com/$env:GITHUB_REPOSITORY/releases/download/$env:TAG/nea.exe"
+            }
+            if ($env:CODE_SIGNING_PFX) {
+              [System.IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:CODE_SIGNING_PFX))
+              $buildArgs.CertificatePath = $pfx
+              $buildArgs.CertificatePassword = $env:CODE_SIGNING_PASSWORD
+            }
+            .\build.ps1 @buildArgs
+          } finally {
+            Remove-Item $key, $pfx -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Check the files
+        shell: bash
+        run: |
+          cd dist
+          for f in nea.exe latest.json SHA256SUMS.txt "Nea-$VERSION-setup.exe" "Nea-$VERSION-portable.zip"; do
+            [ -s "$f" ] || { echo "::error::dist/$f is missing."; exit 1; }
+          done
+          grep -q "\"version\": \"$VERSION\"" latest.json || { echo "::error::latest.json has a different version."; exit 1; }
+          grep -q "/releases/download/$TAG/nea.exe" latest.json || { echo "::error::latest.json points to a different package."; exit 1; }
+          sha256sum -c SHA256SUMS.txt
+          cat latest.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: nea-${{ env.VERSION }}
+          path: dist/
+          if-no-files-found: error
+
+      - name: Create the release
+        if: env.PUBLISH == '1'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<EOF
+          Nea $VERSION for Windows 10 and 11 (x64).
+
+          **Install:** download \`nea.exe\` and run it. Nea runs from where it is, as a portable app.
+          To install it for the current user (Start menu, Settings → Apps, no administrator rights), download \`Nea-$VERSION-setup.exe\` instead, or run \`nea.exe --install\`.
+
+          The files are not signed with a code signing certificate. Windows SmartScreen can show "Windows protected your PC". Select **More info**, then **Run anyway**.
+
+          Compare the files with \`SHA256SUMS.txt\`. Installed copies update themselves: they read \`latest.json\` and verify its Ed25519 signature.
+          EOF
+          gh release create "$TAG" --verify-tag --title "Nea $VERSION" --notes-file notes.md \
+            dist/nea.exe dist/latest.json "dist/Nea-$VERSION-setup.exe" "dist/Nea-$VERSION-portable.zip" dist/SHA256SUMS.txt

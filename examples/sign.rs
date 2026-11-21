@@ -7,6 +7,7 @@
 //!   --url <address>     where the package will be served; absolute, or
 //!                       relative to the manifest (default: the file name)
 //!   --out <file>        manifest path (default: latest.json beside the package)
+//!   --check-key         fail if the key is not the key in keys/update-public.hex
 
 #[path = "../src/update_sign.rs"]
 mod update_sign;
@@ -26,17 +27,19 @@ fn main() -> ExitCode {
     let mut version = env!("CARGO_PKG_VERSION").to_string();
     let mut url = None;
     let mut out = None;
+    let mut check_key = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--version" => version = args.next().unwrap_or_default(),
             "--url" => url = args.next(),
             "--out" => out = args.next().map(PathBuf::from),
+            "--check-key" => check_key = true,
             _ => positional.push(arg),
         }
     }
     let [package_path, key_path] = positional.as_slice() else {
         return fail(
-            "usage: cargo run --example sign -- <package> <private key> [--version x.y.z] [--url url] [--out latest.json]",
+            "usage: cargo run --example sign -- <package> <private key> [--version x.y.z] [--url url] [--out latest.json] [--check-key]",
         );
     };
     let version = version.trim().trim_start_matches(['v', 'V']).to_string();
@@ -62,6 +65,19 @@ fn main() -> ExitCode {
         return fail("the new signature does not verify");
     }
 
+    // The key check comes before the manifest: a release must never publish
+    // a package that the installed copies reject.
+    let embedded =
+        update_sign::from_hex(include_str!("../keys/update-public.hex")).and_then(|b| PublicKey::from_slice(&b).ok());
+    if embedded.as_ref() != Some(&keys.pk) {
+        if check_key {
+            return fail("this key is not the key in keys/update-public.hex: the installed copies reject the package");
+        }
+        eprintln!(
+            "warning: this key is not the key in keys/update-public.hex; a build with that file rejects the package"
+        );
+    }
+
     let package_path = PathBuf::from(package_path);
     let file_name = package_path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
     let manifest = serde_json::json!({
@@ -76,13 +92,5 @@ fn main() -> ExitCode {
         return fail(&format!("cannot write {}: {error}", out.display()));
     }
     println!("{}", out.display());
-
-    let embedded =
-        update_sign::from_hex(include_str!("../keys/update-public.hex")).and_then(|b| PublicKey::from_slice(&b).ok());
-    if embedded.as_ref() != Some(&keys.pk) {
-        eprintln!(
-            "warning: this key is not the key in keys/update-public.hex; a build with that file rejects the package"
-        );
-    }
     ExitCode::SUCCESS
 }

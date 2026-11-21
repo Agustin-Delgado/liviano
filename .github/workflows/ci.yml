@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same branch makes the older run useless.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Format, lint, build and test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # The tests are a private repository, mounted at `tests/`. A checkout of
+      # this repository does not bring them: the deploy key that can read them
+      # is a secret, and a pull request from a fork has no secrets. Without the
+      # mount, the job still checks the format, the lints and the build. It
+      # skips the tests and does not fail on a missing file.
+      - name: Mount the test suite
+        shell: bash
+        env:
+          TESTS_DEPLOY_KEY: ${{ secrets.TESTS_DEPLOY_KEY }}
+        run: |
+          if [ -z "$TESTS_DEPLOY_KEY" ]; then
+            echo "::warning::No access to the test suite from here; running without it."
+            exit 0
+          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$TESTS_DEPLOY_KEY" > ~/.ssh/tests_deploy_key
+          chmod 600 ~/.ssh/tests_deploy_key
+          ssh-keyscan -t ed25519 github.com >> ~/.ssh/known_hosts 2>/dev/null
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/tests_deploy_key -o IdentitiesOnly=yes"
+          git -c url."git@github.com:".insteadOf="https://github.com/" submodule update --init tests
+          rm -f ~/.ssh/tests_deploy_key
+          echo "TESTS_MOUNTED=1" >> "$GITHUB_ENV"
+
+      # The version is the one in rust-toolchain.toml, not a floating
+      # `stable`: a new clippy lint must not turn an unchanged commit red.
+      # Without arguments, rustup installs the toolchain and the components
+      # that the file names.
+      - name: Install the pinned toolchain
+        shell: bash
+        run: |
+          rustup toolchain install
+          rustc --version
+          cargo clippy --version
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      # The hooks in `src` carry `#[rustfmt::skip]`, so that `cargo fmt` does
+      # not fail when the suite is missing. Thus the files of the suite are
+      # checked here, one by one.
+      - name: Format of the test suite
+        if: env.TESTS_MOUNTED == '1'
+        shell: bash
+        run: git -C tests ls-files -z '*.rs' | (cd tests && xargs -0 rustfmt --edition 2024 --config-path ../rustfmt.toml --check)
+
+      # `--all-targets` compiles the test modules, which are files in the mount.
+      - name: Clippy (with the tests)
+        if: env.TESTS_MOUNTED == '1'
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Clippy
+        if: env.TESTS_MOUNTED != '1'
+        run: cargo clippy -- -D warnings
+
+      - name: Release build
+        run: cargo build --release
+
+      # Quiet on purpose: the log of a public repository is public, and the
+      # verbose reporter prints the name of each test of a private suite.
+      # A failure is still reported in full.
+      - name: Test
+        if: env.TESTS_MOUNTED == '1'
+        run: cargo test --quiet
