@@ -1665,12 +1665,23 @@ fn paint_placeholder(edit: HWND, hdc: HDC) {
         let before = (font != 0).then(|| SelectObject(hdc, HFONT(font as _).into()));
         SetTextColor(hdc, placeholder_ink(&palette).colorref());
         SetBkMode(hdc, TRANSPARENT);
-        let mut cue = CUE.with(|c| c.borrow().clone());
-        DrawTextW(hdc, &mut cue, &mut rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        if let Some(mut cue) = placeholder_text() {
+            DrawTextW(hdc, &mut cue, &mut rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        }
         if let Some(before) = before {
             SelectObject(hdc, before);
         }
     }
+}
+
+/// The placeholder to draw, if there is one. The edit can paint before the
+/// field is first opened, while the text is still empty: an empty `Vec` has
+/// a dangling pointer, and DrawTextW with an end ellipsis reads through it.
+fn placeholder_text() -> Option<Vec<u16>> {
+    CUE.with(|c| {
+        let cue = c.borrow();
+        (!cue.is_empty()).then(|| cue.clone())
+    })
 }
 
 unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
