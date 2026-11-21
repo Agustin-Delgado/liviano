@@ -62,18 +62,64 @@
     }, 500);
   };
 
+  // The app's list of accounts under a field: 0 closed, 1 open, 2 open
+  // with a row picked. Set by the app; while it is open, the keys that move
+  // in it go to the app instead of the page.
+  let menu = 0;
+  let anchor = null;
+  const dismiss = () => {
+    if (menu) post({ kind: 'dismiss' });
+  };
   const offer = (el) => {
+    anchor = el;
     const r = el.getBoundingClientRect();
     const scale = window.devicePixelRatio || 1;
-    post({ kind: 'field', left: Math.round(r.left * scale), bottom: Math.round(r.bottom * scale) });
+    const px = (v) => Math.round(v * scale);
+    post({
+      kind: 'field',
+      left: px(r.left),
+      top: px(r.top),
+      right: px(r.right),
+      bottom: px(r.bottom),
+      // What is typed narrows the list; a password never leaves the page.
+      value: isPassword(el) ? '' : el.value,
+    });
   };
+  const MENU_KEYS = ['ArrowDown', 'ArrowUp', 'Escape'];
 
   let lastKey = '';
   document.addEventListener('submit', (e) => capture(scopeOf(e.target)), true);
   document.addEventListener('keydown', (e) => {
     lastKey = e.key;
+    if (menu && e.isTrusted && e.target === anchor) {
+      if (MENU_KEYS.includes(e.key) || (e.key === 'Enter' && menu === 2)) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        post({ kind: 'key', key: e.key });
+        return;
+      }
+      if (e.key === 'Tab') dismiss();
+    }
     if (e.isTrusted && e.key === 'Enter' && isPassword(e.target)) capture(scopeOf(e.target));
   }, true);
+  document.addEventListener('input', (e) => {
+    if (!menu || e.target !== anchor) return;
+    if (isPassword(anchor)) dismiss();
+    else post({ kind: 'typed', value: anchor.value });
+  }, true);
+  document.addEventListener('focusout', (e) => {
+    if (e.target === anchor) dismiss();
+  }, true);
+  document.addEventListener('mousedown', (e) => {
+    if (e.target !== anchor) dismiss();
+  }, true);
+  window.addEventListener('scroll', dismiss, true);
+  window.addEventListener('pagehide', dismiss);
+  Object.defineProperty(window, '__neaVaultMenu', {
+    value: (state) => {
+      menu = state;
+    },
+  });
   document.addEventListener('click', (e) => {
     if (!e.isTrusted) return;
     const target = e.target;
@@ -104,6 +150,7 @@
   // origin again: the page may have moved on since the menu opened.
   Object.defineProperty(window, '__neaVaultFill', {
     value: (origin, username, password) => {
+      menu = 0;
       if (location.origin !== origin) return false;
       const active = document.activeElement;
       const anchor = isInput(active) ? active : null;

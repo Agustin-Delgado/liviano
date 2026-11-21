@@ -3,6 +3,7 @@
 mod anim;
 mod app;
 mod app_icon;
+mod autofill;
 mod bench;
 mod bookmarks;
 mod crx;
@@ -50,6 +51,7 @@ mod vault_bar;
 mod vault_crypto;
 mod vault_import;
 mod vault_watch;
+mod vault_worker;
 mod web;
 mod webstore;
 mod widgets;

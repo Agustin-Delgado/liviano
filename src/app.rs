@@ -45,6 +45,8 @@ mod split_ui;
 mod tooltip_ui;
 mod vault_ui;
 
+pub(crate) use vault_ui::start_import;
+
 use crate::{
     curtain::Curtain,
     design::{self, Palette},
@@ -469,6 +471,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MOVE => {
             with_app(|app| {
                 app.session_dirty = true;
+                app.autofill_follow();
                 app.place_omnibar();
             });
             LRESULT(0)
@@ -616,6 +619,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_ACTIVATE => {
             if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
                 with_app(|app| app.restore_focus());
+            } else {
+                // Another program took the keyboard: the account list goes.
+                with_app(|app| app.autofill_close());
             }
             default()
         }
@@ -851,6 +857,7 @@ impl App {
             self.wake(id);
         }
         self.update_title();
+        self.autofill_follow();
         self.place_vault_bar();
         self.refresh_nav();
     }
@@ -1600,6 +1607,7 @@ impl App {
     }
 
     fn open_omnibar(&mut self, mode: Mode) {
+        self.autofill_close();
         self.hide_card();
         self.forget_group_target();
         if self.mode == Some(Mode::Find) {
