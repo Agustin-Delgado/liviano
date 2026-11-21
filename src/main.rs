@@ -38,6 +38,7 @@ mod sqlite;
 mod storage;
 mod system_dll;
 mod tabbar;
+mod tab_groups;
 mod tabs;
 mod tooltip;
 mod update_sign;

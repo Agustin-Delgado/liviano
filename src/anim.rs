@@ -254,6 +254,10 @@ pub mod specs {
 
 /// Pixels a toast travels while it fades.
 pub const TOAST_RISE: f32 = 6.0;
+/// How far the field travels as it comes and goes, toward the edge it
+/// hangs from: celagem's popovers grow 2 % from that edge, about this much
+/// on the field's height.
+pub const POPOVER_SLIDE: f32 = 4.0;
 /// Tooltip timing: the pointer rests this long before one opens, it closes
 /// this long after the pointer leaves, and within the skip window after one
 /// closed the next opens at once.

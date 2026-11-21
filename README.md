@@ -74,6 +74,9 @@ queda).
 | ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |
 | ![Pestañas ocultas: sólo la fila de la ventana](docs/capturas/claro-colapsado.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
 | ![Tarjeta de una pestaña, tema claro](docs/capturas/tarjeta-claro.png) | ![Tarjeta de una pestaña al costado, tema oscuro](docs/capturas/tarjeta-oscuro-vertical.png) |
+| ![Grupos de pestañas arriba, tema claro](docs/capturas/grupos-claro-horizontal.png) | ![Grupos contraídos, tema oscuro](docs/capturas/grupos-oscuro-horizontal-contraido.png) |
+| ![Grupos al costado, tema claro](docs/capturas/grupos-claro-vertical.png) | ![Grupos al costado contraídos, tema oscuro](docs/capturas/grupos-oscuro-vertical-contraido.png) |
+| ![Menú de la etiqueta de un grupo](docs/capturas/grupos-claro-menu-grupo.png) | ![Menú de una pestaña: agregarla a un grupo](docs/capturas/grupos-claro-menu-pestana.png) |
 
 Cuadros intermedios, con el tiempo de cada uno, grabados con
 `tools/frames.ps1`:
@@ -82,6 +85,7 @@ Cuadros intermedios, con el tiempo de cada uno, grabados con
 |---|---|
 | ![Hover de una pestaña, 150 ms](docs/capturas/tira-hover-claro.png) | ![Cambio de pestaña: la tarjeta se desliza](docs/capturas/tira-pestana-oscuro.png) |
 | ![La columna vuelve desde el borde](docs/capturas/tira-columna-claro.png) | ![Tooltip del engranaje: 600 ms de demora y fundido](docs/capturas/tira-engranaje-oscuro.png) |
+| ![Un grupo que se contrae arriba, 200 ms](docs/capturas/grupos-tira-contraer-claro-horizontal.png) | ![Un grupo que se contrae en la columna](docs/capturas/grupos-tira-contraer-claro-vertical.png) |
 
 Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
 al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.
@@ -108,6 +112,7 @@ canal de control por script; lo que no se puede probar así está marcado.
 | RF-07 | Dormir y descartar pestañas de fondo | Verificado: se suspenden pasado el tiempo de Ajustes y se descartan después, o enseguida con poca memoria. |
 | RF-08 | Mantener un sitio despierto | Verificado. |
 | RF-09 | Vista dividida | Verificado (pares, persistencia, privadas). El arrastre de pestañas y del divisor se revisa a mano. |
+| — | Grupos de pestañas | Verificado: crear, nombrar, color, contraer y expandir con un clic, persistencia (las privadas no se guardan) y pares divididos dentro de un grupo. El arrastre se probó con mensajes de mouse a la ventana propia; el de la etiqueta se revisa a mano. |
 | RF-10 | Modo lectura | Verificado (Readability). |
 | RF-11 | Ocultar elementos por sitio | Verificado (selección por clic, se aplica antes de pintar). La lista de ocultos (Ctrl+Shift+U) es un menú: se revisa a mano. |
 | RF-12 | Video flotante | Hecho con el Picture-in-Picture del motor. Sin verificar en esta pasada (hace falta una página con video). |
@@ -172,6 +177,7 @@ Todos se pueden cambiar en Ajustes (Ctrl+,).
 | Video flotante | Ctrl+Shift+P |
 | Ocultar elemento / ver ocultos | Ctrl+Shift+H / Ctrl+Shift+U |
 | Vista dividida / deshacerla | Ctrl+Alt+N / Ctrl+Alt+Shift+N |
+| Agregar la pestaña a un grupo nuevo | Ctrl+Shift+G |
 | Ir a la página dividida de la izquierda / derecha | Alt+Shift+Izquierda / Alt+Shift+Derecha |
 | Contraseñas | Ctrl+Alt+L |
 | Ajustes | Ctrl+, |
@@ -187,6 +193,34 @@ Fijar una pestaña, mantener un sitio despierto, el bloqueo de anuncios en un
 sitio y "Permitir ventanas emergentes en este sitio" están en el menú de la
 pestaña (clic derecho) y no tienen atajo de fábrica; se les puede asignar uno
 en Ajustes.
+
+### Grupos de pestañas
+
+Como en Chrome y Edge. Clic derecho en una pestaña: "Agregar pestaña a un
+grupo nuevo" (Ctrl+Shift+G), "Agregar al grupo" con los grupos que haya, o
+"Quitar del grupo". El grupo nuevo pide su nombre en el campo único; Enter
+vacío lo deja sin nombre y se ve como un punto de color.
+
+- **Arriba**, cada grupo es una etiqueta de su color antes de sus pestañas, y
+  una línea del mismo color las une. **Al costado**, es una fila con sus
+  pestañas debajo, un poco corridas, y una barra al costado.
+- **Un clic en la etiqueta** contrae el grupo: sólo queda la etiqueta (al
+  costado, con cuántas pestañas tiene). Si la pestaña activa estaba ahí,
+  pasa a una visible. Ctrl+Tab se saltea las contraídas; elegir una por
+  Ctrl+K o Ctrl+1…8 expande su grupo.
+- **Clic derecho en la etiqueta**: renombrar, color (nueve, los tonos de la
+  marca, legibles en claro y oscuro), nueva pestaña en el grupo,
+  contraer o expandir, desagrupar y cerrar el grupo.
+- **Arrastrar**: una pestaña soltada sobre otra entra en su grupo; sobre una
+  etiqueta queda justo antes de ese grupo, afuera; más allá de la última,
+  al final y sin grupo. Arrastrar la etiqueta mueve el grupo entero. Las
+  pestañas de un grupo siempre quedan juntas.
+- Las fijadas no van en grupos. Las privadas sí, pero no se guardan: el
+  grupo vuelve en la próxima sesión sin ellas. Un par de la vista dividida
+  queda siempre en el mismo grupo.
+
+Los comandos "Quitar pestaña del grupo" y "Contraer o expandir el grupo" no
+tienen atajo de fábrica; se les puede asignar uno en Ajustes.
 
 ## Bloqueo y privacidad
 
@@ -286,7 +320,7 @@ cargo run --release --example bench -- wait
 cargo run --release --example bench -- text
 cargo run --release --example bench -- run new_tab   # cualquier comando por su nombre
 cargo run --release --example bench -- type "example.com" --submit
-cargo run --release --example bench -- state         # pestañas, campo, pares, privadas
+cargo run --release --example bench -- state         # pestañas, campo, pares, privadas, grupos
 cargo run --release --example bench -- shield        # bloqueos, reglas, popups y lista de cookies
 cargo run --release --example bench -- quit
 ```

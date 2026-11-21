@@ -22,6 +22,7 @@ tokens están en `src/design.rs` y los movimientos en `src/anim.rs`
 | Sombras | `shadow-card`: anillo 1 px negro/0.08 + caída 0 2 6 −2 negro/0.12; halo de foco brand/0.18 | celagem `brand.css` (`--shadow-card`, `--shadow-focus`) |
 | Botón | alto 26 px, esquina field, primario de marca, secundario con contorno | celagem `src/lib/components/button/recipe.ts` |
 | Casilla | esquina 4, borde `line-strong`, hover brand/40, marcada en brand con tilde blanco | celagem `src/lib/components/checkbox/` (receta de HKUI) |
+| Grupos de pestañas | nueve tonos: gris, azul, rojo, amarillo, verde, rosa, violeta, cian y naranja. En claro, la etiqueta lleva el paso `ink` del tono con texto #FCFCFC; en oscuro, el paso `solid` con texto #141414. Texto sobre etiqueta ≥ 4.5:1 y etiqueta sobre la tira ≥ 3:1 (lo comprueba un test). Etiqueta: alto 20, esquina control, texto small (12) medium; línea de 2 px | celagem `brand.css` (`--color-tone-*`) |
 
 El tema oscuro es nuestro, porque celagem no tiene. Mantiene los mismos
 pasos y roles, invertidos. El índigo sube a #818CF9 para leerse sobre
@@ -37,7 +38,7 @@ Algunas cosas de Search no chocan con celagem y quedaron igual:
 | Qué se mueve | Duración y curva | Fuente |
 |---|---|---|
 | Hover y press de botones, pestañas y filas | 150 ms, `ease-out` (0, 0, 0.2, 1) | celagem `button/recipe.ts` (`transition-colors duration-150`) |
-| Campo único y su lista (popover) | 100 ms entrada y salida, `ease` | celagem `src/lib/components/popover/motion.ts` |
+| Campo único y su lista (popover) | 100 ms entrada y salida, `ease`; viaja 4 px desde el borde del que cuelga (baja arriba, sube abajo, sólo fundido al medio) | celagem `src/lib/components/popover/motion.ts` (`zoom-in-98` con origen en el lado del disparador) |
 | Menú | 120 ms entrada, 100 ms salida, `ease` | celagem `src/lib/components/menu/recipe.ts` |
 | Ajustes (diálogo) | 100 ms, `ease` | celagem `src/lib/components/dialog/recipe.ts` |
 | Tooltip | demora 600 ms, entrada 100 ms, salida 80 ms; cierre tras 100 ms; si otro tooltip cerró hace menos de 300 ms, abre sin demora | HKUI `src/lib/tooltip/root/tooltip-root.svelte`, `tooltip-group.ts`, `provider/tooltip-provider.svelte` |
@@ -46,6 +47,8 @@ Algunas cosas de Search no chocan con celagem y quedaron igual:
 | Fondo de la pestaña activa al cambiar de pestaña | 140 ms, `--ease-out-strong` | más corto que el indicador de celagem: a 200 ms, cruzar toda la tira se sentía lento |
 | Vecinas que hacen lugar (reordenar, abrir, cerrar) | 160 ms y 200 ms, `--ease-out-strong` (0.23, 1, 0.32, 1) | celagem `brand.css` |
 | Columna de pestañas que vuelve | 250 ms, `--ease-move` (0.77, 0, 0.175, 1) | celagem `brand.css`; `app-sidebar/rail-module.svelte` |
+| Grupo que se contrae o se expande | 200 ms, `ease-out`: sus pestañas se pliegan hacia la etiqueta (o salen de ella) y todo lo de al lado acompaña con la misma curva, el botón + incluido | celagem `src/lib/components/collapsible/` (alto del panel) |
+| Etiqueta de un grupo nuevo | 200 ms, `--ease-out-strong`, se despliega y aparece con un fundido, como una pestaña que se abre | celagem `brand.css` |
 | Tilde de la casilla | 75 ms | HKUI, receta del checkbox |
 | Anillo de carga | 1 vuelta/s, a 20 cuadros/s | `animate-spin` de Tailwind |
 
@@ -70,6 +73,17 @@ Si Windows tiene apagadas las animaciones de la interfaz
   de Windows), y una ventana Win32 no se escala sin pixelarse. Lo que sí
   hacen es un fundido real de la ventana entera, con sus hijos, en
   ventanas en capas.
+- **El campo es una píldora en dos ventanas.** Windows sólo redondea
+  unos pocos píxeles fijos. Debajo va una ventana con alfa por píxel
+  (`UpdateLayeredWindow`) con la forma suavizada, el anillo y
+  `shadow-pop`. Encima va la ventana con el `Edit` y la lista, recortada
+  por una región un píxel adentro del borde. Los escalones de la región
+  caen sobre el fondo liso de abajo, así que el borde que se ve es el
+  suavizado. Con la lista abierta, el lado del campo queda redondo y el
+  de la lista lleva la esquina de diálogo (16 px).
+- **Abajo, la lista se lee hacia arriba.** La primera sugerencia queda
+  pegada al campo y Arriba entra en la lista, como en fzf. Buscar en la
+  página nunca va al medio: la página centra cada coincidencia justo ahí.
 - **La columna sólo se anima al volver.** Al ocultarse desaparece de una:
   así la página gana el lugar sin esperar.
 - **Menús y combos.** No hay menú contextual propio: los menús son los de
@@ -78,6 +92,10 @@ Si Windows tiene apagadas las animaciones de la interfaz
 - **Sin `DwmFlush`.** Bloquea el hilo de la interfaz hasta el próximo
   cuadro del compositor. El reloj es un único timer de 15 ms que sólo
   existe mientras algo se mueve.
+- **El grupo se renombra en el campo único.** Chrome abre una burbuja con
+  el nombre y la paleta. Acá el nombre se escribe en el campo de siempre y
+  el color se elige en el menú de la etiqueta: no hay otra ventana que
+  mantener.
 - **Sin nombre accesible en el engranaje.** Ningún botón dibujado tiene
   UIA todavía; hacerlo es un trabajo aparte para toda la barra.
 

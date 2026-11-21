@@ -354,10 +354,7 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
         }
         DEFERRED_IMPORT => {
             // Under the field the panel is drawn in, not wherever the mouse is.
-            let at = with_app(|app| {
-                let (x, y, _) = app.omnibar_anchor();
-                POINT { x, y: y + (40.0 * app.scale).round() as i32 }
-            });
+            let at = with_app(|app| app.omnibar.menu_anchor());
             vault_import::run(hwnd, at);
             with_app(|app| app.vault_reload_panel());
         }

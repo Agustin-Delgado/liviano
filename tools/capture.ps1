@@ -50,6 +50,69 @@ public static class LivianoCapture {
     [DllImport("user32.dll")] static extern bool PrintWindow(IntPtr hwnd, IntPtr hdc, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr hwnd, StringBuilder name, int max);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr hwnd, int attr, out RECT rect, int size);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int index);
+    [DllImport("user32.dll")] static extern bool GetLayeredWindowAttributes(IntPtr h, out uint key, out byte alpha, out uint flags);
+
+    [DllImport("user32.dll")] static extern int GetWindowRgn(IntPtr hwnd, IntPtr hrgn);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateRectRgn(int left, int top, int right, int bottom);
+    [DllImport("gdi32.dll")] static extern bool PtInRegion(IntPtr rgn, int x, int y);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateCompatibleDC(IntPtr hdc);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr hdc, ref DIBHEADER bmi, uint usage, out IntPtr bits, IntPtr section, uint offset);
+    [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr hdc, IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr obj);
+    [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr hdc);
+    [StructLayout(LayoutKind.Sequential)] struct DIBHEADER { public int biSize, biWidth, biHeight; public short biPlanes, biBitCount; public int biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant; }
+
+    // A window drawn per pixel (UpdateLayeredWindow): layered, with neither
+    // a constant alpha nor a colour key of its own.
+    public static bool PerPixel(IntPtr hwnd) {
+        const int GWL_EXSTYLE = -20, WS_EX_LAYERED = 0x80000;
+        if ((GetWindowLong(hwnd, GWL_EXSTYLE) & WS_EX_LAYERED) == 0) return false;
+        uint key, flags; byte alpha;
+        return !GetLayeredWindowAttributes(hwnd, out key, out alpha, out flags) || flags == 0;
+    }
+
+    // Whether the window is cut by a region (SetWindowRgn).
+    public static bool HasRegion(IntPtr hwnd) {
+        IntPtr rgn = CreateRectRgn(0, 0, 0, 0);
+        int kind = GetWindowRgn(hwnd, rgn);
+        DeleteObject(rgn);
+        return kind > 1;
+    }
+
+    // The window's picture with its alpha: a per-pixel window is asked with
+    // WM_PRINT (PrintWindow without PW_RENDERFULLCONTENT), which those that
+    // keep their picture answer premultiplied; null when it answers nothing.
+    // Any other window comes opaque, cut to its region if it has one.
+    public static Bitmap GrabAlpha(IntPtr hwnd, int w, int h) {
+        bool perPixel = PerPixel(hwnd);
+        var head = new DIBHEADER { biSize = 40, biWidth = w, biHeight = -h, biPlanes = 1, biBitCount = 32 };
+        IntPtr bits, dc = CreateCompatibleDC(IntPtr.Zero);
+        IntPtr dib = CreateDIBSection(dc, ref head, 0, out bits, IntPtr.Zero, 0);
+        IntPtr old = SelectObject(dc, dib);
+        PrintWindow(hwnd, dc, perPixel ? 0u : 2u);
+        var px = new int[w * h];
+        Marshal.Copy(bits, px, 0, px.Length);
+        SelectObject(dc, old); DeleteObject(dib); DeleteDC(dc);
+        if (perPixel) {
+            bool any = false;
+            foreach (int p in px) if (p != 0) { any = true; break; }
+            if (!any) return null;
+        } else {
+            for (int i = 0; i < px.Length; i++) px[i] |= unchecked((int)0xFF000000);
+            IntPtr rgn = CreateRectRgn(0, 0, 0, 0);
+            if (GetWindowRgn(hwnd, rgn) > 1)
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                        if (!PtInRegion(rgn, x, y)) px[y * w + x] = 0;
+            DeleteObject(rgn);
+        }
+        var bitmap = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        var data = bitmap.LockBits(new Rectangle(0, 0, w, h), System.Drawing.Imaging.ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppPArgb);
+        Marshal.Copy(px, 0, data.Scan0, px.Length);
+        bitmap.UnlockBits(data);
+        return bitmap;
+    }
 
     public class Shot { public string Class; public RECT Frame; public RECT Window; public IntPtr Hwnd; }
 
@@ -74,6 +137,11 @@ public static class LivianoCapture {
 
     public static Bitmap Grab(Shot shot) {
         int w = shot.Window.Right - shot.Window.Left, h = shot.Window.Bottom - shot.Window.Top;
+        // A region or per-pixel alpha is the window's own shape: kept whole.
+        if (PerPixel(shot.Hwnd) || HasRegion(shot.Hwnd)) {
+            var shaped = GrabAlpha(shot.Hwnd, w, h);
+            if (shaped != null) return shaped;
+        }
         var bitmap = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         using (var g = Graphics.FromImage(bitmap)) {
             IntPtr hdc = g.GetHdc();
@@ -126,6 +194,8 @@ foreach ($shot in $ordered) {
     $x = $shot.Frame.Left - $base.Frame.Left
     $y = $shot.Frame.Top - $base.Frame.Top
     $r = $Corner * $dpi
+    # A window that shapes itself (a region, per-pixel alpha) gets no DWM corner.
+    if ([LivianoCapture]::PerPixel($shot.Hwnd) -or [LivianoCapture]::HasRegion($shot.Hwnd)) { $r = 0 }
     if ($r -gt 0) {
         $path = New-Object System.Drawing.Drawing2D.GraphicsPath
         $d = 2 * $r

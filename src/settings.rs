@@ -14,10 +14,25 @@ pub enum Theme {
     Dark,
 }
 
+/// Where the single field floats over the page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FieldPosition {
+    /// Under the top edge of the page: where it always was.
+    #[default]
+    Top,
+    /// In the middle of the page, as a command palette.
+    Middle,
+    /// On the bottom edge; its list opens upwards.
+    Bottom,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub theme: Theme,
+    /// Where the field opens (Ajustes > Campo).
+    pub field_position: FieldPosition,
     /// `{q}` is replaced by the encoded query.
     pub search_url: String,
     /// Seconds a background tab stays live before it is suspended.
@@ -59,6 +74,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             theme: Theme::System,
+            field_position: FieldPosition::Top,
             search_url: "https://duckduckgo.com/?q={q}".to_string(),
             suspend_after_secs: 60,
             discard_after_secs: 15 * 60,

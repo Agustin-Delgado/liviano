@@ -24,7 +24,7 @@ use windows::{
                     D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW,
                     D2D_SIZE_U, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
                 },
-                D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
+                D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
                 D2D1_CAP_STYLE_ROUND, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
                 D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
                 D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT,
@@ -373,6 +373,13 @@ impl Painter<'_> {
             draw(self);
             self.rt().SetTransform(&before);
         }
+    }
+
+    /// Draws `draw` cut to `rect`: a tab folding into its group's label.
+    pub fn clip(&self, rect: RectF, draw: impl FnOnce(&Painter)) {
+        unsafe { self.rt().PushAxisAlignedClip(&rect.d2d(), D2D1_ANTIALIAS_MODE_ALIASED) };
+        draw(self);
+        unsafe { self.rt().PopAxisAlignedClip() };
     }
 
     /// A card on the ground (brand.css `shadow-card`): a soft drop under

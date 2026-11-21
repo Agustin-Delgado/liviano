@@ -23,6 +23,7 @@ use crate::{
     design::Rgb,
     omnibox,
     split::{self, Pair, SavedPair, Side, Splits},
+    tab_groups::Drop,
     tabbar::Rect,
 };
 
@@ -105,8 +106,8 @@ impl App {
         self.panes_of(&pair).of(side)
     }
 
-    /// What the strip draws as one group: every pair, while split view is on.
-    pub(super) fn split_groups(&self) -> Vec<(u64, u64)> {
+    /// What the strip draws on one ground: every pair, while split view is on.
+    pub(super) fn split_pairs(&self) -> Vec<(u64, u64)> {
         if !self.settings.split_view {
             return Vec::new();
         }
@@ -130,21 +131,53 @@ impl App {
 
     // ---------- keeping the strip and the pairs consistent ----------
 
-    /// Puts partners side by side in the strip (see `split::arrange`).
-    fn arrange_tabs(&mut self, anchor: Option<u64>) -> bool {
+    /// Puts partners side by side in the strip (see `split::arrange`), in
+    /// the same tab group, and keeps every group's tabs together.
+    pub(super) fn arrange_tabs(&mut self, anchor: Option<u64>) -> bool {
+        let regrouped = self.pair_groups(anchor);
         let order: Vec<(u64, bool)> = self.tabs.tabs.iter().map(|t| (t.id, t.pinned)).collect();
         let arranged = split::arrange(&order, self.split.splits.pairs(), anchor);
-        if arranged == order {
-            return false;
+        let moved = arranged != order;
+        if moved {
+            for tab in &mut self.tabs.tabs {
+                if let Some(&(_, pinned)) = arranged.iter().find(|(id, _)| *id == tab.id) {
+                    tab.pinned = pinned;
+                }
+            }
+            self.tabs.tabs.sort_by_key(|t| arranged.iter().position(|(id, _)| *id == t.id));
         }
-        for tab in &mut self.tabs.tabs {
-            if let Some(&(_, pinned)) = arranged.iter().find(|(id, _)| *id == tab.id) {
-                tab.pinned = pinned;
+        let gathered = self.tabs.normalize_groups();
+        if moved || regrouped || gathered {
+            self.session_dirty = true;
+        }
+        moved || regrouped || gathered
+    }
+
+    /// A pair sits in one tab group or in none: the partner takes the
+    /// group of the anchor (the tab being dragged or the page that stays),
+    /// or else of the pair's first tab in the strip.
+    fn pair_groups(&mut self, anchor: Option<u64>) -> bool {
+        let mut changed = false;
+        for pair in self.split.splits.pairs().to_vec() {
+            let (a, b) = (self.tabs.group_of(pair.left), self.tabs.group_of(pair.right));
+            if a == b {
+                continue;
+            }
+            let lead = match anchor {
+                Some(x) if pair.contains(x) => x,
+                _ => match (self.tabs.index_of(pair.left), self.tabs.index_of(pair.right)) {
+                    (Some(l), Some(r)) if r < l => pair.right,
+                    _ => pair.left,
+                },
+            };
+            let group = self.tabs.group_of(lead);
+            let partner = pair.partner(lead).unwrap_or(lead);
+            if let Some(t) = self.tabs.get_mut(partner) {
+                t.group = group;
+                changed = true;
             }
         }
-        self.tabs.tabs.sort_by_key(|t| arranged.iter().position(|(id, _)| *id == t.id));
-        self.session_dirty = true;
-        true
+        changed
     }
 
     /// Before every layout: pairs that lost a tab are gone, partners sit together.
@@ -383,20 +416,25 @@ impl App {
             return;
         }
         self.hide_drop_hint();
-        let Some(to) = self.layout.drop_index(x, y) else { return };
-        if self.tabs.index_of(dragged) == Some(to) {
+        let Some(at) = self.layout.drop_at(x, y) else { return };
+        if at == Drop::Tab(self.tabs.index_of(dragged).unwrap_or(usize::MAX)) {
             return;
         }
-        let before: Vec<u64> = self.tabs.tabs.iter().map(|t| t.id).collect();
-        self.tabs.move_to(dragged, to);
+        // Dropped onto a tab it takes its place and its group; over a
+        // label it goes right before that group; past the end, out of any.
+        let before: Vec<(u64, Option<u64>)> = self.tabs.tabs.iter().map(|t| (t.id, t.group)).collect();
+        self.tabs.drop_tab(dragged, at);
         self.arrange_tabs(Some(dragged));
-        if self.tabs.tabs.iter().map(|t| t.id).ne(before) {
+        if self.tabs.tabs.iter().map(|t| (t.id, t.group)).ne(before) {
             self.session_dirty = true;
             self.relayout_soft();
         }
     }
 
     pub(super) fn mouse_up(&mut self, x: i32, y: i32) {
+        if self.group_mouse_up() {
+            return;
+        }
         if self.split.resizing {
             self.split.resizing = false;
             unsafe {
@@ -419,6 +457,7 @@ impl App {
 
     /// Someone else took the mouse mid-drag: nothing is dropped.
     pub(super) fn capture_lost(&mut self) {
+        self.group_capture_lost();
         self.split.resizing = false;
         self.drag = None;
         self.split.drag_origin = None;

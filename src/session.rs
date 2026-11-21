@@ -10,6 +10,9 @@ pub struct SavedTab {
     pub url: String,
     pub title: String,
     pub pinned: bool,
+    /// Position in `Session::groups` of the tab's group.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub group: Option<usize>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -24,5 +27,8 @@ pub struct Session {
     pub maximized: bool,
     /// Split view pairs, by position in `tabs` (see `split`).
     pub splits: Vec<crate::split::SavedPair>,
+    /// Tab groups: name, colour and whether folded; their tabs point at
+    /// them by position (see `tab_groups`).
+    pub groups: Vec<crate::tab_groups::SavedGroup>,
 }
 

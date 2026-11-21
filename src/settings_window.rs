@@ -36,7 +36,7 @@ use crate::{
     design::{Palette, dwm, size},
     gfx::{Align, Color, Font, RectF, Surface},
     widgets::{self, ButtonKind},
-    settings::{self, Settings, Theme},
+    settings::{self, FieldPosition, Settings, Theme},
     shortcuts::{self, Command},
     updater,
 };
@@ -77,6 +77,7 @@ const ID_COLLAPSED: i32 = 133;
 const ID_PREVIEW: i32 = 135;
 const ID_PREVIEW_LABEL: i32 = 136;
 const ID_COLLAPSED_LABEL: i32 = 134;
+const ID_FIELD_POSITION: i32 = 137;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
@@ -87,6 +88,9 @@ const CLIENT_HEIGHT: i32 = 898;
 /// Where the tabs go: the first thing in Ajustes, since the shortcut alone
 /// went unnoticed (and another program may hold it).
 const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "Arriba"), (true, "Al costado")];
+/// Where the field floats over the page.
+const FIELD_POSITIONS: [(FieldPosition, &str); 3] =
+    [(FieldPosition::Top, "Arriba"), (FieldPosition::Middle, "Al medio"), (FieldPosition::Bottom, "Abajo")];
 const THEMES: [(Theme, &str); 3] = [(Theme::System, "Del sistema"), (Theme::Light, "Claro"), (Theme::Dark, "Oscuro")];
 const OFFER_CHOICES: [(bool, &str); 2] = [(true, "Al iniciar sesión"), (false, "Nunca")];
 
@@ -132,6 +136,7 @@ struct State {
     passwords_offer: HWND,
     tab_layout: HWND,
     collapsed: HWND,
+    field_position: HWND,
     /// Shortcuts another program registered system-wide: they never reach us.
     taken: Vec<shortcuts::Chord>,
     /// "Importar…" was pressed: its menu opens after the state is released.
@@ -552,19 +557,24 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         label(&mut add, "Ej.: Ctrl+Shift+O o F6; varios con coma; vacío: sin atajo.", (r, 388, 356, 22));
         let status = label(&mut add, "Los cambios se aplican y se guardan al momento.", (r, 418, 356, 22));
 
+        // The field: where it floats, laid out as Pestañas' Ubicación.
+        heading(&mut add, "Campo", (r, 452, 140, 22));
+        label(&mut add, "Ubicación", (r, 486, 140, 22));
+        let field_position = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (r + 150, 482, 190, 200), ID_FIELD_POSITION, Kind::Combo, false);
+
         // The box carries no text of its own: a themed checkbox ignores the
         // text colour, so in dark mode its label would vanish. The label
         // beside it toggles it too.
-        heading(&mut add, "Actualizaciones", (r, 452, 140, 22));
-        let updates = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 453, 20, 20), ID_UPDATES, Kind::Button, false);
-        add(w!("STATIC"), "Buscar una vez por día", SS_NOTIFY, none, (r + 174, 452, 182, 22), ID_UPDATES_LABEL, Kind::Label, false);
-        heading(&mut add, "Privacidad", (r, 484, 140, 22));
-        let trackers = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r, 511, 20, 20), ID_TRACKERS, Kind::Button, false);
-        add(w!("STATIC"), "Bloquear cookies de terceros y rastreadores", SS_NOTIFY, none, (r + 24, 510, 332, 22), ID_TRACKERS_LABEL, Kind::Label, false);
-        heading(&mut add, "Pruebas", (r, 542, 140, 22));
-        let bench = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 543, 20, 20), ID_BENCH, Kind::Button, false);
-        add(w!("STATIC"), "Control por script (canal local)", SS_NOTIFY, none, (r + 174, 542, 182, 22), ID_BENCH_LABEL, Kind::Label, false);
-        let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 570, 356, 22), -1, Kind::Label, false);
+        heading(&mut add, "Actualizaciones", (r, 520, 140, 22));
+        let updates = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 521, 20, 20), ID_UPDATES, Kind::Button, false);
+        add(w!("STATIC"), "Buscar una vez por día", SS_NOTIFY, none, (r + 174, 520, 182, 22), ID_UPDATES_LABEL, Kind::Label, false);
+        heading(&mut add, "Privacidad", (r, 552, 140, 22));
+        let trackers = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r, 579, 20, 20), ID_TRACKERS, Kind::Button, false);
+        add(w!("STATIC"), "Bloquear cookies de terceros y rastreadores", SS_NOTIFY, none, (r + 24, 578, 332, 22), ID_TRACKERS_LABEL, Kind::Label, false);
+        heading(&mut add, "Pruebas", (r, 610, 140, 22));
+        let bench = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 611, 20, 20), ID_BENCH, Kind::Button, false);
+        add(w!("STATIC"), "Control por script (canal local)", SS_NOTIFY, none, (r + 174, 610, 182, 22), ID_BENCH_LABEL, Kind::Label, false);
+        let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 638, 356, 22), -1, Kind::Label, false);
         add(w!("BUTTON"), "Cerrar", button_style, none, (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28), ID_CLOSE, Kind::Button, false);
 
         for (theme_value, name) in THEMES {
@@ -575,6 +585,10 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         for (_, name) in TAB_LAYOUTS {
             let text = wide(name);
             SendMessageW(tab_layout, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+        }
+        for (_, name) in FIELD_POSITIONS {
+            let text = wide(name);
+            SendMessageW(field_position, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
         for (_, name) in OFFER_CHOICES {
             let text = wide(name);
@@ -598,6 +612,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             commands,
             tab_layout,
             collapsed,
+            field_position,
             taken,
             children,
             theme,
@@ -641,6 +656,10 @@ fn fill_all(st: &mut State) {
     unsafe {
         SendMessageW(st.split, BM_SETCHECK, Some(WPARAM(check as usize)), None);
         SendMessageW(st.preview, BM_SETCHECK, Some(WPARAM(preview as usize)), None);
+    }
+    let position_index = FIELD_POSITIONS.iter().position(|(p, _)| *p == st.settings.field_position).unwrap_or(0);
+    unsafe {
+        SendMessageW(st.field_position, CB_SETCURSEL, Some(WPARAM(position_index)), None);
     }
     let offer_index = OFFER_CHOICES.iter().position(|(on, _)| *on == st.settings.passwords_offer).unwrap_or(0);
     unsafe {
@@ -965,6 +984,17 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
                 _ => Outcome::Nothing,
             }
         }
+        (ID_FIELD_POSITION, CBN_SELCHANGE) => {
+            let index = unsafe { SendMessageW(st.field_position, CB_GETCURSEL, None, None).0 };
+            match FIELD_POSITIONS.get(index.max(0) as usize) {
+                Some((position, _)) if *position != st.settings.field_position => {
+                    st.settings.field_position = *position;
+                    status(st, field_position_note(*position));
+                    Outcome::Changed
+                }
+                _ => Outcome::Nothing,
+            }
+        }
         (ID_PASSWORDS_IMPORT, BN_CLICKED_CODE) => Outcome::ImportPasswords,
         (ID_PASSWORDS_LIST, BN_CLICKED_CODE) => {
             crate::web::push(crate::web::Event::Command(Command::Passwords));
@@ -1035,6 +1065,16 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
         // Esc.
         (2, _) => Outcome::Close,
         _ => Outcome::Nothing,
+    }
+}
+
+/// What the status line says after picking a position, with the one
+/// exception the choice has.
+fn field_position_note(position: FieldPosition) -> &'static str {
+    match position {
+        FieldPosition::Top => "El campo se abre arriba.",
+        FieldPosition::Middle => "El campo se abre al medio; buscar en la página sigue arriba.",
+        FieldPosition::Bottom => "El campo se abre abajo y su lista hacia arriba.",
     }
 }
 
@@ -1233,3 +1273,4 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         _ => default(),
     }
 }
+

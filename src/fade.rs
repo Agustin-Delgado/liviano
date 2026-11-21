@@ -7,6 +7,10 @@
 //! A popup closing stops taking the pointer at once (clicks go through to
 //! what is under it) and hides when its fade is over; shown again while it
 //! fades out, it turns around from the opacity it has.
+//!
+//! A window drawn in two layers (the field: its shape and shadow under its
+//! controls) registers a follower, called after every change of opacity,
+//! place or visibility, so the layer under it moves in step.
 
 use std::{cell::RefCell, collections::HashMap, time::Instant};
 
@@ -42,6 +46,36 @@ struct Fading {
 
 thread_local! {
     static FADING: RefCell<HashMap<isize, Fading>> = RefCell::new(HashMap::new());
+    static FOLLOWERS: RefCell<HashMap<isize, fn(HWND)>> = RefCell::new(HashMap::new());
+}
+
+/// `follower(hwnd)` runs after each step of a fade of `hwnd` (opacity,
+/// slide, the final hide).
+pub fn follow(hwnd: HWND, follower: fn(HWND)) {
+    FOLLOWERS.with(|f| f.borrow_mut().insert(hwnd.0 as isize, follower));
+}
+
+fn notify(hwnd: HWND) {
+    if let Some(follower) = FOLLOWERS.with(|f| f.borrow().get(&(hwnd.0 as isize)).copied()) {
+        follower(hwnd);
+    }
+}
+
+/// The window was moved to a new resting place while it may be sliding:
+/// the slide goes on from there instead of pulling it back.
+pub fn rest_at(hwnd: HWND, x: i32, y: i32) {
+    let now = Instant::now();
+    let moved = FADING.with(|f| {
+        let mut f = f.borrow_mut();
+        let Some(fading) = f.get_mut(&(hwnd.0 as isize)) else { return false };
+        let Some((_, _, dy)) = fading.slide else { return false };
+        fading.slide = Some((x, y, dy));
+        apply(hwnd, fading, now);
+        true
+    });
+    if moved {
+        notify(hwnd);
+    }
 }
 
 fn ex_style(hwnd: HWND) -> i32 {
@@ -114,6 +148,7 @@ pub fn fade_in(hwnd: HWND, spec: Spec, max: u8, rise: i32) {
     if anim::reduced() {
         set_alpha(hwnd, max);
         restore_place(hwnd, slide);
+        notify(hwnd);
         return;
     }
     if slide.is_none() && rise != 0 {
@@ -131,6 +166,7 @@ pub fn fade_in(hwnd: HWND, spec: Spec, max: u8, rise: i32) {
     };
     apply(hwnd, &fading, now);
     FADING.with(|f| f.borrow_mut().insert(hwnd.0 as isize, fading));
+    notify(hwnd);
     anim::drive(step);
 }
 
@@ -162,6 +198,7 @@ pub fn fade_out(hwnd: HWND, spec: Spec, sink: i32, then: Option<fn(HWND)>) {
         unsafe {
             let _ = ShowWindow(hwnd, SW_HIDE);
         }
+        notify(hwnd);
         if let Some(then) = then {
             then(hwnd);
         }
@@ -204,6 +241,7 @@ pub fn fade_out(hwnd: HWND, spec: Spec, sink: i32, then: Option<fn(HWND)>) {
     };
     apply(hwnd, &fading, now);
     FADING.with(|f| f.borrow_mut().insert(hwnd.0 as isize, fading));
+    notify(hwnd);
     anim::drive(step);
 }
 
@@ -236,6 +274,7 @@ fn apply(hwnd: HWND, fading: &Fading, now: Instant) {
 fn step() -> bool {
     let now = Instant::now();
     let mut done: Vec<(HWND, Fading)> = Vec::new();
+    let mut moved: Vec<HWND> = Vec::new();
     FADING.with(|f| {
         let mut f = f.borrow_mut();
         let keys: Vec<isize> = f.keys().copied().collect();
@@ -245,9 +284,14 @@ fn step() -> bool {
             apply(hwnd, fading, now);
             if !fading.level.moving(now) {
                 done.push((hwnd, f.remove(&key).expect("key listed")));
+            } else {
+                moved.push(hwnd);
             }
         }
     });
+    for hwnd in moved {
+        notify(hwnd);
+    }
     for (hwnd, fading) in done {
         if fading.closing {
             unsafe {
@@ -256,6 +300,7 @@ fn step() -> bool {
             }
             set_alpha(hwnd, fading.max);
             restore_place(hwnd, fading.slide);
+            notify(hwnd);
             if let Some(then) = fading.then {
                 then(hwnd);
             }
@@ -265,6 +310,7 @@ fn step() -> bool {
             if fading.unlayer {
                 unlayer(hwnd);
             }
+            notify(hwnd);
         }
     }
     FADING.with(|f| !f.borrow().is_empty())

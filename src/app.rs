@@ -24,7 +24,6 @@ use windows::{
             SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
         },
         UI::{
-            HiDpi::GetDpiForWindow,
             Input::KeyboardAndMouse::{
                 SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
             },
@@ -40,6 +39,7 @@ mod bench_ui;
 mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
+mod groups_ui;
 mod hovercard_ui;
 mod panel_ui;
 mod popups_ui;
@@ -107,6 +107,8 @@ enum Mode {
     Panel(PanelKind),
     /// Choose what goes beside the current page (Ctrl+Alt+N).
     Split,
+    /// Name a tab group: Enter keeps what is typed.
+    RenameGroup(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -148,6 +150,7 @@ struct App {
     panels: panel_ui::Panels,
     curtain: Curtain,
     split: split_ui::SplitUi,
+    groups: groups_ui::GroupsUi,
     bench: bench_ui::BenchState,
     vault: vault_ui::Vault,
     extensions: extensions_ui::Extensions,
@@ -226,7 +229,7 @@ pub fn run() -> windows::core::Result<()> {
     crate::omnibar::register(&omnibar);
 
     let palette = design::palette(settings.theme);
-    let scale = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0;
+    let scale = design::window_scale(hwnd);
     let font = make_font(scale);
     crate::favicon::set_scale(scale);
     omnibar.set_font(font, scale);
@@ -234,14 +237,14 @@ pub fn run() -> windows::core::Result<()> {
     apply_window_theme(hwnd, &palette);
 
     let mut tabs = TabList::default();
-    for saved in &session.tabs {
-        tabs.insert(&saved.url, &saved.title, saved.pinned, None);
-    }
-    if let Some(tab) = tabs.tabs.get(session.active.min(tabs.tabs.len().saturating_sub(1))) {
-        let id = tab.id;
+    let restored: Vec<(u64, Option<usize>)> =
+        session.tabs.iter().map(|saved| (tabs.insert(&saved.url, &saved.title, saved.pinned, None), saved.group)).collect();
+    // Selected after the groups are back: a live tab in a folded group unfolds it.
+    tabs.restore_groups(&session.groups, &restored);
+    let restored: Vec<u64> = restored.into_iter().map(|(id, _)| id).collect();
+    if let Some(&id) = restored.get(session.active.min(restored.len().saturating_sub(1))) {
         tabs.select(id);
     }
-    let restored: Vec<u64> = tabs.tabs.iter().map(|t| t.id).collect();
     let splits = Splits::from_saved(&session.splits, &restored);
 
     let app = App {
@@ -276,6 +279,7 @@ pub fn run() -> windows::core::Result<()> {
         panels: Default::default(),
         curtain: Curtain::load(&data),
         split: split_ui::SplitUi::new(splits),
+        groups: Default::default(),
         bench: Default::default(),
         vault: Default::default(),
         extensions: extensions_ui::Extensions::load(),
@@ -639,6 +643,7 @@ impl App {
                 loading: t.loading,
                 private: t.private,
                 icon: if t.private { None } else { crate::favicon::for_url(&t.url) },
+                group: t.group,
             })
             .collect()
     }
@@ -649,6 +654,7 @@ impl App {
         let metrics = Metrics { scale: self.scale };
         self.layout = tabbar::layout_with(
             &self.tab_infos(),
+            &self.group_infos(),
             width,
             height,
             self.vertical,
@@ -690,7 +696,8 @@ impl App {
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
-        let groups = self.split_groups();
+        let pairs = self.split_pairs();
+        let tab_groups = self.group_infos();
         let hint = self.hint().map(str::to_owned);
         let paint = tabbar::Paint {
             layout: &self.layout,
@@ -699,7 +706,8 @@ impl App {
             palette: &self.palette,
             hint: hint.as_deref(),
             scale: self.scale,
-            groups: &groups,
+            pairs: &pairs,
+            tab_groups: &tab_groups,
             fills: &fills,
             extension_initials: &extension_initials,
             motion: &self.motion,
@@ -781,7 +789,7 @@ impl App {
     }
 
     fn refresh_dpi(&mut self) {
-        self.scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
+        self.scale = design::window_scale(self.hwnd);
         let old = self.font;
         self.font = make_font(self.scale);
         crate::favicon::set_scale(self.scale);
@@ -872,7 +880,12 @@ impl App {
         if let Some(leaving) = self.tabs.active {
             self.capture_thumb(leaving);
         }
+        // A tab of a folded group (Ctrl+K, Ctrl+1…8) unfolds it.
+        let unfolds = self.tabs.is_hidden(id);
         if self.tabs.select(id) {
+            if unfolds {
+                self.relayout_soft();
+            }
             self.show_active();
             self.warm_up_if_asleep();
             self.focus_page();
@@ -1111,6 +1124,7 @@ impl App {
         let metrics = Metrics { scale: self.scale };
         self.layout = tabbar::layout_with(
             &self.tab_infos(),
+            &self.group_infos(),
             width,
             height,
             self.vertical,
@@ -1281,7 +1295,8 @@ impl App {
                 }
             }
             Command::ShowHidden => {
-                let (x, y, width) = self.omnibar_anchor();
+                let frame = self.omnibar_frame();
+                let (x, y, width) = (frame.left, frame.top, frame.width);
                 if let Some(tab) = self.tabs.active_tab() {
                     if let Live::Ready(web) = &tab.live {
                         self.curtain.show_hidden(self.hwnd, (x + width / 2, y), web, live_webs(&self.tabs));
@@ -1314,6 +1329,7 @@ impl App {
             }
             Command::FocusLeftPage => self.focus_side(Side::Left),
             Command::FocusRightPage => self.focus_side(Side::Right),
+            Command::GroupTab | Command::UngroupTab | Command::ToggleGroup => self.group_command(command),
         }
     }
 
@@ -1377,6 +1393,10 @@ impl App {
         if self.divider_drag(x) {
             return;
         }
+        if self.group_mouse_move(x, y) {
+            self.set_hover(self.layout.hit(x, y));
+            return;
+        }
         if let Some(dragged) = self.drag {
             self.drag_tab(dragged, x, y);
         }
@@ -1400,6 +1420,7 @@ impl App {
                 }
             }
             Some(Hit::Close(id)) => self.close_tab(id),
+            Some(Hit::Group(group)) => self.group_mouse_down(group, x, y),
             Some(Hit::NewTab) => {
                 self.motion.press(tabbar::HoverKey::NewTab);
                 self.open_omnibar(Mode::NewTab);
@@ -1429,6 +1450,10 @@ impl App {
     }
 
     fn context_menu(&mut self, x: i32, y: i32) {
+        if let Some(Hit::Group(group)) = self.layout.hit(x, y) {
+            self.group_menu(x, y, group);
+            return;
+        }
         let Some(Hit::Tab(id) | Hit::Close(id)) = self.layout.hit(x, y) else {
             if self.layout.strip.contains(x, y) && self.layout.hit(x, y).is_none() {
                 self.layout_menu(x, y);
@@ -1461,6 +1486,7 @@ impl App {
             } else if can_split {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Abrir al lado de la página actual"));
             }
+            self.append_group_items(menu, id);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_TAB_LAYOUT, &wide(frame_ui::layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -1473,6 +1499,9 @@ impl App {
             let _ = DestroyMenu(menu);
             if chosen == MENU_TAB_LAYOUT {
                 self.run(Command::ToggleTabLayout);
+                return;
+            }
+            if self.group_menu_choice(id, chosen) {
                 return;
             }
             if chosen != 0 && self.tabs.active != Some(id) && chosen != MENU_CLOSE && chosen != MENU_SPLIT {
@@ -1505,27 +1534,32 @@ impl App {
 
     // ---------- the single field ----------
 
-    fn omnibar_anchor(&self) -> (i32, i32, i32) {
+    /// The column of the focused page the field may float in (screen px).
+    fn omnibar_frame(&self) -> crate::omnibar::Frame {
         let content = self.focused_pane();
         let px = |v: f32| (v * self.scale).round() as i32;
         let width = px(640.0).min(content.width() - px(32.0)).max(px(240.0));
         let left = content.left + (content.width() - width) / 2;
-        let mut point = POINT { x: left, y: content.top + px(10.0) };
+        let gap = px(crate::omnibar::EDGE_GAP);
+        let mut top = POINT { x: left, y: content.top + gap };
+        let mut bottom = POINT { x: left, y: content.bottom - gap };
         unsafe {
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut top);
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut bottom);
         }
-        (point.x, point.y, width)
+        crate::omnibar::Frame { left: top.x, top: top.y, width, bottom: bottom.y }
     }
 
     fn place_omnibar(&self) {
         self.place_vault_bar();
         if self.mode.is_some() {
-            self.omnibar.place(self.omnibar_anchor());
+            self.omnibar.place(self.omnibar_frame());
         }
     }
 
     fn open_omnibar(&mut self, mode: Mode) {
         self.hide_card();
+        self.forget_group_target();
         if self.mode == Some(Mode::Find) {
             self.with_active_web(|w| w.find_stop());
         }
@@ -1541,6 +1575,10 @@ impl App {
             Mode::Find => ("Buscar en la página", String::new(), false),
             Mode::Panel(kind) => (kind.cue(), String::new(), false),
             Mode::Split => ("Al lado: dirección, búsqueda o pestaña abierta (Enter vacío: la misma página)", String::new(), false),
+            Mode::RenameGroup(group) => {
+                let (cue, name) = self.group_cue(group);
+                (cue, name, true)
+            }
         };
         self.mode = Some(mode);
         // With no engine and no tab (the window just opened, empty), the
@@ -1553,12 +1591,13 @@ impl App {
         self.load_panel_data(mode);
         self.rows.clear();
         self.typed_len = text.encode_utf16().count();
-        let anchor = self.omnibar_anchor();
+        let frame = self.omnibar_frame();
         match mode {
             Mode::Panel(_) => self.omnibar.set_list_mode(panel_ui::PANEL_VISIBLE_ROWS, true),
             _ => self.omnibar.set_list_mode(usize::MAX, false),
         }
-        self.omnibar.open(anchor, cue, &text, select_all);
+        let position = crate::omnibar::position_for(self.settings.field_position, mode == Mode::Find);
+        self.omnibar.open(frame, position, cue, &text, select_all);
         if matches!(mode, Mode::Switch | Mode::Panel(_) | Mode::Split) {
             self.refresh_rows(false);
         }
@@ -1566,6 +1605,7 @@ impl App {
     }
 
     fn close_omnibar(&mut self) {
+        self.forget_group_target();
         if self.mode.take() == Some(Mode::Find) {
             self.with_active_web(|w| w.find_stop());
         }
@@ -1623,7 +1663,7 @@ impl App {
             self.omnibar.set_rows(&labels);
         }
         let _doing = crate::diag::doing(&"campo:ubicar", 0);
-        self.omnibar.place(self.omnibar_anchor());
+        self.omnibar.place(self.omnibar_frame());
     }
 
     fn refresh_rows(&mut self, typing_forward: bool) {
@@ -1667,7 +1707,7 @@ impl App {
                 self.panel_rows(kind, &text)
             }
             Mode::Split => self.split_rows(&text),
-            Mode::Find => return,
+            Mode::Find | Mode::RenameGroup(_) => return,
         };
         self.set_rows(rows);
     }
@@ -1692,6 +1732,10 @@ impl App {
         }
         if mode == Mode::Split {
             self.split_submit(row);
+            return;
+        }
+        if let Mode::RenameGroup(group) = mode {
+            self.rename_submit(group);
             return;
         }
         match (mode, chosen) {
@@ -1726,8 +1770,11 @@ impl App {
     }
 
     fn go(&mut self, mode: Mode, url: &str) {
+        let group = self.take_group_target();
         self.close_omnibar();
-        if mode == Mode::NewTab {
+        if let (Mode::NewTab, Some(group)) = (mode, group) {
+            self.open_tab_in_group(url, group);
+        } else if mode == Mode::NewTab {
             let at = self.tabs.after_active();
             self.open_tab(url, at);
         } else if mode == Mode::NewPrivateTab {
@@ -1775,6 +1822,7 @@ impl App {
             window: Some([r.left, r.top, r.right, r.bottom]),
             maximized: placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
             splits: self.saved_splits(),
+            groups: private_tabs::saved_groups(&self.tabs),
         }
     }
 

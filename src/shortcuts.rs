@@ -44,6 +44,9 @@ pub enum Command {
     FocusLeftPage,
     FocusRightPage,
     Passwords,
+    GroupTab,
+    UngroupTab,
+    ToggleGroup,
 }
 
 impl Command {
@@ -89,6 +92,9 @@ impl Command {
                     Command::FocusLeftPage => "focus_left_page",
                     Command::FocusRightPage => "focus_right_page",
                     Command::Passwords => "passwords",
+                    Command::GroupTab => "group_tab",
+                    Command::UngroupTab => "ungroup_tab",
+                    Command::ToggleGroup => "toggle_group",
                     Command::GoToTab(_) => unreachable!(),
                 };
                 name.to_string()
@@ -137,6 +143,9 @@ impl Command {
             Command::FocusLeftPage => "Ir a la página dividida de la izquierda",
             Command::FocusRightPage => "Ir a la página dividida de la derecha",
             Command::Passwords => "Contraseñas",
+            Command::GroupTab => "Agregar pestaña a un grupo nuevo",
+            Command::UngroupTab => "Quitar pestaña del grupo",
+            Command::ToggleGroup => "Contraer o expandir el grupo",
         };
         label.to_string()
     }
@@ -237,6 +246,8 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(false, true, true, VK_LEFT), Command::FocusLeftPage),
         (chord(false, true, true, VK_RIGHT), Command::FocusRightPage),
         (chord(true, false, true, key(b'L')), Command::Passwords),
+        // Not in the spec's table: G for group, free in the rest of it.
+        (chord(true, true, false, key(b'G')), Command::GroupTab),
     ];
     for n in 1..=9u8 {
         table.push((chord(true, false, false, key(b'0' + n)), Command::GoToTab(n)));
@@ -288,7 +299,14 @@ pub fn table(overrides: &HashMap<String, String>) -> Vec<(Chord, Command)> {
 /// Every command, in the order the settings screen lists them.
 pub fn all_commands() -> Vec<Command> {
     let mut all: Vec<Command> = Vec::new();
-    for command in defaults().into_iter().map(|(_, c)| c).chain([Command::PinTab, Command::KeepAwake, Command::ToggleShield, Command::TogglePopups]) {
+    for command in defaults().into_iter().map(|(_, c)| c).chain([
+        Command::PinTab,
+        Command::KeepAwake,
+        Command::ToggleShield,
+        Command::TogglePopups,
+        Command::UngroupTab,
+        Command::ToggleGroup,
+    ]) {
         if !all.contains(&command) {
             all.push(command);
         }

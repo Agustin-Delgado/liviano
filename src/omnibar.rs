@@ -1,23 +1,45 @@
 //! The single field: a small popup over the page with a native edit control
-//! and, under it, the list of suggestions. It serves every mode — address,
+//! and, beside it, the list of suggestions. It serves every mode — address,
 //! tab switcher, find in page and the bookmarks, history, downloads and
 //! passwords panels — so there is one field, not six.
 //!
 //! The edit stays the system's (IME, selection, clipboard, undo all come
-//! with it); everything around it is drawn with Direct2D: the floating
-//! panel's ground and its search glass, and the list, an owner-drawn list
-//! box whose rows read as Search's (a site mark, the title, the address
-//! dimmed, a soft rounded ground for the picked row). Windows 11 rounds the
-//! popup's corners and casts its shadow.
+//! with it); everything around it is drawn with Direct2D: the panel's
+//! ground and its search glass, and the list, an owner-drawn list box whose
+//! rows read as Search's (a site mark, the title, the address dimmed, a
+//! soft rounded ground for the picked row).
+//!
+//! The field is a pill: its ends are half circles, radius half its height.
+//! With the list open the panel keeps the pill's round ends on the field's
+//! side and closes on the list's side with the dialog's corner, as a
+//! pill that grew a list. Windows only rounds a window by a few fixed
+//! pixels, so the panel is two windows:
+//!
+//! - the **backdrop**, per-pixel alpha (`UpdateLayeredWindow`), drawn once
+//!   per size: the antialiased shape, its 1 px ring and `shadow-pop`. It
+//!   never takes the pointer, and its bitmap is let go once handed over.
+//! - the **popup** over it, holding the edit and the list, clipped by a
+//!   window region to the shape pulled in by a pixel. The region's steps
+//!   fall where the backdrop is already the same solid ground, so the edge
+//!   that shows is the backdrop's smooth one; the children paint as in any
+//!   window, which they would not inside an `UpdateLayeredWindow` one.
+//!
+//! The popup fades as before (`fade`) and the backdrop follows each step.
+//!
+//! Where it floats is a setting (`FieldPosition`): under the top of the
+//! page, in the middle as a command palette, or on the bottom edge with
+//! the list opening upwards.
 
 use std::cell::{Cell, RefCell};
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
         Graphics::Gdi::{
-            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, InvalidateRect, PAINTSTRUCT,
-            SetBkColor, SetTextColor,
+            AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BeginPaint, BitBlt, ClientToScreen,
+            CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
+            ExtCreateRegion, GetDC, GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RDH_RECTANGLES,
+            RGNDATA, RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetTextColor, SetWindowRgn, TEXTMETRICW,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -38,9 +60,10 @@ use windows::{
 
 use crate::{
     anim::{self, Levels, specs},
-    design::{Palette, dwm, size},
+    design::{Palette, Rgb, dwm, lift, size},
     fade,
     gfx::{Align, Color, Font, Painter, RectF, Surface},
+    settings::FieldPosition,
 };
 
 /// Whether the foreground window is one of this process's. Taking the focus
@@ -55,6 +78,17 @@ pub fn owns_foreground() -> bool {
         let mut pid = 0u32;
         GetWindowThreadProcessId(foreground, Some(&mut pid));
         pid == windows::Win32::System::Threading::GetCurrentProcessId()
+    }
+}
+
+/// Where the field goes for a mode. Find in page never sits in the middle:
+/// the page scrolls each match to its middle, right under the palette, so
+/// there it opens on top. Every other mode goes where the setting says
+/// (find included on the bottom edge, as Firefox's find bar).
+pub fn position_for(setting: FieldPosition, find: bool) -> FieldPosition {
+    match setting {
+        FieldPosition::Middle if find => FieldPosition::Top,
+        other => other,
     }
 }
 
@@ -83,12 +117,27 @@ thread_local! {
     static HOVERED: Cell<Option<usize>> = const { Cell::new(None) };
     /// How far each row's grounds have come in: (picked, hovered) by row.
     static GROUNDS: RefCell<(Levels<usize>, Levels<usize>)> = RefCell::new(Default::default());
+    /// The backdrop and where it stands from the popup's corner (it follows
+    /// the popup from `fade`'s steps, which only know the popup).
+    static BACKDROP: Cell<Option<(HWND, i32, i32)>> = const { Cell::new(None) };
 }
 
+/// The field's height: the pill's ends are half of it.
+const FIELD_HEIGHT: f32 = 48.0;
+const ROW_HEIGHT: f32 = 36.0;
 /// Space around the list inside the panel.
 const LIST_PAD: f32 = 6.0;
 /// The glass's column at the field's left.
 const GLASS_COLUMN: f32 = 44.0;
+/// The list's end of the panel: the dialog's corner (brand.css
+/// `--radius-dialog`). Concentric enough with the rows' 8 px grounds 6 px
+/// in, and the list box's square corner stays inside it.
+const LIST_RADIUS: f32 = size::RADIUS_DIALOG;
+/// How far the region stands inside the drawn edge, in device pixels: the
+/// popup only covers what the backdrop paints solid.
+const REGION_INSET: f32 = 1.0;
+/// From the page's edge to the field (top and bottom), before scaling.
+pub const EDGE_GAP: f32 = 10.0;
 
 /// Posted to the panel when a click outside it took activation away.
 const WM_CLICKED_OUTSIDE: u32 = WM_APP + 60;
@@ -117,18 +166,479 @@ fn signal(s: Signal) {
     }
 }
 
+// ---------- geometry ----------
+
+/// Where the field may go, in screen pixels: a column of the focused page
+/// (its half in split view, beside the tab column when that is shown), its
+/// top and bottom already kept `EDGE_GAP` off the page's edges.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub left: i32,
+    pub top: i32,
+    pub width: i32,
+    pub bottom: i32,
+}
+
+/// The measures the layout needs, in device pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Metrics {
+    field: i32,
+    row: i32,
+    pad: i32,
+    list_radius: f32,
+}
+
+impl Metrics {
+    fn at(scale: f32) -> Self {
+        let px = |v: f32| (v * scale).round() as i32;
+        Self { field: px(FIELD_HEIGHT), row: px(ROW_HEIGHT), pad: px(LIST_PAD), list_radius: LIST_RADIUS * scale }
+    }
+}
+
+/// Where everything goes for one position, frame and number of rows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Layout {
+    /// The panel, in screen pixels.
+    panel: RECT,
+    /// The field's top, inside the panel.
+    field_top: i32,
+    /// The list box, inside the panel (zero height without rows).
+    list: RECT,
+    /// Rows on screen at once; the list scrolls past them.
+    shown: usize,
+    /// The hairline between field and list (y inside the panel).
+    rule: Option<i32>,
+    /// Corner radii of the panel: (top, bottom).
+    radii: (f32, f32),
+    /// The list reads upwards: the first row sits next to the field.
+    upward: bool,
+}
+
+impl Layout {
+    fn width(&self) -> i32 {
+        self.panel.right - self.panel.left
+    }
+    fn height(&self) -> i32 {
+        self.panel.bottom - self.panel.top
+    }
+}
+
+/// How far below the frame's top the field sits in the middle: its centre
+/// at 40 % of the page, the optical middle. With the list open the whole
+/// panel then sits about the centre, and the field never moves as rows come
+/// and go.
+const MIDDLE_AT: f32 = 0.4;
+
+fn layout(position: FieldPosition, frame: Frame, m: Metrics, rows: usize, max_rows: usize) -> Layout {
+    let height = frame.bottom - frame.top;
+    let list_extra = 1 + 2 * m.pad;
+    // The middle keeps its field still: the list only gets what fits under it.
+    let middle_top = (frame.top + (height as f32 * MIDDLE_AT) as i32 - m.field / 2).max(frame.top);
+    let room = match position {
+        FieldPosition::Middle => frame.bottom - middle_top - m.field - list_extra,
+        _ => height - m.field - list_extra,
+    };
+    let fit = (room / m.row.max(1)).max(1) as usize;
+    let shown = rows.min(max_rows).min(fit);
+    let list_h = shown as i32 * m.row;
+    let panel_h = m.field + if shown > 0 { list_extra + list_h } else { 0 };
+    let top = match position {
+        FieldPosition::Top => frame.top,
+        FieldPosition::Middle => middle_top,
+        FieldPosition::Bottom => frame.bottom - panel_h,
+    };
+    let panel = RECT { left: frame.left, top, right: frame.left + frame.width, bottom: top + panel_h };
+    let upward = position == FieldPosition::Bottom;
+    let width = frame.width;
+    let end = m.field as f32 / 2.0;
+    if shown == 0 {
+        let list = RECT { left: m.pad, top: m.field, right: width - m.pad, bottom: m.field };
+        return Layout { panel, field_top: 0, list, shown, rule: None, radii: (end, end), upward };
+    }
+    if upward {
+        let list = RECT { left: m.pad, top: m.pad, right: width - m.pad, bottom: m.pad + list_h };
+        let rule = list.bottom + m.pad;
+        Layout { panel, field_top: rule + 1, list, shown, rule: Some(rule), radii: (m.list_radius, end), upward }
+    } else {
+        let list = RECT { left: m.pad, top: m.field + 1 + m.pad, right: width - m.pad, bottom: m.field + 1 + m.pad + list_h };
+        Layout { panel, field_top: 0, list, shown, rule: Some(m.field), radii: (end, m.list_radius), upward }
+    }
+}
+
+/// The px a popover travels as it comes and goes, toward the edge it hangs
+/// from (celagem's popovers grow from the side that faces their trigger):
+/// down from the top, up from the bottom, and only the fade in the middle.
+fn slide(position: FieldPosition, scale: f32) -> i32 {
+    let px = (anim::POPOVER_SLIDE * scale).round() as i32;
+    match position {
+        FieldPosition::Top => -px,
+        FieldPosition::Middle => 0,
+        FieldPosition::Bottom => px,
+    }
+}
+
+/// A list row as the app numbers it (0 = best) and as the list box holds it:
+/// read upwards, the first row is the last one in the box, next to the field.
+fn list_index(row: usize, rows: usize, upward: bool) -> usize {
+    if upward { rows - 1 - row } else { row }
+}
+
+/// The arrow keys move on screen: Up goes up, also when the list reads
+/// upwards, where up is toward the rows after the first. From the field
+/// the first arrow toward the list lands on the first row; past the list's
+/// end the selection goes back to the field (None).
+fn next_selection(selected: Option<usize>, rows: usize, key_down: bool, upward: bool) -> Option<usize> {
+    if rows == 0 {
+        return None;
+    }
+    // +1: toward the rows after the first.
+    let toward_more = key_down != upward;
+    match selected {
+        None if toward_more => Some(0),
+        None => Some(rows - 1),
+        Some(r) if toward_more => (r + 1 < rows).then_some(r + 1),
+        Some(r) => r.checked_sub(1),
+    }
+}
+
+// ---------- the backdrop's shape ----------
+
+/// A rounded rectangle whose top corners and bottom corners may differ.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Shape {
+    left: f32,
+    top: f32,
+    width: f32,
+    height: f32,
+    radii: (f32, f32),
+}
+
+impl Shape {
+    /// Signed distance from (x, y) to the edge: negative inside.
+    fn distance(&self, x: f32, y: f32) -> f32 {
+        let (hw, hh) = (self.width / 2.0, self.height / 2.0);
+        let (cx, cy) = (self.left + hw, self.top + hh);
+        let r = if y < cy { self.radii.0 } else { self.radii.1 }.min(hw).min(hh).max(0.0);
+        let qx = (x - cx).abs() - (hw - r);
+        let qy = (y - cy).abs() - (hh - r);
+        let outside = (qx.max(0.0).powi(2) + qy.max(0.0).powi(2)).sqrt();
+        outside + qx.max(qy).min(0.0) - r
+    }
+
+    /// The shape moved and grown (`grow` < 0 shrinks it, corners too).
+    fn shifted(&self, dy: f32, grow: f32) -> Self {
+        Self {
+            left: self.left - grow,
+            top: self.top + dy - grow,
+            width: (self.width + 2.0 * grow).max(0.0),
+            height: (self.height + 2.0 * grow).max(0.0),
+            radii: ((self.radii.0 + grow).max(0.0), (self.radii.1 + grow).max(0.0)),
+        }
+    }
+}
+
+/// `shadow-pop` (0 12px 32px -8px black/0.18) and its 1 px ring, in px
+/// before scaling.
+const SHADOW_Y: f32 = 12.0;
+const SHADOW_BLUR: f32 = 32.0;
+const SHADOW_SPREAD: f32 = 8.0;
+
+/// How far the backdrop reaches past the panel on each side for the shadow:
+/// (left, top, right, bottom), device pixels.
+fn shadow_margins(scale: f32) -> (i32, i32, i32, i32) {
+    let reach = (SHADOW_BLUR - SHADOW_SPREAD) * scale;
+    let side = reach.ceil() as i32 + 2;
+    let top = (reach - SHADOW_Y * scale).max(0.0).ceil() as i32 + 2;
+    let bottom = (reach + SHADOW_Y * scale).ceil() as i32 + 2;
+    (side, top, side, bottom)
+}
+
+/// The colours the backdrop is drawn with.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BackdropLook {
+    fill: Rgb,
+    /// The ring's colour and opacity.
+    ring: (Rgb, f32),
+    /// The shadow's opacity at its heart.
+    shadow: f32,
+}
+
+impl BackdropLook {
+    fn of(palette: &Palette) -> Self {
+        // A black ring and shadow vanish on a dark page: the ring turns
+        // light and the shadow doubles, as the cards do.
+        let (ring, shadow) = if palette.dark {
+            ((Rgb(255, 255, 255), lift::POP_RING), lift::POP_DROP * 2.0)
+        } else {
+            ((Rgb(0, 0, 0), lift::POP_RING), lift::POP_DROP)
+        };
+        Self { fill: palette.field, ring, shadow }
+    }
+}
+
+/// erfc(x), Abramowitz and Stegun 7.1.26 (error under 1.5e-7).
+fn erfc(x: f32) -> f32 {
+    let z = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * z);
+    let poly = t * (0.254_829_6 + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152 + t * 1.061_405_4))));
+    let y = poly * (-z * z).exp();
+    if x >= 0.0 { y } else { 2.0 - y }
+}
+
+/// Draws the backdrop into `pixels` (premultiplied BGRA, `width` per row):
+/// the shadow, the ring 1 px outside the shape, and the shape's ground with
+/// an antialiased edge. Inside, past the edge, there is nothing to work
+/// out: the ground is solid there.
+fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: BackdropLook, scale: f32) {
+    let shadow = shape.shifted(SHADOW_Y * scale, -SHADOW_SPREAD * scale);
+    // CSS blur radius = 2 sigma.
+    let k = 1.0 / (SHADOW_BLUR * scale / 2.0 * std::f32::consts::SQRT_2);
+    let pack = |a: f32, r: f32, g: f32, b: f32| -> u32 {
+        let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+        c(a) << 24 | c(r) << 16 | c(g) << 8 | c(b)
+    };
+    let f = |v: u8| v as f32 / 255.0;
+    let (fr, fg, fb) = (f(look.fill.0), f(look.fill.1), f(look.fill.2));
+    let solid = pack(1.0, fr, fg, fb);
+    let (rr, rg, rb) = (f(look.ring.0.0), f(look.ring.0.1), f(look.ring.0.2));
+    for (i, pixel) in pixels.iter_mut().enumerate() {
+        let (x, y) = ((i % width) as f32 + 0.5, (i / width) as f32 + 0.5);
+        let d = shape.distance(x, y);
+        if d < -1.0 {
+            *pixel = solid;
+            continue;
+        }
+        let cover = (0.5 - d).clamp(0.0, 1.0);
+        let ring = ((1.5 - d).clamp(0.0, 1.0) - cover) * look.ring.1;
+        let drop = look.shadow * 0.5 * erfc(shadow.distance(x, y) * k);
+        // Shadow, then ring over it, then the ground over both.
+        let mut a = drop;
+        let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
+        a = ring + a * (1.0 - ring);
+        r = rr * ring + r * (1.0 - ring);
+        g = rg * ring + g * (1.0 - ring);
+        b = rb * ring + b * (1.0 - ring);
+        a = cover + a * (1.0 - cover);
+        r = fr * cover + r * (1.0 - cover);
+        g = fg * cover + g * (1.0 - cover);
+        b = fb * cover + b * (1.0 - cover);
+        *pixel = pack(a, r, g, b);
+    }
+}
+
+/// The popup's region as runs of rows: (top, bottom, left, right) of each
+/// band of rows that share a span, in the popup's pixels. Only pixels at
+/// least `REGION_INSET` inside the edge are in.
+fn region_bands(width: i32, height: i32, radii: (f32, f32)) -> Vec<(i32, i32, i32, i32)> {
+    let shape = Shape { left: 0.0, top: 0.0, width: width as f32, height: height as f32, radii };
+    let mut bands: Vec<(i32, i32, i32, i32)> = Vec::new();
+    for y in 0..height {
+        let cy = y as f32 + 0.5;
+        // The shape is the same on both sides: find the left end only.
+        let Some(left) = (0..width / 2 + 1).find(|x| shape.distance(*x as f32 + 0.5, cy) < -REGION_INSET) else { continue };
+        let right = width - left;
+        match bands.last_mut() {
+            Some(band) if band.1 == y && band.2 == left && band.3 == right => band.1 = y + 1,
+            _ => bands.push((y, y + 1, left, right)),
+        }
+    }
+    bands
+}
+
+fn apply_region(hwnd: HWND, width: i32, height: i32, radii: (f32, f32)) {
+    let bands = region_bands(width, height, radii);
+    let rects: Vec<RECT> = bands.iter().map(|(t, b, l, r)| RECT { left: *l, top: *t, right: *r, bottom: *b }).collect();
+    let header = std::mem::size_of::<RGNDATAHEADER>();
+    let bytes = header + rects.len() * std::mem::size_of::<RECT>();
+    // RGNDATA is a header followed by the rectangles: built in a buffer of
+    // u32s, which RECT and the header are aligned to.
+    let mut buffer = vec![0u32; bytes.div_ceil(4)];
+    let head = RGNDATAHEADER {
+        dwSize: header as u32,
+        iType: RDH_RECTANGLES,
+        nCount: rects.len() as u32,
+        nRgnSize: (rects.len() * std::mem::size_of::<RECT>()) as u32,
+        rcBound: RECT { left: 0, top: 0, right: width, bottom: height },
+    };
+    unsafe {
+        let base = buffer.as_mut_ptr() as *mut u8;
+        std::ptr::copy_nonoverlapping(&head as *const RGNDATAHEADER as *const u8, base, header);
+        std::ptr::copy_nonoverlapping(rects.as_ptr() as *const u8, base.add(header), rects.len() * std::mem::size_of::<RECT>());
+        let region = ExtCreateRegion(None, bytes as u32, buffer.as_ptr() as *const RGNDATA);
+        if !region.is_invalid() {
+            // The window owns the region from here on.
+            SetWindowRgn(hwnd, Some(region), true);
+        }
+    }
+}
+
+/// The opacity a layered window has now (255 when it says nothing).
+fn alpha_of(hwnd: HWND) -> u8 {
+    let mut alpha = 255u8;
+    let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+    unsafe {
+        if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_err() || flags.0 & LWA_ALPHA.0 == 0 {
+            return 255;
+        }
+    }
+    alpha
+}
+
+fn blend(alpha: u8) -> BLENDFUNCTION {
+    BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: AC_SRC_ALPHA as u8 }
+}
+
+/// Keeps the backdrop under the popup: same opacity, same place (a slide
+/// included), shown and hidden with it. `fade` calls it on every step.
+fn mirror(popup: HWND) {
+    let Some((backdrop, dx, dy)) = BACKDROP.with(|b| b.get()) else { return };
+    unsafe {
+        if !IsWindowVisible(popup).as_bool() {
+            let _ = ShowWindow(backdrop, SW_HIDE);
+            return;
+        }
+        let mut rect = RECT::default();
+        let _ = GetWindowRect(popup, &mut rect);
+        let _ = SetWindowPos(
+            backdrop,
+            Some(popup),
+            rect.left + dx,
+            rect.top + dy,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+        );
+        let blend = blend(alpha_of(popup));
+        let _ = UpdateLayeredWindow(backdrop, None, None, None, None, None, COLORREF(0), Some(&blend), ULW_ALPHA);
+    }
+}
+
+/// A 32-bit bitmap selected into a memory DC, freed when dropped.
+struct Canvas {
+    dc: HDC,
+    bitmap: HBITMAP,
+    old: HGDIOBJ,
+    bits: *mut u32,
+    len: usize,
+}
+
+impl Canvas {
+    fn new(width: i32, height: i32) -> Option<Self> {
+        unsafe {
+            let dc = CreateCompatibleDC(None);
+            let info = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: width,
+                    biHeight: -height,
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut bits = std::ptr::null_mut();
+            let Ok(bitmap) = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) else {
+                let _ = DeleteDC(dc);
+                return None;
+            };
+            let old = SelectObject(dc, bitmap.into());
+            Some(Self { dc, bitmap, old, bits: bits as *mut u32, len: (width * height) as usize })
+        }
+    }
+
+    fn pixels(&self) -> &mut [u32] {
+        unsafe { std::slice::from_raw_parts_mut(self.bits, self.len) }
+    }
+}
+
+impl Drop for Canvas {
+    fn drop(&mut self) {
+        unsafe {
+            SelectObject(self.dc, self.old);
+            let _ = DeleteObject(self.bitmap.into());
+            let _ = DeleteDC(self.dc);
+        }
+    }
+}
+
+/// What the backdrop on screen was drawn from, to draw it again on request.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Painted {
+    size: (i32, i32),
+    shape: Shape,
+    look: BackdropLook,
+    scale: f32,
+}
+
+thread_local! {
+    static PAINTED: Cell<Option<Painted>> = const { Cell::new(None) };
+}
+
+unsafe extern "system" fn backdrop_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        // What is on screen came from UpdateLayeredWindow, not from here. A
+        // paint only comes from PrintWindow (the capture tools), which
+        // points it at its own bitmap: it gets the picture again, drawn
+        // from the numbers it was drawn from, premultiplied alpha included.
+        WM_PAINT | WM_PRINT | WM_PRINTCLIENT => {
+            let mut ps = PAINTSTRUCT::default();
+            let hdc = if msg == WM_PAINT { unsafe { BeginPaint(hwnd, &mut ps) } } else { HDC(wparam.0 as _) };
+            if let Some(p) = PAINTED.with(|p| p.get()) {
+                if let Some(canvas) = Canvas::new(p.size.0, p.size.1) {
+                    render_backdrop(canvas.pixels(), p.size.0 as usize, p.shape, p.look, p.scale);
+                    unsafe {
+                        let _ = BitBlt(hdc, 0, 0, p.size.0, p.size.1, Some(canvas.dc), 0, 0, SRCCOPY);
+                    }
+                }
+            }
+            if msg == WM_PAINT {
+                unsafe {
+                    let _ = EndPaint(hwnd, &ps);
+                }
+            }
+            LRESULT(0)
+        }
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// What the backdrop was last drawn for: drawn again only when it changes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Drawn {
+    size: (i32, i32),
+    radii: (f32, f32),
+    look: BackdropLook,
+    /// The part of the backdrop the owner's client area leaves in sight,
+    /// relative to the panel.
+    clip: RECT,
+}
+
 pub struct Omnibar {
     pub popup: HWND,
     pub edit: HWND,
     pub list: HWND,
+    backdrop: HWND,
+    owner: HWND,
     rows: usize,
-    row_height: i32,
+    metrics: Metrics,
     scale: f32,
-    edit_height: i32,
+    /// The edit's text line, for centring it in the pill.
+    line_height: i32,
     /// Rows shown at once; the list scrolls past them.
     visible_rows: usize,
     /// Supr deletes the selected row instead of a character.
     rows_deletable: bool,
+    /// Where it opens this time (the setting, as `position_for` reads it).
+    position: FieldPosition,
+    /// The layout in force, read by the paint and the keys.
+    layout: Cell<Option<Layout>>,
+    drawn: Cell<Option<Drawn>>,
+    /// New rows read upwards: the list scrolls to its end once placed.
+    scroll_to_end: Cell<bool>,
 }
 
 impl Omnibar {
@@ -137,8 +647,6 @@ impl Omnibar {
         unsafe {
             let instance = GetModuleHandleW(None)?.into();
             let class = WNDCLASSW {
-                // The shadow under the rounded panel.
-                style: CS_DROPSHADOW,
                 lpfnWndProc: Some(popup_proc),
                 hInstance: instance,
                 lpszClassName: w!("LivianoOmnibar"),
@@ -146,6 +654,27 @@ impl Omnibar {
                 ..Default::default()
             };
             RegisterClassW(&class);
+            let shadow_class = WNDCLASSW {
+                lpfnWndProc: Some(backdrop_proc),
+                hInstance: instance,
+                lpszClassName: w!("LivianoOmnibarBackdrop"),
+                ..Default::default()
+            };
+            RegisterClassW(&shadow_class);
+            let backdrop = CreateWindowExW(
+                WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
+                w!("LivianoOmnibarBackdrop"),
+                PCWSTR::null(),
+                WS_POPUP,
+                0,
+                0,
+                1,
+                1,
+                Some(owner),
+                None,
+                Some(instance),
+                None,
+            )?;
             let popup = CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("LivianoOmnibar"),
@@ -192,19 +721,30 @@ impl Omnibar {
             )?;
             let _ = SetWindowSubclass(edit, Some(edit_proc), 1, 0);
             let _ = SetWindowSubclass(list, Some(list_proc), 2, 0);
-            dwm::set(popup, dwm::CORNERS, dwm::ROUND);
+            // The shape and the shadow are the backdrop's: Windows draws
+            // neither corners, nor border, nor shadow of its own.
+            dwm::set(popup, dwm::CORNERS, dwm::DO_NOT_ROUND);
+            dwm::set(popup, dwm::BORDER_COLOR, dwm::COLOR_NONE);
             // Layered for good, so it can fade in and out as a popover.
             fade::prepare(popup, 255);
+            fade::follow(popup, mirror);
+            BACKDROP.with(|b| b.set(Some((backdrop, 0, 0))));
             Ok(Self {
                 popup,
                 edit,
                 list,
+                backdrop,
+                owner,
                 rows: 0,
-                row_height: 36,
+                metrics: Metrics::at(1.0),
                 scale: 1.0,
-                edit_height: 34,
+                line_height: 19,
                 visible_rows: usize::MAX,
                 rows_deletable: false,
+                position: FieldPosition::Top,
+                layout: Cell::new(None),
+                drawn: Cell::new(None),
+                scroll_to_end: Cell::new(false),
             })
         }
     }
@@ -219,11 +759,21 @@ impl Omnibar {
             if old != 0 && old != font.0 as isize {
                 let _ = DeleteObject(HFONT(old as _).into());
             }
-            // Owner-drawn rows: their height is ours, not the font's.
-            self.row_height = (36.0 * scale).round() as i32;
-            SendMessageW(self.list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.row_height as isize)));
+            // The text line the edit draws, to centre it in the pill.
+            let dc = GetDC(Some(self.edit));
+            let before = SelectObject(dc, edit_font.into());
+            let mut metrics = TEXTMETRICW::default();
+            if GetTextMetricsW(dc, &mut metrics).as_bool() {
+                self.line_height = metrics.tmHeight;
+            }
+            SelectObject(dc, before);
+            ReleaseDC(Some(self.edit), dc);
         }
-        self.edit_height = (48.0 * scale).round() as i32;
+        self.metrics = Metrics::at(scale);
+        unsafe {
+            // Owner-drawn rows: their height is ours, not the font's.
+            SendMessageW(self.list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.metrics.row as isize)));
+        }
         self.scale = scale;
         LOOK.with(|l| l.set(l.get().map(|(p, _)| (p, scale))));
     }
@@ -240,13 +790,15 @@ impl Omnibar {
             }
         });
         LOOK.with(|l| l.set(Some((*palette, self.scale))));
-        dwm::set(self.popup, dwm::BORDER_COLOR, palette.line.colorref().0);
         dwm::set(self.popup, dwm::DARK_MODE, palette.dark as u32);
         unsafe {
             let theme = if palette.dark { w!("DarkMode_Explorer") } else { w!("Explorer") };
             let _ = SetWindowTheme(self.list, theme, PCWSTR::null());
             let _ = InvalidateRect(Some(self.popup), None, true);
             let _ = InvalidateRect(Some(self.list), None, true);
+        }
+        if let Some(layout) = self.layout.get() {
+            self.draw_backdrop(&layout);
         }
     }
 
@@ -257,8 +809,8 @@ impl Omnibar {
         self.rows_deletable = rows_deletable;
     }
 
-    /// Opens at `anchor` (screen coordinates: left, top, width).
-    pub fn open(&mut self, anchor: (i32, i32, i32), cue: &str, text: &str, select_all: bool) {
+    /// Opens in `frame` at `position` (see `position_for`).
+    pub fn open(&mut self, frame: Frame, position: FieldPosition, cue: &str, text: &str, select_all: bool) {
         unsafe {
             let cue = HSTRING::from(cue);
             SendMessageW(self.edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(cue.as_ptr() as isize)));
@@ -267,10 +819,12 @@ impl Omnibar {
             let start = if select_all { 0 } else { len };
             SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(start as usize)), Some(LPARAM(len)));
         }
+        self.position = position;
         self.set_rows(&[]);
-        self.place(anchor);
-        // A popover opening: 100 ms of fade (the list grows with what it finds).
-        fade::fade_in(self.popup, specs::POPOVER_IN, 255, 0);
+        self.place(frame);
+        // A popover opening: 100 ms of fade, coming a few px from the edge
+        // it hangs from (the list grows with what it finds).
+        fade::fade_in(self.popup, specs::POPOVER_IN, 255, slide(position, self.scale));
         unsafe {
             if owns_foreground() {
                 let _ = ShowWindow(self.popup, SW_SHOW);
@@ -283,44 +837,142 @@ impl Omnibar {
                 let _ = ShowWindow(self.popup, SW_SHOWNOACTIVATE);
             }
         }
+        mirror(self.popup);
     }
 
-    pub fn place(&self, (left, top, width): (i32, i32, i32)) {
-        let shown = self.rows.min(self.visible_rows);
-        let pad = (LIST_PAD * self.scale).round() as i32;
-        let list_h = shown as i32 * self.row_height;
-        let below = if shown > 0 { list_h + 2 * pad + 1 } else { 0 };
+    pub fn place(&self, frame: Frame) {
+        let layout = layout(self.position, frame, self.metrics, self.rows, self.visible_rows);
+        let before = self.layout.replace(Some(layout));
+        let m = self.metrics;
         let glass = (GLASS_COLUMN * self.scale).round() as i32;
-        let text_h = (self.edit_height as f32 * 0.5).round() as i32;
+        let (width, height) = (layout.width(), layout.height());
+        let line = self.line_height.min(m.field);
         unsafe {
-            let _ = SetWindowPos(self.popup, Some(HWND_TOP), left, top, width, self.edit_height + below, SWP_NOACTIVATE);
+            let _ = SetWindowPos(
+                self.popup,
+                Some(HWND_TOP),
+                layout.panel.left,
+                layout.panel.top,
+                width,
+                height,
+                SWP_NOACTIVATE,
+            );
+            // The text line in the middle of the pill; the edit ends where
+            // the pill's right end starts to curve in.
             let _ = SetWindowPos(
                 self.edit,
                 None,
                 glass,
-                (self.edit_height - text_h) / 2,
-                width - glass - (16.0 * self.scale).round() as i32,
-                text_h,
+                layout.field_top + (m.field - line) / 2,
+                width - glass - m.field / 2,
+                line,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
             // EC_LEFTMARGIN | EC_RIGHTMARGIN, both zero: the glass column is the margin.
             SendMessageW(self.edit, EM_SETMARGINS, Some(WPARAM(3)), Some(LPARAM(0)));
+            let list = layout.list;
             let _ = SetWindowPos(
                 self.list,
                 None,
-                pad,
-                self.edit_height + 1 + pad,
-                width - 2 * pad,
-                list_h,
+                list.left,
+                list.top,
+                list.right - list.left,
+                list.bottom - list.top,
                 SWP_NOZORDER | SWP_NOACTIVATE,
             );
-            let _ = ShowWindow(self.list, if self.rows > 0 { SW_SHOWNA } else { SW_HIDE });
+            let _ = ShowWindow(self.list, if layout.shown > 0 { SW_SHOWNA } else { SW_HIDE });
+            if self.scroll_to_end.replace(false) && layout.upward && self.rows > 0 {
+                SendMessageW(self.list, LB_SETTOPINDEX, Some(WPARAM(self.rows - 1)), None);
+            }
+            let reshaped = before.is_none_or(|b| (b.width(), b.height(), b.radii) != (width, height, layout.radii));
+            if reshaped {
+                apply_region(self.popup, width, height, layout.radii);
+            }
             let _ = InvalidateRect(Some(self.popup), None, false);
         }
+        // A fade sliding in goes on from the new place.
+        fade::rest_at(self.popup, layout.panel.left, layout.panel.top);
+        self.draw_backdrop(&layout);
+        mirror(self.popup);
+    }
+
+    /// Draws the backdrop for `layout` when its size, corners, colours or
+    /// the part in sight changed; otherwise `mirror` only moves it.
+    fn draw_backdrop(&self, layout: &Layout) {
+        let Some((palette, _)) = LOOK.with(|l| l.get()) else { return };
+        let (ml, mt, mr, mb) = shadow_margins(self.scale);
+        let (width, height) = (layout.width(), layout.height());
+        // The shadow ends with the owner's window, as a popover's ends with
+        // the page: nothing is drawn over the desktop.
+        let mut clip = RECT { left: -ml, top: -mt, right: width + mr, bottom: height + mb };
+        unsafe {
+            let mut client = RECT::default();
+            if GetClientRect(self.owner, &mut client).is_ok() {
+                let mut origin = POINT::default();
+                let _ = ClientToScreen(self.owner, &mut origin);
+                let (px, py) = (layout.panel.left - origin.x, layout.panel.top - origin.y);
+                clip.left = clip.left.max(-px);
+                clip.top = clip.top.max(-py);
+                clip.right = clip.right.min(client.right - px);
+                clip.bottom = clip.bottom.min(client.bottom - py);
+            }
+        }
+        if clip.right <= clip.left || clip.bottom <= clip.top {
+            return;
+        }
+        let drawn = Drawn { size: (width, height), radii: layout.radii, look: BackdropLook::of(&palette), clip };
+        if self.drawn.get() == Some(drawn) {
+            return;
+        }
+        let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
+        let shape = Shape {
+            left: -clip.left as f32,
+            top: -clip.top as f32,
+            width: width as f32,
+            height: height as f32,
+            radii: layout.radii,
+        };
+        let painted = Painted { size: (bw, bh), shape, look: drawn.look, scale: self.scale };
+        let Some(canvas) = Canvas::new(bw, bh) else { return };
+        render_backdrop(canvas.pixels(), bw as usize, shape, painted.look, painted.scale);
+        let at = POINT { x: layout.panel.left + clip.left, y: layout.panel.top + clip.top };
+        let size = SIZE { cx: bw, cy: bh };
+        let zero = POINT::default();
+        unsafe {
+            let alpha = if IsWindowVisible(self.popup).as_bool() { alpha_of(self.popup) } else { 0 };
+            let blend = blend(alpha);
+            let _ = UpdateLayeredWindow(
+                self.backdrop,
+                None,
+                Some(&at),
+                Some(&size),
+                Some(canvas.dc),
+                Some(&zero),
+                COLORREF(0),
+                Some(&blend),
+                ULW_ALPHA,
+            );
+        }
+        // The system keeps its own copy: ours goes at once (the canvas
+        // drops here). What it was drawn from is kept, a few numbers.
+        PAINTED.with(|p| p.set(Some(painted)));
+        BACKDROP.with(|b| b.set(Some((self.backdrop, clip.left, clip.top))));
+        self.drawn.set(Some(drawn));
     }
 
     pub fn close(&mut self) {
-        fade::fade_out(self.popup, specs::POPOVER_OUT, 0, None);
+        fade::fade_out(self.popup, specs::POPOVER_OUT, slide(self.position, self.scale), None);
+    }
+
+    /// Where a menu that belongs to the field opens: under the field's left
+    /// end (screen pixels).
+    pub fn menu_anchor(&self) -> POINT {
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.popup, &mut rect);
+        }
+        let field_top = self.layout.get().map_or(0, |l| l.field_top);
+        POINT { x: rect.left, y: rect.top + field_top + self.metrics.field }
     }
 
     pub fn text(&self) -> String {
@@ -358,50 +1010,63 @@ impl Omnibar {
         }
     }
 
+    fn upward(&self) -> bool {
+        self.position == FieldPosition::Bottom
+    }
+
     pub fn set_rows(&mut self, rows: &[String]) {
         HOVERED.with(|h| h.set(None));
         // New rows: whatever was picked or hovered before is another row now.
         GROUNDS.with(|g| *g.borrow_mut() = Default::default());
+        let upward = self.upward();
         unsafe {
             // Each add repaints a shown list otherwise: two hundred rows of
             // the history panel were a third of a second per keystroke.
             SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(0)), None);
             SendMessageW(self.list, LB_RESETCONTENT, None, None);
-            for row in rows {
+            let mut add = |row: &String| {
                 let text = HSTRING::from(row.as_str());
                 SendMessageW(self.list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+            };
+            if upward {
+                rows.iter().rev().for_each(&mut add);
+            } else {
+                rows.iter().for_each(&mut add);
             }
             SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(1)), None);
             let _ = InvalidateRect(Some(self.list), None, false);
         }
         self.rows = rows.len();
+        self.scroll_to_end.set(upward);
+    }
+
+    /// The rows in the app's order (the first is the best), whichever way
+    /// the list reads on screen.
+    pub fn row_labels(&self) -> Vec<String> {
+        let mut labels: Vec<String> = (0..self.rows).map(|i| item_text(self.list, i)).collect();
+        if self.upward() {
+            labels.reverse();
+        }
+        labels
     }
 
     pub fn selected_row(&self) -> Option<usize> {
         let index = unsafe { SendMessageW(self.list, LB_GETCURSEL, None, None).0 };
-        (index >= 0).then_some(index as usize)
+        (index >= 0 && (index as usize) < self.rows).then(|| list_index(index as usize, self.rows, self.upward()))
     }
 
     pub fn select_row(&self, row: Option<usize>) {
-        let index = row.map_or(usize::MAX, |r| r);
+        let index = row.filter(|r| *r < self.rows).map_or(usize::MAX, |r| list_index(r, self.rows, self.upward()));
         unsafe {
             SendMessageW(self.list, LB_SETCURSEL, Some(WPARAM(index)), None);
         }
     }
 
-    fn move_selection(&self, delta: isize) {
+    fn move_selection(&self, key_down: bool) {
         if self.rows == 0 {
             return;
         }
-        let next = match self.selected_row() {
-            None if delta > 0 => Some(0),
-            None => Some(self.rows - 1),
-            Some(r) => {
-                let n = r as isize + delta;
-                if n < 0 || n >= self.rows as isize { None } else { Some(n as usize) }
-            }
-        };
-        self.select_row(next);
+        self.select_row(next_selection(self.selected_row(), self.rows, key_down, self.upward()));
     }
 }
 
@@ -422,7 +1087,7 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
             let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
             if key == VK_DOWN.0 || key == VK_UP.0 {
                 if let Some(omnibar) = INSTANCE.with(|i| i.get()) {
-                    unsafe { (*omnibar).move_selection(if key == VK_DOWN.0 { 1 } else { -1 }) };
+                    unsafe { (*omnibar).move_selection(key == VK_DOWN.0) };
                 }
                 return LRESULT(0);
             }
@@ -484,12 +1149,10 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
                 let hdc = BeginPaint(hwnd, &mut ps);
                 let mut rect = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rect);
-                let list = GetDlgItem(Some(hwnd), LIST_ID as i32).unwrap_or_default();
-                let list_shown = IsWindowVisible(list).as_bool();
-                let edit_h = INSTANCE.with(|i| i.get()).map_or(rect.bottom, |o| (*o).edit_height);
-                if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                let placed = INSTANCE.with(|i| i.get()).and_then(|o| (*o).layout.get().map(|l| (l, (*o).metrics)));
+                if let (Some((palette, scale)), Some((layout, metrics))) = (LOOK.with(|l| l.get()), placed) {
                     SURFACES.with(|s| {
-                        s.borrow_mut().0.paint(hdc, rect, |g| paint_panel(g, rect, edit_h, list_shown, &palette, scale))
+                        s.borrow_mut().0.paint(hdc, rect, |g| paint_panel(g, rect, &layout, metrics, &palette, scale))
                     });
                 }
                 let _ = EndPaint(hwnd, &ps);
@@ -552,21 +1215,22 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
     }
 }
 
-/// The panel's ground: the field's colour, the search glass, and a hairline
-/// between the field and the list.
-fn paint_panel(g: &Painter, rect: RECT, edit_h: i32, list_shown: bool, pal: &Palette, scale: f32) {
+/// The panel's ground: the field's colour, the search glass in the middle
+/// of the pill's left end, and a hairline between the field and the list,
+/// in from the edges as far as the rows are.
+fn paint_panel(g: &Painter, rect: RECT, layout: &Layout, m: Metrics, pal: &Palette, scale: f32) {
     g.fill(rect.into(), pal.field);
     let column = GLASS_COLUMN * scale;
-    let (cx, cy) = (column * 0.55 - scale, edit_h as f32 / 2.0 - scale);
+    let (cx, cy) = (column * 0.55 - scale, layout.field_top as f32 + m.field as f32 / 2.0 - scale);
     let r = 5.5 * scale;
     let ink = Color::from(pal.ink_muted);
     g.arc(cx, cy, r, 0.0, std::f32::consts::TAU - 0.01, 1.5 * scale, ink);
     let d = r * std::f32::consts::FRAC_1_SQRT_2;
     let from = (cx + d, cy + d);
     g.line(from, (from.0 + 4.0 * scale, from.1 + 4.0 * scale), 1.6 * scale, ink);
-    if list_shown {
-        let y = edit_h as f32;
-        g.fill(RectF::new(0.0, y, rect.right as f32, y + 1.0), pal.line);
+    if let Some(y) = layout.rule {
+        let y = y as f32;
+        g.fill(RectF::new(m.pad as f32, y, rect.right as f32 - m.pad as f32, y + 1.0), pal.line);
     }
 }
 

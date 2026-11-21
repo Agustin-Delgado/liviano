@@ -24,7 +24,7 @@ use windows::{
             Input::KeyboardAndMouse::VK_RETURN,
             Shell::SHCreateStreamOnFileEx,
             WindowsAndMessaging::{
-                KillTimer, LB_GETCOUNT, LB_GETTEXT, LB_GETTEXTLEN, PostMessageW, SendMessageW, SetTimer, SetWindowTextW,
+                KillTimer, PostMessageW, SendMessageW, SetTimer, SetWindowTextW,
                 WM_CHAR, WM_CLOSE, WM_KEYDOWN,
             },
         },
@@ -160,27 +160,11 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::Find => "find",
         Mode::NewPrivateTab => "new_private_tab",
         Mode::Split => "split",
+        Mode::RenameGroup(_) => "rename_group",
         Mode::Panel(PanelKind::Bookmarks) => "bookmarks",
         Mode::Panel(PanelKind::History) => "history",
         Mode::Panel(PanelKind::Downloads) => "downloads",
         Mode::Panel(PanelKind::Passwords) => "passwords",
-    }
-}
-
-fn list_rows(list: HWND) -> Vec<String> {
-    unsafe {
-        let count = SendMessageW(list, LB_GETCOUNT, None, None).0.max(0) as usize;
-        (0..count)
-            .filter_map(|i| {
-                let len = SendMessageW(list, LB_GETTEXTLEN, Some(WPARAM(i)), None).0;
-                if len < 0 {
-                    return None;
-                }
-                let mut buffer = vec![0u16; len as usize + 1];
-                SendMessageW(list, LB_GETTEXT, Some(WPARAM(i)), Some(LPARAM(buffer.as_mut_ptr() as isize)));
-                Some(String::from_utf16_lossy(&buffer[..len as usize]))
-            })
-            .collect()
     }
 }
 
@@ -358,6 +342,10 @@ impl App {
                     let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
                 }
             }
+            Action::Group { tabs, group, name, color, collapsed } => match self.bench_group(&tabs, group, name, color, collapsed) {
+                Ok(id) => reply.ok(json!({ "group": id, "groups": self.groups_state() })),
+                Err(message) => reply.error(&message),
+            },
             // Answered on the pipe thread; never queued.
             Action::Ping | Action::Memory | Action::Type { .. } => reply.error("petición fuera de lugar"),
         }
@@ -469,6 +457,64 @@ impl App {
         }
     }
 
+    /// The `group` request: made or changed through the same calls as the menus.
+    fn bench_group(
+        &mut self,
+        tabs: &[u64],
+        group: Option<u64>,
+        name: Option<String>,
+        color: Option<String>,
+        collapsed: Option<bool>,
+    ) -> Result<u64, String> {
+        if let Some(missing) = tabs.iter().find(|id| self.tabs.get(**id).is_none()) {
+            return Err(format!("no hay ninguna pestaña {missing}"));
+        }
+        let id = match group {
+            Some(id) if self.tabs.group(id).is_some() => id,
+            Some(id) => return Err(format!("no hay ningún grupo {id}")),
+            None => {
+                let first = *tabs.first().ok_or("hacen falta pestañas para un grupo nuevo")?;
+                self.tabs.create_group(first).ok_or("una pestaña fijada no va en un grupo")?
+            }
+        };
+        for &tab in tabs {
+            if self.tabs.group_of(tab) != Some(id) {
+                self.tabs.add_to_group(tab, id);
+            }
+        }
+        if let Some(name) = name {
+            self.tabs.rename_group(id, &name);
+        }
+        if let Some(color) = color {
+            let color = crate::tab_groups::GroupColor::from_name(&color).ok_or(format!("no hay ningún color «{color}»"))?;
+            self.tabs.set_group_color(id, color);
+        }
+        self.session_dirty = true;
+        match collapsed {
+            Some(folded) if self.tabs.group(id).is_some_and(|g| g.collapsed != folded) => self.toggle_group(id),
+            _ => self.relayout(),
+        }
+        Ok(id)
+    }
+
+    /// The groups and where their labels are, for scripts that click them.
+    fn groups_state(&self) -> Vec<Value> {
+        self.group_infos()
+            .iter()
+            .map(|g| {
+                let label = self.layout.labels.iter().find(|l| l.id == g.id).map(|l| l.rect);
+                json!({
+                    "id": g.id,
+                    "name": g.name,
+                    "color": g.color.name(),
+                    "collapsed": g.collapsed,
+                    "tabs": self.tabs.members(g.id),
+                    "label": label.map(|r| [r.left, r.top, r.right, r.bottom]),
+                })
+            })
+            .collect()
+    }
+
     fn field_state(&self) -> Value {
         match self.mode {
             None => json!({ "open": false }),
@@ -476,7 +522,7 @@ impl App {
                 "open": true,
                 "mode": mode_name(mode),
                 "text": self.omnibar.text(),
-                "rows": list_rows(self.omnibar.list),
+                "rows": self.omnibar.row_labels(),
                 "selected_row": self.omnibar.selected_row(),
             }),
         }
@@ -495,6 +541,8 @@ impl App {
                     "label": t.label(),
                     "pinned": t.pinned,
                     "private": t.private,
+                    "group": t.group,
+                    "rect": self.layout.items.iter().find(|i| i.id == t.id).map(|i| [i.rect.left, i.rect.top, i.rect.right, i.rect.bottom]),
                     "test": t.test,
                     "loading": t.loading,
                     "loaded": self.bench.loaded.get(&t.id).copied(),
@@ -507,7 +555,8 @@ impl App {
             "active": self.tabs.active,
             "layout": if self.vertical { "vertical" } else { "horizontal" },
             "sidebar_collapsed": self.collapsed,
-            "splits": self.split_groups().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
+            "splits": self.split_pairs().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
+            "groups": self.groups_state(),
             "extensions_button": self.layout.extensions.width() > 0,
             "card": self.card_state(),
             "tooltip": self.tip_state(),

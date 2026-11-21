@@ -71,6 +71,7 @@ impl App {
             Hit::Settings => Some(with_chord("Ajustes", Command::Settings)),
             Hit::NewTab if !self.layout.vertical => Some(with_chord("Nueva pestaña", Command::NewTab)),
             Hit::Extensions => Some("Extensiones".to_string()),
+            Hit::Group(group) => self.group_tip(group),
             _ => None,
         }
     }
@@ -80,6 +81,7 @@ impl App {
             Hit::Settings => Some(self.layout.settings),
             Hit::NewTab => Some(self.layout.new_tab),
             Hit::Extensions => Some(self.layout.extensions),
+            Hit::Group(group) => self.group_tip_anchor(group),
             _ => None,
         }
     }

@@ -26,6 +26,8 @@ pub struct Tab<W> {
     /// Opened by a script (RF-23): never recorded in history, session or
     /// the reopen list.
     pub test: bool,
+    /// The tab group it belongs to (`tab_groups`).
+    pub group: Option<u64>,
 }
 
 impl<W> Tab<W> {
@@ -58,13 +60,15 @@ pub struct Closed {
 pub struct TabList<W> {
     pub tabs: Vec<Tab<W>>,
     pub active: Option<u64>,
+    /// Tab groups, in no particular order (the strip order is the tabs').
+    pub groups: Vec<crate::tab_groups::Group>,
     next_id: u64,
     closed: Vec<Closed>,
 }
 
 impl<W> Default for TabList<W> {
     fn default() -> Self {
-        Self { tabs: Vec::new(), active: None, next_id: 1, closed: Vec::new() }
+        Self { tabs: Vec::new(), active: None, groups: Vec::new(), next_id: 1, closed: Vec::new() }
     }
 }
 
@@ -89,15 +93,22 @@ impl<W> TabList<W> {
         self.active.and_then(|id| self.index_of(id))
     }
 
+    /// A fresh id, for a tab or a group: they share the counter.
+    pub(crate) fn take_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
     fn pinned_count(&self) -> usize {
         self.tabs.iter().filter(|t| t.pinned).count()
     }
 
     /// Inserts an asleep tab. `at` is clamped so unpinned tabs never sit
-    /// among the pinned ones.
+    /// among the pinned ones. Placed inside a group, or right after the
+    /// live tab when that one is in a group (opened from it), it joins it.
     pub fn insert(&mut self, url: &str, title: &str, pinned: bool, at: Option<usize>) -> u64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_id();
         let pinned_count = self.pinned_count();
         let index = match (pinned, at) {
             (true, Some(i)) => i.min(pinned_count),
@@ -117,8 +128,18 @@ impl<W> TabList<W> {
                 live: Live::Asleep,
                 last_active: Instant::now(),
                 test: false,
+                group: None,
             },
         );
+        if !pinned && at.is_some() {
+            let group_at = |i: usize| self.tabs.get(i).and_then(|t| t.group);
+            let before = index.checked_sub(1);
+            let left = before.and_then(group_at);
+            let from_live = before.and_then(|i| self.tabs.get(i)).is_some_and(|t| Some(t.id) == self.active);
+            if left.is_some() && (left == group_at(index + 1) || from_live) {
+                self.tabs[index].group = left;
+            }
+        }
         id
     }
 
@@ -140,9 +161,13 @@ impl<W> TabList<W> {
         self.active_index().map(|i| i + 1)
     }
 
+    /// Makes `id` the live tab; a tab of a folded group unfolds it.
     pub fn select(&mut self, id: u64) -> bool {
-        if self.get(id).is_none() {
-            return false;
+        let Some(tab) = self.get(id) else { return false };
+        if let Some(group) = tab.group {
+            if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
+                g.collapsed = false;
+            }
         }
         if let Some(previous) = self.active.and_then(|a| self.get_mut(a)) {
             previous.last_active = Instant::now();
@@ -167,10 +192,21 @@ impl<W> TabList<W> {
             }
         }
         if self.active == Some(id) {
-            self.active = self.tabs.get(index).or_else(|| self.tabs.last()).map(|t| t.id);
+            // The neighbour on show: a folded group's tabs are passed over.
+            let at = index.min(self.tabs.len());
+            let shown = |t: &&Tab<W>| !self.tab_hidden(t);
+            let next = self.tabs[at..]
+                .iter()
+                .find(shown)
+                .or_else(|| self.tabs[..at].iter().rev().find(shown))
+                .or_else(|| self.tabs.get(index).or_else(|| self.tabs.last()));
+            self.active = next.map(|t| t.id);
             if let Some(next) = self.active {
                 self.select(next);
             }
+        }
+        if tab.group.is_some() {
+            self.normalize_groups();
         }
         Some(tab)
     }
@@ -191,12 +227,14 @@ impl<W> TabList<W> {
         self.closed.pop()
     }
 
-    /// The tab `offset` positions away from the active one, wrapping around.
+    /// The tab `offset` positions away from the active one, wrapping
+    /// around; the tabs of a folded group don't count.
     pub fn neighbour(&self, offset: isize) -> Option<u64> {
-        let len = self.tabs.len() as isize;
-        let current = self.active_index()? as isize;
-        let index = (current + offset).rem_euclid(len);
-        self.tabs.get(index as usize).map(|t| t.id)
+        let shown: Vec<u64> =
+            self.tabs.iter().filter(|t| !self.tab_hidden(t) || Some(t.id) == self.active).map(|t| t.id).collect();
+        let current = shown.iter().position(|id| Some(*id) == self.active)? as isize;
+        let index = (current + offset).rem_euclid(shown.len() as isize);
+        shown.get(index as usize).copied()
     }
 
     /// Ctrl+1..8 go to that position; Ctrl+9 to the last tab.
@@ -217,8 +255,13 @@ impl<W> TabList<W> {
         }
         let mut tab = self.tabs.remove(index);
         tab.pinned = !tab.pinned;
+        // A pinned tab belongs to no group.
+        let grouped = tab.group.take().is_some();
         let target = self.pinned_count();
         self.tabs.insert(target, tab);
+        if grouped {
+            self.normalize_groups();
+        }
     }
 
     pub fn move_to(&mut self, id: u64, to: usize) {

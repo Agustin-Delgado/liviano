@@ -61,6 +61,17 @@ pub enum Action {
     /// client pixels, without moving the mouse: for captures of hover
     /// states. A point outside the strip clears it.
     Hover { x: i32, y: i32 },
+    /// Puts tabs in a tab group: a new one made from `tabs`, or `group`
+    /// when given; then sets its name, colour (`blue`, `red`…) and whether
+    /// it is folded, as the menus would.
+    Group {
+        #[serde(default)]
+        tabs: Vec<u64>,
+        group: Option<u64>,
+        name: Option<String>,
+        color: Option<String>,
+        collapsed: Option<bool>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

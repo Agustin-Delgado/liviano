@@ -139,6 +139,34 @@ const DARK: Palette = Palette {
     private_mark: Rgb(0xAC, 0x8F, 0xF8),
 };
 
+/// A tab group's colour: the label's fill (also the line that joins its
+/// tabs) and the text on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Tone {
+    pub fill: Rgb,
+    pub on: Rgb,
+}
+
+/// The group palette: celagem's tones (brand.css `--color-tone-*`). On the
+/// light shell the label wears the tone's `ink` step with white text; on the
+/// dark one its `solid` step with dark text. Every pair reads at 4.5:1 or
+/// more, and every fill stands 4.3:1 or more off its shell.
+pub fn group_tone(color: crate::tab_groups::GroupColor, dark: bool) -> Tone {
+    use crate::tab_groups::GroupColor::*;
+    let (light, dark_fill) = match color {
+        Grey => (Rgb::grey(0x55), Rgb::grey(0x9E)),                          // gray-ink 0.45 0 0 / gray-solid 0.7 0 0
+        Blue => (Rgb(0x27, 0x50, 0xC7), Rgb(0x28, 0x85, 0xEF)),              // blue 0.48 0.19 265 / 0.62 0.18 255
+        Red => (Rgb(0xC2, 0x15, 0x2F), Rgb(0xF1, 0x44, 0x45)),               // red 0.52 0.2 22 / 0.64 0.21 25
+        Yellow => (Rgb(0x91, 0x6B, 0x00), Rgb(0xF3, 0xB0, 0x1D)),            // amber 0.55 0.13 88 / 0.8 0.16 80
+        Green => (Rgb(0x29, 0x76, 0x13), Rgb(0x2E, 0xB4, 0x5C)),             // green 0.5 0.15 140 / 0.68 0.17 150
+        Pink => (Rgb(0xB1, 0x2B, 0x6E), Rgb(0xEA, 0x50, 0x98)),              // pink 0.52 0.18 355 / 0.66 0.2 355
+        Purple => (Rgb(0x76, 0x3E, 0xBD), Rgb(0x9F, 0x61, 0xF2)),            // violet 0.5 0.19 300 / 0.63 0.21 300
+        Cyan => (Rgb(0x00, 0x7B, 0xB2), Rgb(0x00, 0xB2, 0xD1)),              // cyan 0.55 0.13 235 / 0.7 0.13 215
+        Orange => (Rgb(0xBE, 0x4C, 0x00), Rgb(0xF4, 0x74, 0x1E)),            // orange 0.56 0.17 50 / 0.7 0.18 48
+    };
+    if dark { Tone { fill: dark_fill, on: Rgb::grey(0x14) } } else { Tone { fill: light, on: Rgb::grey(0xFC) } }
+}
+
 /// Measures in device-independent pixels (multiplied by the window's DPI
 /// scale where they are used).
 #[allow(dead_code)] // the scale is kept whole
@@ -149,6 +177,7 @@ pub mod size {
     pub const RADIUS_CONTROL: f32 = 6.0;
     pub const RADIUS_FIELD: f32 = 8.0;
     pub const RADIUS_PANEL: f32 = 12.0;
+    pub const RADIUS_DIALOG: f32 = 16.0;
     /// Tabs, rows, buttons: a field's corner, as a Button's `rounded-field`.
     pub const RADIUS: f32 = RADIUS_FIELD;
     /// The small square that stands for a site (its first letter).
@@ -183,6 +212,10 @@ pub mod lift {
     pub const CARD_DROP: f32 = 0.12;
     /// `shadow-focus`'s halo, 4 px of brand at 0.18 around a 1 px line.
     pub const FOCUS_HALO: f32 = 0.18;
+    /// `shadow-pop`, what floats over the page (the field): a 1 px ring and
+    /// a long soft drop (0 12px 32px -8px).
+    pub const POP_RING: f32 = 0.08;
+    pub const POP_DROP: f32 = 0.18;
 }
 
 /// How long the interface takes to move. The movements themselves (curves
@@ -216,6 +249,9 @@ pub mod dwm {
     pub const CAPTION_COLOR: i32 = 35;
     pub const TEXT_COLOR: i32 = 36;
     pub const ROUND: u32 = 2;
+    pub const DO_NOT_ROUND: u32 = 1;
+    /// DWMWA_COLOR_NONE: no border at all.
+    pub const COLOR_NONE: u32 = 0xFFFF_FFFE;
 
     /// Older Windows ignore what they don't know; nothing to check.
     pub fn set(hwnd: HWND, attribute: i32, value: u32) {
@@ -227,6 +263,17 @@ pub mod dwm {
                 std::mem::size_of::<u32>() as u32,
             );
         }
+    }
+}
+
+/// The interface's scale for `hwnd`: its monitor's DPI over 96. The tests
+/// can ask for another one with `LIVIANO_SCALE` (a percentage: 125, 150),
+/// to see a layout at a scale the screen they run on doesn't have.
+pub fn window_scale(hwnd: windows::Win32::Foundation::HWND) -> f32 {
+    let forced = std::env::var("LIVIANO_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|p| (100..=300).contains(p));
+    match forced {
+        Some(percent) => percent as f32 / 100.0,
+        None => (unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) }) as f32 / 96.0,
     }
 }
 
