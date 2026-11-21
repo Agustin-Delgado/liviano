@@ -274,7 +274,7 @@ pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Se
     }
 }
 
-/// The app changed a setting itself (Mantener sitio despierto from a tab):
+/// The app changed a setting itself ("Keep site awake" from a tab):
 /// the window shows it, so its next change doesn't undo it.
 pub fn sync(current: &Settings) {
     with_state(|st| {
