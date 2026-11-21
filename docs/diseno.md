@@ -42,7 +42,8 @@ Algunas cosas de Search no chocan con celagem y quedaron igual:
 | Ajustes (diálogo) | 100 ms, `ease` | celagem `src/lib/components/dialog/recipe.ts` |
 | Tooltip | demora 600 ms, entrada 100 ms, salida 80 ms; cierre tras 100 ms; si otro tooltip cerró hace menos de 300 ms, abre sin demora | HKUI `src/lib/tooltip/root/tooltip-root.svelte`, `tooltip-group.ts`, `provider/tooltip-provider.svelte` |
 | Toast y barra de contraseñas | entrada 396 ms con resorte `linear()` (pasa a 1.038 y asienta), sube 6 px; salida 400 ms | celagem `src/lib/components/toast/styles.css` (`--toast-spring-easing`), `src/lib/motion/spring.ts` |
-| Indicador de la pestaña activa y línea de foco de la vista dividida | 200 ms, `ease-out` | celagem `src/lib/components/tabs/indicator.svelte` |
+| Línea de foco de la vista dividida | 200 ms, `ease-out` | celagem `src/lib/components/tabs/indicator.svelte` |
+| Fondo de la pestaña activa al cambiar de pestaña | 140 ms, `--ease-out-strong` | más corto que el indicador de celagem: a 200 ms, cruzar toda la tira se sentía lento |
 | Vecinas que hacen lugar (reordenar, abrir, cerrar) | 160 ms y 200 ms, `--ease-out-strong` (0.23, 1, 0.32, 1) | celagem `brand.css` |
 | Columna de pestañas que vuelve | 250 ms, `--ease-move` (0.77, 0, 0.175, 1) | celagem `brand.css`; `app-sidebar/rail-module.svelte` |
 | Tilde de la casilla | 75 ms | HKUI, receta del checkbox |
@@ -88,3 +89,20 @@ Si Windows tiene apagadas las animaciones de la interfaz
   `docs/capturas/tira-*.png`.
 - `LIVIANO_BENCH=1` agrega al `state` del pipe la clave `anim`, con
   cuadros, peor cuadro y cuadros de más de 16 ms.
+
+## Logo
+
+Una pluma blanca sobre un cuadrado de esquinas redondeadas en el índigo de
+marca (#6468F0), con la tinta `on-brand` (#FCFCFC). La pluma dice
+«liviano» sin palabras y, inclinada hacia arriba, también dice que avanza.
+El cuadrado de marca hace que se lea igual sobre la barra de tareas clara
+y la oscura.
+
+- `assets/logo/liviano.svg` es la fuente; `liviano-mono.svg` es la pluma
+  sola en `currentColor`.
+- `assets/logo/pixels/` tiene las versiones de 16, 20, 24 y 32 px dibujadas
+  a mano, píxel por píxel: ahí el SVG escalado empasta el raquis y la
+  muesca.
+- `python -I tools/logo.py` arma `assets/logo/liviano.ico` (16 a 64 en
+  BMP, 256 en PNG) y las vistas previas de `docs/logo/`. `build.rs` lo
+  embebe como recurso 1 con `liviano.rc`.

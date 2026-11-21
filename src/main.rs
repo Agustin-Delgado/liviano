@@ -2,6 +2,7 @@
 
 mod anim;
 mod app;
+mod app_icon;
 mod bench;
 mod bookmarks;
 mod crx;

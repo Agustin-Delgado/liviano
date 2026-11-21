@@ -773,7 +773,7 @@ impl Motion {
         let now_live = active.and_then(|id| layout.items.iter().find(|i| i.id == id));
         match (now_live, self.live_drawn) {
             (Some(item), Some(from)) if self.live_id != Some(item.id) && same_strip => {
-                self.live = Some((from, Tween::new(0.0, 1.0, now, specs::INDICATOR)));
+                self.live = Some((from, Tween::new(0.0, 1.0, now, specs::LIVE_CARD)));
             }
             (None, _) => self.live = None,
             _ => {}

@@ -1,3 +1,5 @@
+<p align="center"><img src="assets/logo/liviano.svg" width="96" height="96" alt=""></p>
+
 # Liviano
 
 Un navegador para Windows pequeño, rápido y silencioso: una fila de pestañas,

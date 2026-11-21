@@ -409,7 +409,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             hInstance: instance,
             lpszClassName: w!("LivianoSettings"),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hIcon: LoadIconW(Some(instance), PCWSTR(1 as _)).unwrap_or_default(),
+            hIcon: LoadIconW(Some(instance), PCWSTR(crate::app_icon::ICON_ID as usize as _)).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassW(&class);
@@ -439,6 +439,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             Some(instance),
             None,
         )?;
+        crate::app_icon::apply(hwnd);
 
         let font = make_font(scale, 400);
         let heading_font = make_font(scale, 500);

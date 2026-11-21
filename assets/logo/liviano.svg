@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
+  <title>Liviano</title>
+  <rect x="8" y="8" width="240" height="240" rx="56" fill="#6468F0"/>
+  <path d="M 79 168 C 55 117 115 58 198 47 L 85 166 Z" fill="#FCFCFC"/>
+  <path d="M 198 47 C 207 91 190 122 161 139 L 143 133 L 146 150 C 128 163 108 172 91 172 Z" fill="#FCFCFC"/>
+  <line x1="85" y1="171" x2="55" y2="203" stroke="#FCFCFC" stroke-width="15" stroke-linecap="round"/>
+</svg>

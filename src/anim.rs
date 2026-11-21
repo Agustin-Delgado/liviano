@@ -236,6 +236,10 @@ pub mod specs {
     pub const TOAST_OUT: Spec = Spec::new(400, EASE);
     /// The tabs' indicator sliding to the chosen tab.
     pub const INDICATOR: Spec = Spec::new(200, EASE_OUT);
+    /// The live tab's ground moving to the chosen tab: shorter than the
+    /// indicator and front-loaded, so it is already there when the eye lands
+    /// on it (200 ms ease-out read as slow across a whole strip).
+    pub const LIVE_CARD: Spec = Spec::new(140, OUT_STRONG);
     /// Neighbours making room (follow-shift).
     pub const SHIFT: Spec = Spec::new(160, OUT_STRONG);
     /// A box changing its size (morph).

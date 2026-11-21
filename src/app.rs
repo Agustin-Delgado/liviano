@@ -215,6 +215,7 @@ pub fn run() -> windows::core::Result<()> {
     shield::set_cosmetic(settings.block_trackers);
 
     let hwnd = create_window(&session)?;
+    crate::app_icon::apply(hwnd);
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
     crate::diag::set_window(hwnd);
@@ -347,7 +348,7 @@ fn create_window(session: &Session) -> windows::core::Result<HWND> {
             hInstance: instance,
             lpszClassName: w!("LivianoWindow"),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
-            hIcon: LoadIconW(Some(instance), PCWSTR(1 as _)).unwrap_or_default(),
+            hIcon: LoadIconW(Some(instance), PCWSTR(crate::app_icon::ICON_ID as usize as _)).unwrap_or_default(),
             ..Default::default()
         };
         RegisterClassW(&class);
@@ -574,6 +575,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     SWP_NOZORDER | SWP_NOACTIVATE,
                 );
             }
+            crate::app_icon::apply(hwnd);
             with_app(|app| app.refresh_dpi());
             LRESULT(0)
         }
