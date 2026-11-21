@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod anim;
 mod app;
 mod bench;
 mod bookmarks;
@@ -12,6 +13,7 @@ mod downloads;
 mod extension_host;
 mod frame;
 mod extensions;
+mod fade;
 mod favicon;
 mod gfx;
 mod history;
@@ -36,6 +38,7 @@ mod storage;
 mod system_dll;
 mod tabbar;
 mod tabs;
+mod tooltip;
 mod update_sign;
 mod updater;
 mod vault;

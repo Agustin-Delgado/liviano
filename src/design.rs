@@ -1,10 +1,15 @@
-//! The design tokens: colours in light/dark pairs, sizes, radii and the
-//! face. Every colour and measure the interface draws comes from here.
+//! The design tokens: colours in light/dark pairs, the type scale, the
+//! named corners and lifts. Every colour and measure the interface draws
+//! comes from here.
 //!
-//! The look follows Search (the macOS browser Liviano is the Windows twin
-//! of): the page is the ground and the browser gets out of its way. Almost
-//! everything is a grey a few steps from the ground; the only ink that
-//! isn't grey is the private tab's violet and the loading ring's accent.
+//! The language is celagem-svelte's (`src/lib/styles/brand.css` and its
+//! component recipes; `docs/diseno.md` has the table with each source):
+//! neutral greys on a shell, the page's ground a step lighter, one indigo
+//! for what is live or chosen, seven type steps and nothing heavier than
+//! medium. Where Search's layout ideas don't clash with it (tabs as soft
+//! grounds on the strip, the private tab's violet) they stay. celagem has
+//! no dark theme; the dark palette keeps the same steps and roles,
+//! mirrored, with the indigo lifted to read on a dark ground.
 
 use windows::{
     Win32::{
@@ -40,30 +45,44 @@ impl Rgb {
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
     pub dark: bool,
-    /// Behind the tabs and the empty page: a touch off the page's white.
+    /// The shell: behind the tabs and around the page (`shell`).
     pub chrome: Rgb,
-    /// The live tab on the chrome.
+    /// The live tab: a card on the shell (`canvas`, with the card's ring).
     pub tab_active: Rgb,
-    /// A tab under the pointer.
+    /// A tab or a ghost button under the pointer (`hover`).
     pub tab_hover: Rgb,
-    /// The resting square of a pinned tab, and a tab shrunk to its mark.
+    /// The resting square of a pinned tab (`shell-hover`).
     pub tab_tile: Rgb,
-    /// The live pinned square, among the tiles.
+    /// A control held down (`line`: one step past the hover).
     pub pin_live: Rgb,
+    /// Text (`ink`).
     pub ink: Rgb,
+    /// Secondary text, idle icons (`ink-muted`).
     pub ink_muted: Rgb,
-    /// Asleep tabs (no web view behind them), placeholders, "New tab".
+    /// Labels a step under the ink (`ink-quiet`).
+    pub ink_quiet: Rgb,
+    /// Asleep tabs, placeholders, hints (`ink-subtle`).
     pub ink_asleep: Rgb,
-    /// The loading ring and the caret's focus line; used sparingly.
+    /// What is live or chosen: the loading ring, focus, the split's focus
+    /// line, a checked box (`brand`).
     pub accent: Rgb,
-    /// The page's own ground: the field, the list, panels, dialogs.
+    /// The accent under the pointer (`brand-hover`).
+    pub accent_hover: Rgb,
+    /// Ink on the accent (`on-brand`).
+    pub on_accent: Rgb,
+    /// The page's own ground: the field, the list, panels, dialogs (`canvas`).
     pub field: Rgb,
-    /// The picked row of a list on `field`.
+    /// The picked row of a list (`hover`, as a menu's highlighted item).
     pub selection: Rgb,
-    /// A row under the pointer on `field`.
+    /// A row under the pointer (`row-hover`).
     pub row_hover: Rgb,
-    /// Separators and outlines.
+    /// Separators and hairlines (`line`).
     pub line: Rgb,
+    /// Outlines that have to read (`line-strong`).
+    pub line_strong: Rgb,
+    /// The tooltip's pill (`ink`) and its text (`canvas`).
+    pub tooltip: Rgb,
+    pub tooltip_ink: Rgb,
     /// Behind an active private tab, instead of `tab_active`.
     pub private_tab: Rgb,
     /// The mark every private tab carries.
@@ -72,78 +91,107 @@ pub struct Palette {
 
 const LIGHT: Palette = Palette {
     dark: false,
-    chrome: Rgb::grey(0xF4),
-    tab_active: Rgb::grey(0xE4),
-    tab_hover: Rgb::grey(0xEA),
-    tab_tile: Rgb::grey(0xEC),
-    pin_live: Rgb::grey(0xDB),
-    ink: Rgb::grey(0x17),
-    ink_muted: Rgb::grey(0x76),
-    ink_asleep: Rgb::grey(0xA3),
-    accent: Rgb(0x2F, 0x6F, 0xEB),
-    field: Rgb::grey(0xFF),
-    selection: Rgb::grey(0xEF),
-    row_hover: Rgb::grey(0xF6),
-    line: Rgb::grey(0xE6),
-    private_tab: Rgb(0xEC, 0xE7, 0xF8),
-    private_mark: Rgb(0x75, 0x4C, 0xD4),
+    chrome: Rgb::grey(0xF5),             // shell oklch(0.97 0 0)
+    tab_active: Rgb::grey(0xFA),         // canvas oklch(0.985 0 0)
+    tab_hover: Rgb::grey(0xF0),          // hover oklch(0.955 0 0)
+    tab_tile: Rgb::grey(0xEF),           // shell-hover oklch(0.952 0 0)
+    pin_live: Rgb::grey(0xE8),           // line oklch(0.93 0 0)
+    ink: Rgb::grey(0x17),                // ink oklch(0.205 0 0)
+    ink_muted: Rgb::grey(0x69),          // ink-muted oklch(0.52 0 0)
+    ink_quiet: Rgb::grey(0x52),          // ink-quiet oklch(0.439 0 0)
+    ink_asleep: Rgb::grey(0x92),         // ink-subtle oklch(0.66 0 0)
+    accent: Rgb(0x64, 0x68, 0xF0),       // brand oklch(0.59 0.2 277)
+    accent_hover: Rgb(0x57, 0x56, 0xE4), // brand-hover oklch(0.54 0.21 277)
+    on_accent: Rgb::grey(0xFC),          // on-brand oklch(0.99 0 0)
+    field: Rgb::grey(0xFA),              // canvas
+    selection: Rgb::grey(0xF0),          // hover
+    row_hover: Rgb::grey(0xF3),          // row-hover oklch(0.965 0 0)
+    line: Rgb::grey(0xE8),               // line
+    line_strong: Rgb::grey(0xD7),        // line-strong oklch(0.88 0 0)
+    tooltip: Rgb::grey(0x17),            // ink
+    tooltip_ink: Rgb::grey(0xFA),        // canvas
+    private_tab: Rgb(0xEF, 0xEB, 0xFF),
+    private_mark: Rgb(0x7E, 0x4E, 0xD7),
 };
 
 const DARK: Palette = Palette {
     dark: true,
     chrome: Rgb::grey(0x14),
-    tab_active: Rgb::grey(0x29),
-    tab_hover: Rgb::grey(0x21),
-    tab_tile: Rgb::grey(0x1D),
-    pin_live: Rgb::grey(0x31),
+    tab_active: Rgb::grey(0x2A),
+    tab_hover: Rgb::grey(0x22),
+    tab_tile: Rgb::grey(0x1F),
+    pin_live: Rgb::grey(0x30),
     ink: Rgb::grey(0xED),
-    ink_muted: Rgb::grey(0x94),
-    ink_asleep: Rgb::grey(0x60),
-    accent: Rgb(0x6B, 0x9B, 0xFF),
+    ink_muted: Rgb::grey(0x9A),
+    ink_quiet: Rgb::grey(0xB4),
+    ink_asleep: Rgb::grey(0x6E),
+    accent: Rgb(0x81, 0x8C, 0xF9),       // brand lifted: oklch(0.68 0.16 277)
+    accent_hover: Rgb(0x91, 0x9D, 0xFF), // oklch(0.73 0.15 277)
+    on_accent: Rgb::grey(0x14),
     field: Rgb::grey(0x1C),
-    selection: Rgb::grey(0x2D),
-    row_hover: Rgb::grey(0x25),
-    line: Rgb::grey(0x30),
-    private_tab: Rgb(0x2E, 0x28, 0x3F),
-    private_mark: Rgb(0xA6, 0x8A, 0xFF),
+    selection: Rgb::grey(0x2A),
+    row_hover: Rgb::grey(0x24),
+    line: Rgb::grey(0x2E),
+    line_strong: Rgb::grey(0x3C),
+    tooltip: Rgb::grey(0xED),
+    tooltip_ink: Rgb::grey(0x17),
+    private_tab: Rgb(0x30, 0x28, 0x44),
+    private_mark: Rgb(0xAC, 0x8F, 0xF8),
 };
 
 /// Measures in device-independent pixels (multiplied by the window's DPI
 /// scale where they are used).
+#[allow(dead_code)] // the scale is kept whole
 pub mod size {
-    /// Tabs, rows of the list, buttons: the one corner the interface wears.
-    pub const RADIUS: f32 = 8.0;
+    /// The named corners (brand.css `--radius-*`).
+    pub const RADIUS_MARK: f32 = 2.0;
+    pub const RADIUS_CHIP: f32 = 4.0;
+    pub const RADIUS_CONTROL: f32 = 6.0;
+    pub const RADIUS_FIELD: f32 = 8.0;
+    pub const RADIUS_PANEL: f32 = 12.0;
+    /// Tabs, rows, buttons: a field's corner, as a Button's `rounded-field`.
+    pub const RADIUS: f32 = RADIUS_FIELD;
     /// The small square that stands for a site (its first letter).
     pub const MARK: f32 = 16.0;
-    pub const MARK_RADIUS: f32 = 4.0;
-    /// Type sizes.
-    pub const TEXT: f32 = 13.0;
+    pub const MARK_RADIUS: f32 = RADIUS_CHIP;
+    /// Type steps in use (`text-caption`, `-small`, `-body`, `-emphasis`;
+    /// heading 16, title 20 and display 28 complete the scale).
+    pub const CAPTION: f32 = 11.0;
     pub const TEXT_SMALL: f32 = 12.0;
-    pub const TEXT_FIELD: f32 = 15.0;
-    pub const TEXT_MARK: f32 = 9.5;
-    /// Weights: regular, and medium for what is live.
+    pub const TEXT: f32 = 13.0;
+    /// The field's own text: the emphasis step, a size up from the body.
+    pub const TEXT_FIELD: f32 = 14.0;
+    /// A site's initial in its mark (the `initials` size).
+    pub const TEXT_MARK: f32 = 10.0;
+    /// Weights: regular, and medium for what is live. Nothing heavier.
     pub const REGULAR: u16 = 400;
     pub const MEDIUM: u16 = 500;
-    pub const SEMIBOLD: u16 = 600;
+    /// A button's height (`h-6.5`).
+    pub const BUTTON: f32 = 26.0;
+    /// The tooltip's padding (8 × 2) around caption text, and how far a
+    /// tooltip stands off its trigger.
+    pub const TOOLTIP_PAD_X: f32 = 8.0;
+    pub const TOOLTIP_PAD_Y: f32 = 2.0;
+    pub const OFFSET: f32 = 8.0;
 }
 
-/// How long the interface takes to move: short, and over before it shows.
+/// The lifts, as alphas of black over what they stand on (brand.css
+/// `--shadow-*`).
+pub mod lift {
+    /// `shadow-card`'s 1 px ring and its drop (0 2px 6px -2px).
+    pub const CARD_RING: f32 = 0.08;
+    pub const CARD_DROP: f32 = 0.12;
+    /// `shadow-focus`'s halo, 4 px of brand at 0.18 around a 1 px line.
+    pub const FOCUS_HALO: f32 = 0.18;
+}
+
+/// How long the interface takes to move. The movements themselves (curves
+/// and durations from celagem-svelte) are in `anim::specs`.
 pub mod motion {
-    /// A hover or press fading in or out.
-    pub const QUICK_MS: u64 = 140;
-    /// The live tab's ground sliding to the newly chosen one; tabs sliding
-    /// into their new places after a reorder.
-    pub const SETTLE_MS: u64 = 180;
-    /// Frame interval while something moves (60 Hz).
-    pub const FRAME_MS: u32 = 16;
     /// Frame interval of the loading ring: it turns, it doesn't need 60 Hz.
     pub const SPIN_FRAME_MS: u32 = 50;
-
-    /// Ease-out cubic: quick to leave, gentle to arrive.
-    pub fn ease_out(t: f32) -> f32 {
-        let t = t.clamp(0.0, 1.0);
-        1.0 - (1.0 - t).powi(3)
-    }
+    /// One turn of the loading ring (`animate-spin`: 1 s linear).
+    pub const SPIN_TURN_S: f32 = 1.0;
 }
 
 pub fn palette(theme: Theme) -> Palette {

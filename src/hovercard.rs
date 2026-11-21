@@ -21,7 +21,9 @@ use windows::{
 };
 
 use crate::{
+    anim::specs,
     design::{Palette, dwm, size},
+    fade,
     gfx::{Align, Font, RectF, Surface},
     image::Pixels,
     tabbar::Rect,
@@ -210,6 +212,7 @@ impl HoverCard {
                 None,
             )?;
             dwm::set(hwnd, dwm::CORNERS, dwm::ROUND);
+            fade::prepare(hwnd, 255);
             Ok(Self { hwnd })
         }
     }
@@ -224,19 +227,24 @@ impl HoverCard {
         dwm::set(self.hwnd, dwm::BORDER_COLOR, palette.line.colorref().0);
         dwm::set(self.hwnd, dwm::DARK_MODE, palette.dark as u32);
         SHOWN.with(|s| *s.borrow_mut() = Some(Shown { card, palette: *palette, scale }));
+        // It opens as a tooltip does (fade, 100 ms); moving to another tab
+        // while it is up only moves it.
+        fade::fade_in(self.hwnd, specs::TOOLTIP_IN, 255, 0);
         unsafe {
             let _ = SetWindowPos(self.hwnd, Some(HWND_TOP), x, y, size.0, size.1, SWP_NOACTIVATE | SWP_SHOWWINDOW);
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
-    /// Hides it and lets go of what it showed (the decoded picture).
+    /// Fades it out (80 ms), then lets go of what it showed (the decoded
+    /// picture).
     pub fn hide(&self) {
-        unsafe {
-            let _ = ShowWindow(self.hwnd, SW_HIDE);
-        }
-        SHOWN.with(|s| *s.borrow_mut() = None);
+        fade::fade_out(self.hwnd, specs::TOOLTIP_OUT, 0, Some(forget));
     }
+}
+
+fn forget(_: HWND) {
+    SHOWN.with(|s| *s.borrow_mut() = None);
 }
 
 fn work_area(near: Rect) -> Rect {

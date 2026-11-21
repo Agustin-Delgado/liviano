@@ -85,8 +85,20 @@ public static class LivianoCapture {
             shot.Frame.Right - shot.Frame.Left, shot.Frame.Bottom - shot.Frame.Top);
         var cut = bitmap.Clone(crop, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         bitmap.Dispose();
+        if (shot.Class == "LivianoTooltip") KeyOutBlack(cut);
         return cut;
     }
+
+    // A per-pixel-alpha window (the tooltip) comes out of PrintWindow with
+    // its clear pixels black: those are keyed out again (its shadow with them).
+    public static void KeyOutBlack(Bitmap b) {
+        for (int y = 0; y < b.Height; y++)
+            for (int x = 0; x < b.Width; x++) {
+                var c = b.GetPixel(x, y);
+                if (c.R < 12 && c.G < 12 && c.B < 12) b.SetPixel(x, y, Color.Transparent);
+            }
+    }
+
 }
 '@
 }

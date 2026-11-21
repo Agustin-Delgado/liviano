@@ -463,6 +463,9 @@ impl App {
                 }
             }
         };
+        // A new hint fades in as a popover (100 ms); one moving to the
+        // other half just moves.
+        crate::fade::fade_in(hwnd, crate::anim::specs::POPOVER_IN, HINT_ALPHA, 0);
         unsafe {
             let _ = SetWindowPos(
                 hwnd,
@@ -479,10 +482,14 @@ impl App {
 
     fn hide_drop_hint(&mut self) {
         if let Some((hwnd, _)) = self.split.hint.take() {
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
+            crate::fade::fade_out(hwnd, crate::anim::specs::POPOVER_OUT, 0, Some(destroy_hint));
         }
+    }
+}
+
+fn destroy_hint(hwnd: HWND) {
+    unsafe {
+        let _ = DestroyWindow(hwnd);
     }
 }
 

@@ -17,7 +17,10 @@ use windows::{
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, ODS_SELECTED, ODT_BUTTON, SetWindowTheme},
+            Controls::{
+                BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, ODS_SELECTED, ODT_BUTTON,
+                SetWindowTheme,
+            },
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
             Input::KeyboardAndMouse::{
                 GetFocus, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, SetFocus,
@@ -244,6 +247,8 @@ pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Se
     STATE.with(|s| *s.borrow_mut() = Some(state));
     set_palette(palette);
     with_state(|st| fill_all(st));
+    // A dialog appearing: 100 ms of fade.
+    crate::fade::fade_in_window(hwnd, crate::anim::specs::DIALOG);
     unsafe {
         // Opened by a script while another program has the keyboard: shown
         // without taking it (see `omnibar::owns_foreground`).
@@ -436,7 +441,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         )?;
 
         let font = make_font(scale, 400);
-        let heading_font = make_font(scale, 600);
+        let heading_font = make_font(scale, 500);
         let mut children: Vec<(HWND, Kind)> = Vec::new();
         let mut wells: Vec<RECT> = Vec::new();
         let mut add = |class: PCWSTR, text: &str, style: u32, ex: WINDOW_EX_STYLE, rect: (i32, i32, i32, i32), id: i32, kind: Kind, heading: bool| {
@@ -1049,8 +1054,9 @@ fn close() {
         emit(settings);
     }
     let Some(state) = STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut g| g.take())) else { return };
+    // It leaves as a dialog does (100 ms) and is destroyed once out of sight.
+    crate::fade::fade_out(state.hwnd, crate::anim::specs::DIALOG, 0, Some(destroy));
     unsafe {
-        let _ = DestroyWindow(state.hwnd);
         let _ = DeleteObject(state.font.into());
         let _ = DeleteObject(state.heading_font.into());
         let colors = COLORS.with(|c| c.replace(Colors::default()));
@@ -1059,6 +1065,12 @@ fn close() {
                 let _ = DeleteObject(HBRUSH(brush as _).into());
             }
         }
+    }
+}
+
+fn destroy(hwnd: HWND) {
+    unsafe {
+        let _ = DestroyWindow(hwnd);
     }
 }
 
@@ -1155,6 +1167,19 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_CLOSE => {
             close();
             LRESULT(0)
+        }
+        WM_NOTIFY => {
+            // The check boxes stay native and are drawn as HKUI's.
+            let header = unsafe { &*(lparam.0 as *const NMHDR) };
+            let is_check = header.code == NM_CUSTOMDRAW
+                && unsafe { (GetWindowLongW(header.hwndFrom, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_AUTOCHECKBOX as u32 };
+            match LOOK.with(|l| l.get()) {
+                Some((palette, scale)) if is_check => {
+                    let nm = unsafe { &*(lparam.0 as *const NMCUSTOMDRAW) };
+                    widgets::draw_check(nm, Color::from(palette.field), &palette, scale)
+                }
+                _ => default(),
+            }
         }
         WM_DRAWITEM => {
             let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };

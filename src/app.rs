@@ -45,6 +45,7 @@ mod panel_ui;
 mod popups_ui;
 mod private_tabs;
 mod split_ui;
+mod tooltip_ui;
 mod vault_ui;
 
 use crate::{
@@ -76,8 +77,6 @@ const DISCARDS_PER_TICK: usize = 3;
 const SLEEP_AGAIN_MS: u32 = 1_000;
 const TIMER_SAVE: usize = 2;
 const TIMER_RETRY: usize = 3;
-/// Runs only while something in the strip moves (see `tabbar::Motion`).
-const TIMER_ANIM: usize = 4;
 /// Losing this much history to a crash is fine; rewriting it every 5 s is not.
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
@@ -137,8 +136,6 @@ struct App {
     layout: tabbar::Layout,
     surface: gfx::Surface,
     motion: tabbar::Motion,
-    /// The animation timer's interval while it runs.
-    anim_timer: Option<u32>,
     omnibar: Box<Omnibar>,
     mode: Option<Mode>,
     rows: Vec<Row>,
@@ -262,8 +259,10 @@ pub fn run() -> windows::core::Result<()> {
         collapsed: session.sidebar_collapsed,
         layout: Default::default(),
         surface: Default::default(),
-        motion: tabbar::Motion::new(!design::animations_enabled()),
-        anim_timer: None,
+        motion: {
+            crate::anim::refresh_reduced();
+            tabbar::Motion::new(!design::animations_enabled())
+        },
         omnibar,
         mode: None,
         rows: Vec::new(),
@@ -464,7 +463,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let _doing = crate::diag::doing(&"pintar", 0);
             let mut ps = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if with_app(|app| app.paint(hdc)).is_none() {
+            if with_app(|app| app.paint(hdc, ps.rcPaint)).is_none() {
                 retry_later(hwnd, WM_APP_REPAINT, WPARAM(0), LPARAM(0));
             }
             unsafe {
@@ -553,9 +552,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
-                TIMER_ANIM => {
-                    with_app(|app| app.invalidate_strip());
-                }
+
                 _ => {}
             }
             LRESULT(0)
@@ -678,16 +675,20 @@ impl App {
         }
     }
 
-    fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC) {
+    /// Draws the chrome, binding Direct2D only to the parts of `dirty` that
+    /// show: a frame of the strip's motion renders the strip, and a full
+    /// repaint the chrome around the pages, not the whole client area.
+    fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC, dirty: RECT) {
         let (width, height) = self.client_size();
         let loading = self.tabs.tabs.iter().any(|t| t.loading);
-        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, Instant::now());
-        self.set_anim_timer(next);
+        let started = Instant::now();
+        let fills = self.split_fills();
+        self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
+        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, started);
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
         let groups = self.split_groups();
-        let fills = self.split_fills();
         let hint = self.hint().map(str::to_owned);
         let paint = tabbar::Paint {
             layout: &self.layout,
@@ -703,44 +704,56 @@ impl App {
             maximized: self.is_maximized(),
             pressed: self.frame.pressed,
         };
-        let rect = RECT { left: 0, top: 0, right: width, bottom: height };
-        let drawn = surface.paint(hdc, rect, |g| tabbar::paint(g, width, height, &paint));
-        drop(paint);
-        self.surface = surface;
-        if !drawn {
-            gfx::fill_gdi(hdc, rect, self.palette.chrome);
-        }
-    }
-
-    /// Starts, retimes or stops the animation timer: it runs only while
-    /// something moves, so a still window costs nothing.
-    fn set_anim_timer(&mut self, interval: Option<u32>) {
-        if self.anim_timer == interval {
-            return;
-        }
-        unsafe {
-            match interval {
-                Some(ms) => {
-                    SetTimer(Some(self.hwnd), TIMER_ANIM, ms, None);
-                }
-                None => {
-                    let _ = KillTimer(Some(self.hwnd), TIMER_ANIM);
+        let dirty = RECT {
+            left: dirty.left.max(0),
+            top: dirty.top.max(0),
+            right: dirty.right.min(width),
+            bottom: dirty.bottom.min(height),
+        };
+        if dirty.right > dirty.left && dirty.bottom > dirty.top {
+            for rect in gfx::visible_rects(hdc, self.hwnd, dirty) {
+                if !surface.paint(hdc, rect, |g| tabbar::paint(g, width, height, &paint)) {
+                    gfx::fill_gdi(hdc, rect, self.palette.chrome);
                 }
             }
         }
-        self.anim_timer = interval;
+        drop(paint);
+        self.surface = surface;
+        // Still moving: the frame clock repaints what moves, and stops by
+        // itself when nothing asks again.
+        if let Some(ms) = next {
+            crate::anim::report_frame(started.elapsed());
+            crate::anim::repaint_after(self.hwnd, self.moving_area(&fills), ms);
+        }
     }
 
     fn invalidate_strip(&self) {
         let strip = self.layout.strip;
         if strip.width() == 0 {
-            // Nothing left to move: the next paint stops the timer.
             self.invalidate();
             return;
         }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), Some(&strip.win()), false);
         }
+    }
+
+    /// What a frame of the strip's motion has to repaint: the strip (or the
+    /// caption row when it is hidden) and the split's focus line.
+    fn moving_area(&self, fills: &[(tabbar::Rect, design::Rgb)]) -> Option<RECT> {
+        let strip = self.layout.strip;
+        let base = if strip.width() > 0 { strip } else { self.layout.frame.caption };
+        if base.width() == 0 {
+            return None;
+        }
+        let mut area = base.win();
+        for (r, _) in fills.iter().filter(|(_, c)| *c == self.palette.accent) {
+            area.left = area.left.min(r.left);
+            area.top = area.top.min(r.top);
+            area.right = area.right.max(r.right);
+            area.bottom = area.bottom.max(r.bottom);
+        }
+        Some(area)
     }
 
     fn update_title(&self) {
@@ -752,6 +765,7 @@ impl App {
 
     fn refresh_theme(&mut self) {
         self.motion.reduced = !design::animations_enabled();
+        crate::anim::refresh_reduced();
         self.palette = design::palette(self.settings.theme);
         apply_window_theme(self.hwnd, &self.palette);
         self.omnibar.set_palette(&self.palette);
@@ -1323,7 +1337,25 @@ impl App {
                     self.warm_up();
                 }
             }
+            self.tip_follow_hover();
+            self.invalidate_hover_area();
+        }
+    }
+
+    /// Everything a hover can light up lives in the strip, the caption row
+    /// and the window's buttons: only those repaint, never the page area.
+    fn invalidate_hover_area(&self) {
+        let l = &self.layout;
+        let [min, max, close] = l.frame.buttons;
+        let areas = [l.strip, l.frame.caption, l.settings, min, max, close];
+        if areas.iter().all(|r| r.width() == 0) {
             self.invalidate();
+            return;
+        }
+        for r in areas.iter().filter(|r| r.width() > 0) {
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), Some(&r.win()), false);
+            }
         }
     }
 
@@ -1351,6 +1383,7 @@ impl App {
 
     fn mouse_down(&mut self, x: i32, y: i32) {
         self.hide_card();
+        self.hide_tip();
         if self.divider_mouse_down(x, y) {
             return;
         }
@@ -1365,10 +1398,20 @@ impl App {
                 }
             }
             Some(Hit::Close(id)) => self.close_tab(id),
-            Some(Hit::NewTab) => self.open_omnibar(Mode::NewTab),
+            Some(Hit::NewTab) => {
+                self.motion.press(tabbar::HoverKey::NewTab);
+                self.open_omnibar(Mode::NewTab);
+            }
             Some(Hit::Extensions) => {
+                self.motion.press(tabbar::HoverKey::Extensions);
                 self.close_omnibar();
                 self.extensions_menu();
+            }
+            Some(Hit::Settings) => {
+                self.motion.press(tabbar::HoverKey::Settings);
+                self.invalidate();
+                self.close_omnibar();
+                self.open_settings();
             }
             Some(Hit::PinnedExtension(nth)) => {
                 self.close_omnibar();

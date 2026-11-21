@@ -16,9 +16,35 @@ contiene su código, su nombre ni su ícono.
 
 ## Cómo se ve
 
-La interfaz se dibuja con Direct2D y DirectWrite sobre ventanas Win32, con
-los grises planos de Search y esquinas redondeadas (sin Mica, que tiñe con el
-fondo de pantalla). Sin interfaz web.
+La interfaz se dibuja con Direct2D y DirectWrite sobre ventanas Win32, sin
+interfaz web y sin Mica (que tiñe con el fondo de pantalla). Colores, tipo,
+esquinas, sombras y movimientos son los de celagem-svelte: grises neutros,
+un índigo para lo activo y nada más pesado que medium. La tabla con cada
+token y de dónde sale está en [docs/diseno.md](docs/diseno.md).
+
+Todo se mueve con las curvas y duraciones de celagem:
+
+- el hover de pestañas y botones (150 ms);
+- la tarjeta de la pestaña activa, que se desliza hasta la elegida;
+- las vecinas, que hacen lugar al abrir, cerrar o reordenar;
+- la columna, que vuelve desde el borde;
+- la línea de foco de la vista dividida;
+- el campo único, la tarjeta, Ajustes y la barra de contraseñas, que
+  aparecen y se van con un fundido real;
+- los toasts, con su resorte;
+- las casillas de Ajustes.
+
+Una animación interrumpida sigue desde donde está. Nada bloquea la
+entrada. En reposo no hay timer: 0 % de CPU. Si Windows tiene las
+animaciones apagadas, todo llega de una.
+
+El engranaje abre Ajustes y está siempre a la vista:
+
+- con las pestañas arriba, a la izquierda de los botones de la ventana;
+- con las pestañas al costado, al pie de la columna;
+- con las pestañas ocultas, en la fila de la ventana.
+
+Al dejar el puntero encima muestra el tooltip «Ajustes (Ctrl+,)».
 
 No hay barra de título: como en Chrome y Edge, las pestañas ocupan su lugar y
 los botones de minimizar, maximizar y cerrar se dibujan al final de la fila
@@ -39,11 +65,21 @@ queda).
 
 | | |
 |---|---|
-| ![Pestañas arriba, tema claro](docs/capturas/claro-horizontal.png) | ![Pestañas al costado, tema oscuro](docs/capturas/oscuro-vertical.png) |
-| ![Campo único abierto](docs/capturas/campo-claro.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
+| ![Pestañas arriba, tema claro](docs/capturas/claro-horizontal.png) | ![Pestañas arriba, tema oscuro](docs/capturas/oscuro-horizontal.png) |
+| ![Pestañas al costado, tema claro](docs/capturas/claro-vertical.png) | ![Pestañas al costado, tema oscuro](docs/capturas/oscuro-vertical.png) |
+| ![El engranaje con su tooltip](docs/capturas/engranaje-claro.png) | ![El engranaje con su tooltip, tema oscuro](docs/capturas/engranaje-oscuro.png) |
+| ![Campo único abierto](docs/capturas/campo-claro.png) | ![Campo único, tema oscuro](docs/capturas/campo-oscuro.png) |
 | ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |
-| ![Pestañas ocultas: sólo la fila de la ventana](docs/capturas/claro-colapsado.png) | ![Botones de la ventana, cerrar bajo el puntero](docs/capturas/botones-claro.png) |
+| ![Pestañas ocultas: sólo la fila de la ventana](docs/capturas/claro-colapsado.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
 | ![Tarjeta de una pestaña, tema claro](docs/capturas/tarjeta-claro.png) | ![Tarjeta de una pestaña al costado, tema oscuro](docs/capturas/tarjeta-oscuro-vertical.png) |
+
+Cuadros intermedios, con el tiempo de cada uno, grabados con
+`tools/frames.ps1`:
+
+| | |
+|---|---|
+| ![Hover de una pestaña, 150 ms](docs/capturas/tira-hover-claro.png) | ![Cambio de pestaña: la tarjeta se desliza](docs/capturas/tira-pestana-oscuro.png) |
+| ![La columna vuelve desde el borde](docs/capturas/tira-columna-claro.png) | ![Tooltip del engranaje: 600 ms de demora y fundido](docs/capturas/tira-engranaje-oscuro.png) |
 
 Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
 al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.

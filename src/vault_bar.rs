@@ -16,7 +16,9 @@ use windows::{
 };
 
 use crate::{
+    anim::{TOAST_RISE, specs},
     design::{Palette, dwm},
+    fade,
     gfx::{Color, Surface},
     widgets::{self, ButtonKind},
 };
@@ -114,6 +116,7 @@ impl VaultBar {
                 widgets::track_hover(*button);
             }
             dwm::set(popup, dwm::CORNERS, dwm::ROUND);
+            fade::prepare(popup, 255);
             LOOK.with(|l| l.set(Some((*palette, scale))));
             let bar = Self { popup, label, buttons, scale };
             bar.set_palette(palette);
@@ -169,8 +172,11 @@ impl VaultBar {
 
     /// Shows the bubble with its top right corner at (right, top), screen
     /// coordinates, without activating it.
+    /// Arriving, it comes down into place as a toast at the top does
+    /// (6 px, on the toast's spring) while it fades in.
     pub fn place(&self, right: i32, top: i32) {
         let width = px(WIDTH, self.scale);
+        let arriving = unsafe { !IsWindowVisible(self.popup).as_bool() } || fade::closing(self.popup);
         unsafe {
             let _ = SetWindowPos(
                 self.popup,
@@ -179,23 +185,32 @@ impl VaultBar {
                 top,
                 width,
                 px(HEIGHT, self.scale),
-                SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                SWP_NOACTIVATE,
             );
+        }
+        if arriving {
+            fade::fade_in(self.popup, specs::TOAST_IN, 255, -(TOAST_RISE * self.scale).round() as i32);
+        }
+        unsafe {
+            let _ = ShowWindow(self.popup, SW_SHOWNA);
         }
     }
 
     pub fn hide(&self) {
-        unsafe {
-            let _ = ShowWindow(self.popup, SW_HIDE);
-        }
+        fade::fade_out(self.popup, specs::TOAST_OUT, -(TOAST_RISE * self.scale).round() as i32, None);
+    }
+}
+
+fn destroy(hwnd: HWND) {
+    unsafe {
+        let _ = DestroyWindow(hwnd);
     }
 }
 
 impl Drop for VaultBar {
     fn drop(&mut self) {
-        unsafe {
-            let _ = DestroyWindow(self.popup);
-        }
+        // It leaves as a toast does, and is destroyed once it is gone.
+        fade::fade_out(self.popup, specs::TOAST_OUT, -(TOAST_RISE * self.scale).round() as i32, Some(destroy));
         let (brush, _, _) = COLORS.with(|c| c.replace((0, 0, 0)));
         if brush != 0 {
             unsafe {

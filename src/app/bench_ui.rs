@@ -510,6 +510,8 @@ impl App {
             "splits": self.split_groups().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
             "extensions_button": self.layout.extensions.width() > 0,
             "card": self.card_state(),
+            "tooltip": self.tip_state(),
+            "anim": crate::app::tooltip_ui::anim_state(),
             "field": self.field_state(),
             "engine": if self.env.is_some() { "ready" } else if self.env_requested { "starting" } else { "off" },
         })

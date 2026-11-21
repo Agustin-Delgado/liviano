@@ -137,7 +137,7 @@ impl App {
         self.open_omnibar(Mode::Panel(kind));
     }
 
-    fn chord_hint(&self, command: Command) -> String {
+    pub(super) fn chord_hint(&self, command: Command) -> String {
         shortcuts::chords_of(&self.settings.shortcuts, command)
             .first()
             .map(|c| shortcuts::format_chord(*c))

@@ -37,7 +37,9 @@ use windows::{
 };
 
 use crate::{
+    anim::{self, Levels, specs},
     design::{Palette, dwm, size},
+    fade,
     gfx::{Align, Color, Font, Painter, RectF, Surface},
 };
 
@@ -79,6 +81,8 @@ thread_local! {
     static SURFACES: RefCell<(Surface, Surface)> = RefCell::new(Default::default());
     /// The row under the pointer, drawn with a quieter ground than the picked one.
     static HOVERED: Cell<Option<usize>> = const { Cell::new(None) };
+    /// How far each row's grounds have come in: (picked, hovered) by row.
+    static GROUNDS: RefCell<(Levels<usize>, Levels<usize>)> = RefCell::new(Default::default());
 }
 
 /// Space around the list inside the panel.
@@ -168,6 +172,8 @@ impl Omnibar {
             let _ = SetWindowSubclass(edit, Some(edit_proc), 1, 0);
             let _ = SetWindowSubclass(list, Some(list_proc), 2, 0);
             dwm::set(popup, dwm::CORNERS, dwm::ROUND);
+            // Layered for good, so it can fade in and out as a popover.
+            fade::prepare(popup, 255);
             Ok(Self {
                 popup,
                 edit,
@@ -242,6 +248,8 @@ impl Omnibar {
         }
         self.set_rows(&[]);
         self.place(anchor);
+        // A popover opening: 100 ms of fade (the list grows with what it finds).
+        fade::fade_in(self.popup, specs::POPOVER_IN, 255, 0);
         unsafe {
             if owns_foreground() {
                 let _ = ShowWindow(self.popup, SW_SHOW);
@@ -291,9 +299,7 @@ impl Omnibar {
     }
 
     pub fn close(&mut self) {
-        unsafe {
-            let _ = ShowWindow(self.popup, SW_HIDE);
-        }
+        fade::fade_out(self.popup, specs::POPOVER_OUT, 0, None);
     }
 
     pub fn text(&self) -> String {
@@ -333,6 +339,8 @@ impl Omnibar {
 
     pub fn set_rows(&mut self, rows: &[String]) {
         HOVERED.with(|h| h.set(None));
+        // New rows: whatever was picked or hovered before is another row now.
+        GROUNDS.with(|g| *g.borrow_mut() = Default::default());
         unsafe {
             // Each add repaints a shown list otherwise: two hundred rows of
             // the history panel were a third of a second per keystroke.
@@ -473,14 +481,27 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
                 return LRESULT(1);
             }
             let text = item_text(item.hwndItem, item.itemID as usize);
+            let row = item.itemID as usize;
             let picked = item.itemState.0 & ODS_SELECTED.0 != 0;
-            let hovered = HOVERED.with(|h| h.get()) == Some(item.itemID as usize);
+            let hovered = HOVERED.with(|h| h.get()) == Some(row);
+            // The picked row's ground and the hover's fade in and out as a
+            // menu item's colours do (150 ms ease-out).
+            let now = std::time::Instant::now();
+            let (picked, hovered, moving) = GROUNDS.with(|g| {
+                let (p, h) = &mut *g.borrow_mut();
+                p.set(row, if picked { 1.0 } else { 0.0 }, now, specs::HOVER);
+                h.set(row, if hovered { 1.0 } else { 0.0 }, now, specs::HOVER);
+                (p.get(row, now), h.get(row, now), p.moving(now) || h.moving(now))
+            });
             if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
                 SURFACES.with(|s| {
                     s.borrow_mut().1.paint(item.hDC, item.rcItem, |g| {
                         paint_row(g, item.rcItem.into(), &text, picked, hovered, &palette, scale)
                     })
                 });
+            }
+            if moving {
+                anim::repaint(item.hwndItem, Some(item.rcItem));
             }
             LRESULT(1)
         }
@@ -514,13 +535,14 @@ fn paint_panel(g: &Painter, rect: RECT, edit_h: i32, list_shown: bool, pal: &Pal
 
 /// One row: a soft ground when picked (or, quieter, under the pointer), the
 /// site's mark, the title in ink and what follows it dimmed.
-fn paint_row(g: &Painter, rect: RectF, text: &str, picked: bool, hovered: bool, pal: &Palette, scale: f32) {
+fn paint_row(g: &Painter, rect: RectF, text: &str, picked: f32, hovered: f32, pal: &Palette, scale: f32) {
     g.fill(rect, pal.field);
     let ground = rect.inset(0.0, 1.0);
-    if picked {
-        g.round(ground, size::RADIUS * scale, pal.selection);
-    } else if hovered {
-        g.round(ground, size::RADIUS * scale, pal.row_hover);
+    if hovered > 0.0 {
+        g.round(ground, size::RADIUS * scale, Color::from(pal.row_hover).with_alpha(hovered * (1.0 - picked)));
+    }
+    if picked > 0.0 {
+        g.round(ground, size::RADIUS * scale, Color::from(pal.selection).with_alpha(picked));
     }
     let parts = RowParts::of(text);
     let x = rect.left + 10.0 * scale;

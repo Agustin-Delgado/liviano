@@ -143,7 +143,7 @@ impl App {
         });
     }
 
-    fn screen_rect(&self, r: Rect) -> Rect {
+    pub(super) fn screen_rect(&self, r: Rect) -> Rect {
         let mut a = POINT { x: r.left, y: r.top };
         let mut b = POINT { x: r.right, y: r.bottom };
         unsafe {

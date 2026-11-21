@@ -154,7 +154,7 @@ pub fn paint(
             pal.ink_muted.mix(CLOSE_INK, over)
         } else {
             if down {
-                g.fill(rect, pal.tab_active);
+                g.fill(rect, pal.pin_live);
             } else if over > 0.0 {
                 g.fill(rect, Color::from(pal.tab_hover).with_alpha(over));
             }
