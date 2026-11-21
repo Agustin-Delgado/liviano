@@ -111,7 +111,7 @@ impl Command {
             Command::Forward => "Adelante",
             Command::PrevTab => "Pestaña anterior",
             Command::NextTab => "Pestaña siguiente",
-            Command::ToggleTabLayout => "Pestañas arriba / a la izquierda",
+            Command::ToggleTabLayout => "Pestañas arriba / al costado",
             Command::ToggleSidebar => "Plegar barra lateral",
             Command::Find => "Buscar en la página",
             Command::DuplicateTab => "Duplicar pestaña",

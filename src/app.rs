@@ -37,7 +37,10 @@ use windows::{
 
 mod apply_settings;
 mod bench_ui;
+mod engine_ui;
 mod extensions_ui;
+mod frame_ui;
+mod hovercard_ui;
 mod panel_ui;
 mod popups_ui;
 mod private_tabs;
@@ -65,10 +68,18 @@ use crate::{
 };
 
 const TIMER_SLEEP: usize = 1;
+const SLEEP_EVERY_MS: u32 = 15_000;
+/// Closing a view waits on the engine (tens of milliseconds, hundreds when it
+/// is busy): under memory pressure thirty of them in one go froze the window
+/// for seconds. A few per tick, and the next tick comes sooner.
+const DISCARDS_PER_TICK: usize = 3;
+const SLEEP_AGAIN_MS: u32 = 1_000;
 const TIMER_SAVE: usize = 2;
 const TIMER_RETRY: usize = 3;
 /// Runs only while something in the strip moves (see `tabbar::Motion`).
 const TIMER_ANIM: usize = 4;
+/// Losing this much history to a crash is fine; rewriting it every 5 s is not.
+const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
 const WM_APP_REPAINT: u32 = WM_APP + 3;
 const MENU_PIN: usize = 10;
@@ -80,6 +91,7 @@ const MENU_SHIELD: usize = 15;
 const MENU_POPUPS: usize = 16;
 const MENU_SPLIT: usize = 40;
 const MENU_UNSPLIT: usize = 41;
+const MENU_TAB_LAYOUT: usize = 42;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
@@ -135,6 +147,7 @@ struct App {
     tracking_mouse: bool,
     drag: Option<u64>,
     session_dirty: bool,
+    history_saved: Instant,
     panels: panel_ui::Panels,
     curtain: Curtain,
     split: split_ui::SplitUi,
@@ -142,6 +155,8 @@ struct App {
     vault: vault_ui::Vault,
     extensions: extensions_ui::Extensions,
     popups: popups_ui::Popups,
+    frame: frame_ui::FrameUi,
+    engine: engine_ui::EngineUi,
 }
 
 thread_local! {
@@ -194,12 +209,18 @@ pub fn run() -> windows::core::Result<()> {
     let data = storage::data_dir();
     let settings: Settings = storage::read_json(&data.join("settings.json"));
     let session: Session = storage::read_json(&data.join("session.json"));
+    let loading = Instant::now();
     let history = History::from_entries(storage::read_json::<Vec<Entry>>(&data.join("history.json")));
+    crate::diag::trace(|| {
+        format!("startup: history of {} entries read in {:.1} ms", history.entries().len(), loading.elapsed().as_secs_f64() * 1000.0)
+    });
     shield::set_disabled(&settings.shield_disabled);
     shield::set_cosmetic(settings.block_trackers);
 
     let hwnd = create_window(&session)?;
+    frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
+    crate::diag::set_window(hwnd);
     crate::updater::start(&settings);
     let bench_on = crate::bench::wanted(settings.bench_enabled);
 
@@ -209,6 +230,7 @@ pub fn run() -> windows::core::Result<()> {
     let palette = design::palette(settings.theme);
     let scale = unsafe { GetDpiForWindow(hwnd) } as f32 / 96.0;
     let font = make_font(scale);
+    crate::favicon::set_scale(scale);
     omnibar.set_font(font, scale);
     omnibar.set_palette(&palette);
     apply_window_theme(hwnd, &palette);
@@ -250,6 +272,7 @@ pub fn run() -> windows::core::Result<()> {
         tracking_mouse: false,
         drag: None,
         session_dirty: false,
+        history_saved: Instant::now(),
         panels: Default::default(),
         curtain: Curtain::load(&data),
         split: split_ui::SplitUi::new(splits),
@@ -257,6 +280,8 @@ pub fn run() -> windows::core::Result<()> {
         vault: Default::default(),
         extensions: extensions_ui::Extensions::load(),
         popups: Default::default(),
+        frame: Default::default(),
+        engine: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -272,7 +297,7 @@ pub fn run() -> windows::core::Result<()> {
             (false, false) => SW_SHOW,
         };
         let _ = ShowWindow(hwnd, show);
-        SetTimer(Some(hwnd), TIMER_SLEEP, 15_000, None);
+        SetTimer(Some(hwnd), TIMER_SLEEP, SLEEP_EVERY_MS, None);
         SetTimer(Some(hwnd), TIMER_SAVE, 5_000, None);
     }
     with_app(|app| {
@@ -289,7 +314,14 @@ pub fn run() -> windows::core::Result<()> {
 fn message_loop() {
     let mut msg = MSG::default();
     unsafe {
-        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+        loop {
+            crate::diag::waiting(true);
+            let more = GetMessageW(&mut msg, None, 0, 0).as_bool();
+            crate::diag::waiting(false);
+            if !more {
+                break;
+            }
+            let _doing = crate::diag::doing(&"mensaje", msg.message as u64);
             if crate::settings_window::pre_translate(&msg) {
                 continue;
             }
@@ -380,6 +412,10 @@ fn apply_window_theme(hwnd: HWND, palette: &Palette) {
 }
 
 fn on_omnibar(signal: Signal) {
+    let _doing = crate::diag::doing(&"campo", 0);
+    if let Signal::Submit { .. } = signal {
+        crate::diag::trace(|| "submit".to_string());
+    }
     with_app(|app| app.on_omnibar(signal));
 }
 
@@ -389,7 +425,14 @@ fn x_y(lparam: LPARAM) -> (i32, i32) {
 
 unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
+    crate::diag::tick();
+    if msg == crate::diag::WM_APP_PING {
+        return LRESULT(0);
+    }
     if let Some(result) = extensions_ui::window_message(hwnd, msg, wparam, lparam) {
+        return result;
+    }
+    if let Some(result) = frame_ui::window_message(hwnd, msg, wparam, lparam) {
         return result;
     }
     match msg {
@@ -400,6 +443,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         crate::bench::WM_APP_BENCH => {
+            let _doing = crate::diag::doing(&"script", 0);
             bench_ui::drain();
             LRESULT(0)
         }
@@ -417,6 +461,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_PAINT => {
+            let _doing = crate::diag::doing(&"pintar", 0);
             let mut ps = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
             if with_app(|app| app.paint(hdc)).is_none() {
@@ -429,6 +474,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         vault_ui::WM_APP_VAULT => {
             vault_ui::on_deferred(hwnd, wparam.0);
+            LRESULT(0)
+        }
+        crate::favicon::WM_APP_FAVICON => {
+            if crate::favicon::take_arrived() {
+                with_app(|app| app.invalidate_strip());
+            }
             LRESULT(0)
         }
         WM_APP_REPAINT => {
@@ -487,15 +538,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_RBUTTONUP => {
             let (x, y) = x_y(lparam);
+            let _doing = crate::diag::doing(&"menú de pestaña", 0);
             with_app(|app| app.context_menu(x, y));
             LRESULT(0)
         }
         WM_TIMER => {
             match wparam.0 {
                 TIMER_SLEEP => {
+                    let _doing = crate::diag::doing(&"timer:dormir", 0);
                     with_app(|app| app.sleep_tick());
                 }
                 TIMER_SAVE => {
+                    let _doing = crate::diag::doing(&"timer:guardar", 0);
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
@@ -546,7 +600,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_CLOSE => {
+            let _doing = crate::diag::doing(&"cerrar", 0);
             with_app(|app| app.shutdown());
+            crate::diag::flush_now();
             unsafe {
                 let _ = DestroyWindow(hwnd);
             }
@@ -583,6 +639,7 @@ impl App {
                 asleep: matches!(t.live, Live::Asleep),
                 loading: t.loading,
                 private: t.private,
+                icon: if t.private { None } else { crate::favicon::for_url(&t.url) },
             })
             .collect()
     }
@@ -643,6 +700,8 @@ impl App {
             fills: &fills,
             extension_initials: &extension_initials,
             motion: &self.motion,
+            maximized: self.is_maximized(),
+            pressed: self.frame.pressed,
         };
         let rect = RECT { left: 0, top: 0, right: width, bottom: height };
         let drawn = surface.paint(hdc, rect, |g| tabbar::paint(g, width, height, &paint));
@@ -709,6 +768,7 @@ impl App {
         self.scale = unsafe { GetDpiForWindow(self.hwnd) } as f32 / 96.0;
         let old = self.font;
         self.font = make_font(self.scale);
+        crate::favicon::set_scale(self.scale);
         self.omnibar.set_font(self.font, self.scale);
         unsafe {
             let _ = DeleteObject(old.into());
@@ -726,8 +786,14 @@ impl App {
         for tab in &mut self.tabs.tabs {
             let bounds = shown.iter().find(|(id, _)| *id == tab.id).map(|(_, r)| *r);
             match (&mut tab.live, bounds) {
-                (Live::Ready(web), Some(bounds)) => web.show(bounds),
-                (Live::Ready(web), None) => web.hide(),
+                (Live::Ready(web), Some(bounds)) => {
+                    let _doing = crate::diag::doing(&"vista:mostrar", tab.id);
+                    web.show(bounds)
+                }
+                (Live::Ready(web), None) => {
+                    let _doing = crate::diag::doing(&"vista:ocultar", tab.id);
+                    web.hide()
+                }
                 (Live::Asleep, Some(_)) => wake.push(tab.id),
                 _ => {}
             }
@@ -740,14 +806,23 @@ impl App {
     }
 
     fn wake(&mut self, id: u64) {
+        crate::diag::trace(|| format!("wake tab={id}"));
         let Some(env) = self.env.clone() else {
             self.request_environment();
             return;
         };
-        let Some(tab) = self.tabs.get_mut(id) else { return };
+        let Some(tab) = self.tabs.get(id) else { return };
         if !matches!(tab.live, Live::Asleep) {
             return;
         }
+        let private = tab.private;
+        if !private && self.take_spare(id) {
+            if let Some(tab) = self.tabs.get_mut(id) {
+                tab.live = Live::Creating;
+            }
+            return;
+        }
+        let Some(tab) = self.tabs.get_mut(id) else { return };
         tab.live = Live::Creating;
         let created = if tab.private {
             private_tabs::create_controller(&env, self.hwnd, id)
@@ -778,8 +853,12 @@ impl App {
         if self.tabs.active == Some(id) {
             return;
         }
+        if let Some(leaving) = self.tabs.active {
+            self.capture_thumb(leaving);
+        }
         if self.tabs.select(id) {
             self.show_active();
+            self.warm_up_if_asleep();
             self.focus_page();
             self.session_dirty = true;
             self.invalidate();
@@ -791,6 +870,7 @@ impl App {
             return;
         }
         if let Some(Live::Ready(web)) = self.tabs.active_tab().map(|t| &t.live) {
+            let _doing = crate::diag::doing(&"vista:foco", 0);
             web.focus();
         } else {
             // Also while the page is still being created: the keyboard leaves
@@ -821,6 +901,7 @@ impl App {
     }
 
     fn close_tab(&mut self, id: u64) {
+        self.forget_thumb(id);
         let heir = self.unpair_closing(id);
         if let Some(tab) = self.tabs.close(id) {
             if let Live::Ready(web) = tab.live {
@@ -894,16 +975,20 @@ impl App {
             let Live::Ready(web) = &mut tab.live else { continue };
             let idle = now.duration_since(tab.last_active);
             if !tab.pinned && !tab.private && (pressure || idle >= discard_after) && !web.is_playing_audio() {
-                to_discard.push(tab.id);
+                to_discard.push((tab.last_active, tab.id));
             } else if !web.suspended && idle >= suspend_after {
                 web.suspend();
             }
         }
+        let more = take_first_discards(&mut to_discard, DISCARDS_PER_TICK);
         if !to_discard.is_empty() {
-            for id in to_discard {
+            for (_, id) in to_discard {
                 self.discard(id);
             }
             self.invalidate();
+        }
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_SLEEP, if more { SLEEP_AGAIN_MS } else { SLEEP_EVERY_MS }, None);
         }
     }
 
@@ -911,6 +996,7 @@ impl App {
 
     fn drain_events(&mut self) {
         while let Some(event) = web::pop() {
+            let _doing = crate::diag::doing(event.name(), event.tab());
             self.bench.observe(&event);
             self.handle(event);
         }
@@ -922,11 +1008,13 @@ impl App {
             Event::EnvironmentReady(Ok(env)) => {
                 self.env = Some(env);
                 self.show_active();
+                self.warm_environment_ready();
             }
             Event::EnvironmentReady(Err(err)) => {
                 self.env_error = Some(format!("No se pudo iniciar WebView2 ({err}). Instalá el runtime de WebView2."));
                 self.invalidate();
             }
+            Event::ControllerReady(engine_ui::SPARE, result) => self.spare_ready(result),
             Event::ControllerReady(id, result) => self.controller_ready(id, result),
             Event::TitleChanged(id) => {
                 let records = self.tabs.records(id);
@@ -966,17 +1054,13 @@ impl App {
                         self.history.record_visit(&tab.url, &tab.title, unix_now());
                     }
                 }
-                self.invalidate();
-            }
-            Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
-            Event::ProcessFailed(id) => {
-                let visible = self.visible_tabs().contains(&id);
-                self.discard(id);
-                if visible {
-                    self.show_active();
+                if ok && self.visible_tabs().contains(&id) {
+                    self.capture_thumb(id);
                 }
                 self.invalidate();
             }
+            Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
+            Event::ProcessFailed(id, kind) => self.process_failed(id, kind),
             Event::PageClicked(id) => self.page_focused(id),
             Event::FindChanged(id) => {
                 if self.mode == Some(Mode::Find) && self.tabs.active == Some(id) {
@@ -1022,6 +1106,8 @@ impl App {
     }
 
     fn controller_ready(&mut self, id: u64, result: windows::core::Result<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller>) {
+        let started = Instant::now();
+        let _traced = Traced(started, id);
         let Ok(controller) = result else {
             if let Some(tab) = self.tabs.get_mut(id) {
                 tab.live = Live::Asleep;
@@ -1051,6 +1137,9 @@ impl App {
                 if web.passwords {
                     let _ = crate::vault_watch::watch(&web.webview, id);
                 }
+                if !tab.private {
+                    crate::favicon::watch(&web.webview, self.hwnd);
+                }
                 let url = if tab.url.is_empty() { "about:blank".to_string() } else { tab.url.clone() };
                 web.navigate(&url);
                 tab.live = Live::Ready(web);
@@ -1072,6 +1161,8 @@ impl App {
     // ---------- commands ----------
 
     fn run(&mut self, command: Command) {
+        let _doing = crate::diag::doing(&"comando", 0);
+        crate::diag::trace(|| format!("command {}", command.name()));
         match command {
             Command::FocusAddress => {
                 let mode = if self.tabs.active.is_some() { Mode::Address } else { Mode::NewTab };
@@ -1124,17 +1215,8 @@ impl App {
                     self.select(id);
                 }
             }
-            Command::ToggleTabLayout => {
-                self.vertical = !self.vertical;
-                self.collapsed = false;
-                self.session_dirty = true;
-                self.relayout();
-            }
-            Command::ToggleSidebar => {
-                self.collapsed = !self.collapsed;
-                self.session_dirty = true;
-                self.relayout();
-            }
+            Command::ToggleTabLayout => self.set_tab_layout(!self.vertical, false),
+            Command::ToggleSidebar => self.set_tab_layout(self.vertical, !self.collapsed),
             Command::DuplicateTab => {
                 if let Some(tab) = self.tabs.active_tab() {
                     let (url, private) = (tab.url.clone(), tab.private);
@@ -1234,6 +1316,13 @@ impl App {
     fn set_hover(&mut self, hover: Option<Hit>) {
         if self.hover != hover {
             self.hover = hover;
+            self.card_follow_hover();
+            // A click on a sleeping tab is likely next: its view gets made meanwhile.
+            if let Some(Hit::Tab(id)) = hover {
+                if self.tabs.get(id).is_some_and(|t| matches!(t.live, Live::Asleep) && !t.private) {
+                    self.warm_up();
+                }
+            }
             self.invalidate();
         }
     }
@@ -1261,6 +1350,7 @@ impl App {
     }
 
     fn mouse_down(&mut self, x: i32, y: i32) {
+        self.hide_card();
         if self.divider_mouse_down(x, y) {
             return;
         }
@@ -1284,6 +1374,7 @@ impl App {
                 self.close_omnibar();
                 self.open_pinned_extension(nth);
             }
+            Some(Hit::Window(button)) => self.press_window_button(button),
             None => {
                 if self.mode.is_some() {
                     self.close_omnibar();
@@ -1293,7 +1384,12 @@ impl App {
     }
 
     fn context_menu(&mut self, x: i32, y: i32) {
-        let Some(Hit::Tab(id) | Hit::Close(id)) = self.layout.hit(x, y) else { return };
+        let Some(Hit::Tab(id) | Hit::Close(id)) = self.layout.hit(x, y) else {
+            if self.layout.strip.contains(x, y) && self.layout.hit(x, y).is_none() {
+                self.layout_menu(x, y);
+            }
+            return;
+        };
         let Some(tab) = self.tabs.get(id) else { return };
         let pinned = tab.pinned;
         let awake = self.keeps_awake(&tab.url);
@@ -1321,6 +1417,8 @@ impl App {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Abrir al lado de la página actual"));
             }
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+            let _ = AppendMenuW(menu, MF_STRING, MENU_TAB_LAYOUT, &wide(frame_ui::layout_label(self.vertical)));
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, w!("Cerrar"));
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Cerrar las demás"));
             let mut point = POINT { x, y };
@@ -1328,6 +1426,10 @@ impl App {
             let chosen =
                 TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None).0 as usize;
             let _ = DestroyMenu(menu);
+            if chosen == MENU_TAB_LAYOUT {
+                self.run(Command::ToggleTabLayout);
+                return;
+            }
             if chosen != 0 && self.tabs.active != Some(id) && chosen != MENU_CLOSE && chosen != MENU_SPLIT {
                 self.select(id);
             }
@@ -1378,6 +1480,7 @@ impl App {
     }
 
     fn open_omnibar(&mut self, mode: Mode) {
+        self.hide_card();
         if self.mode == Some(Mode::Find) {
             self.with_active_web(|w| w.find_stop());
         }
@@ -1395,6 +1498,13 @@ impl App {
             Mode::Split => ("Al lado: dirección, búsqueda o pestaña abierta (Enter vacío: la misma página)", String::new(), false),
         };
         self.mode = Some(mode);
+        // With no engine and no tab (the window just opened, empty), the
+        // first keystroke starts it instead: a window left open untouched
+        // never loads it at all.
+        let engine_in_use = self.env.is_some() || !self.tabs.tabs.is_empty();
+        if matches!(mode, Mode::NewTab | Mode::Split) && engine_in_use {
+            self.warm_up();
+        }
         self.load_panel_data(mode);
         self.rows.clear();
         self.typed_len = text.encode_utf16().count();
@@ -1441,7 +1551,13 @@ impl App {
                             self.set_rows(Vec::new());
                         }
                     }
-                    _ => self.refresh_rows(typing_forward),
+                    _ => {
+                        if matches!(mode, Mode::NewTab | Mode::Split) {
+                            // Still typing: keep the spare view for the Enter.
+                            self.warm_up();
+                        }
+                        self.refresh_rows(typing_forward)
+                    }
                 }
             }
             Signal::Submit { row, shift } => self.submit(mode, row, shift),
@@ -1454,9 +1570,14 @@ impl App {
     }
 
     fn set_rows(&mut self, rows: Vec<(String, Row)>) {
+        let _doing = crate::diag::doing(&"campo:filas", rows.len() as u64);
         let labels: Vec<String> = rows.iter().map(|(label, _)| label.clone()).collect();
         self.rows = rows.into_iter().map(|(_, row)| row).collect();
-        self.omnibar.set_rows(&labels);
+        {
+            let _doing = crate::diag::doing(&"campo:lista", 0);
+            self.omnibar.set_rows(&labels);
+        }
+        let _doing = crate::diag::doing(&"campo:ubicar", 0);
         self.omnibar.place(self.omnibar_anchor());
     }
 
@@ -1475,6 +1596,7 @@ impl App {
             Mode::Address | Mode::NewTab | Mode::NewPrivateTab => {
                 let (start, end) = self.omnibar.selection();
                 let caret_at_end = start == end && end == text.encode_utf16().count();
+                let _doing = crate::diag::doing(&"campo:historial", 0);
                 if typing_forward && caret_at_end {
                     if let Some(completion) = self.history.inline_completion(&text) {
                         self.omnibar.complete_inline(&text, &completion);
@@ -1495,7 +1617,10 @@ impl App {
                 }
                 rows
             }
-            Mode::Panel(kind) => self.panel_rows(kind, &text),
+            Mode::Panel(kind) => {
+                let _doing = crate::diag::doing(&"campo:panel", 0);
+                self.panel_rows(kind, &text)
+            }
             Mode::Split => self.split_rows(&text),
             Mode::Find => return,
         };
@@ -1571,18 +1696,22 @@ impl App {
     // ---------- persistence ----------
 
     fn save_settings(&self) {
-        let _ = storage::write_json(&storage::data_dir().join("settings.json"), &self.settings);
+        storage::write_json_later(storage::data_dir().join("settings.json"), self.settings.clone());
     }
 
+    /// The session on every tick it changed; the history, megabytes of it,
+    /// at most every `HISTORY_SAVE_EVERY`. Both are written off this thread.
     fn save(&mut self, force: bool) {
         let dir = storage::data_dir();
         if self.session_dirty || force {
-            let _ = storage::write_json(&dir.join("session.json"), &self.session());
+            storage::write_json_later(dir.join("session.json"), self.session());
             self.session_dirty = false;
         }
-        if self.history.dirty || force {
-            let _ = storage::write_json(&dir.join("history.json"), &self.history.entries());
+        let due = self.history_saved.elapsed() >= HISTORY_SAVE_EVERY;
+        if self.history.dirty && (due || force) {
+            storage::write_json_later(dir.join("history.json"), self.history.entries().to_vec());
             self.history.dirty = false;
+            self.history_saved = Instant::now();
         }
     }
 
@@ -1606,11 +1735,32 @@ impl App {
 
     fn shutdown(&mut self) {
         self.save(true);
+        self.release_spare();
+        storage::flush_writes(Duration::from_secs(10));
         for tab in &mut self.tabs.tabs {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
             }
         }
+    }
+}
+
+/// Keeps the `limit` longest idle of `candidates` (idle since, tab); whether
+/// some were left for the next tick.
+fn take_first_discards(candidates: &mut Vec<(Instant, u64)>, limit: usize) -> bool {
+    candidates.sort_by_key(|(since, _)| *since);
+    let more = candidates.len() > limit;
+    candidates.truncate(limit);
+    more
+}
+
+/// Traces how long wiring a new view took (on drop, so every return counts).
+struct Traced(Instant, u64);
+
+impl Drop for Traced {
+    fn drop(&mut self) {
+        let (took, id) = (self.0.elapsed(), self.1);
+        crate::diag::trace(|| format!("view wired tab={id} in {:.1} ms", took.as_secs_f64() * 1000.0));
     }
 }
 

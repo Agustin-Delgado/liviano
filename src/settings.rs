@@ -41,6 +41,8 @@ pub struct Settings {
     /// Two pages side by side (Ctrl+Alt+N, or a tab dropped on the page). On
     /// by default: it costs nothing until a pair exists.
     pub split_view: bool,
+    /// A picture of the page on a tab's hover card (the card shows anyway).
+    pub hover_preview: bool,
     /// Look for a new version once a day (RF-22).
     pub check_updates: bool,
     /// Manifest address; empty means the one built in (`updater`).
@@ -67,6 +69,7 @@ impl Default for Settings {
             block_trackers: true,
             shortcuts: HashMap::new(),
             split_view: true,
+            hover_preview: true,
             check_updates: true,
             update_url: String::new(),
             bench_enabled: false,

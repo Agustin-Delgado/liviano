@@ -17,14 +17,33 @@ contiene su código, su nombre ni su ícono.
 ## Cómo se ve
 
 La interfaz se dibuja con Direct2D y DirectWrite sobre ventanas Win32, con
-los grises planos de Search, esquinas redondeadas y barra de título oscura de
-Windows 11 (sin Mica, que tiñe con el fondo de pantalla). Sin interfaz web.
+los grises planos de Search y esquinas redondeadas (sin Mica, que tiñe con el
+fondo de pantalla). Sin interfaz web.
+
+No hay barra de título: como en Chrome y Edge, las pestañas ocupan su lugar y
+los botones de minimizar, maximizar y cerrar se dibujan al final de la fila
+(con las pestañas al costado, arriba de la columna, como los semáforos de
+Search). El espacio libre de la fila mueve la ventana, con doble clic la
+maximiza y con clic derecho abre el menú de la ventana; pasar el mouse por
+maximizar muestra los diseños de ajuste de Windows 11. La sombra, los bordes
+para cambiar el tamaño y las esquinas siguen siendo los de Windows.
+
+Cada pestaña lleva el ícono de su sitio (sin ícono, o privada, su inicial).
+Con el puntero quieto sobre una pestaña aparece, como en Chrome, una tarjeta
+con el título entero, el sitio, si está dormida, suspendida o siempre
+despierta, y una vista chica de cómo estaba la página la última vez que se la
+vio (sólo en memoria, 3 MB entre todas); una pestaña dormida conserva la suya.
+Pasar a otra pestaña la mueve sin esperar, y un clic, arrastrar o abrir el
+campo la cierra. La vista previa se apaga en Ajustes → Pestañas (la tarjeta
+queda).
 
 | | |
 |---|---|
 | ![Pestañas arriba, tema claro](docs/capturas/claro-horizontal.png) | ![Pestañas al costado, tema oscuro](docs/capturas/oscuro-vertical.png) |
 | ![Campo único abierto](docs/capturas/campo-claro.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
 | ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |
+| ![Pestañas ocultas: sólo la fila de la ventana](docs/capturas/claro-colapsado.png) | ![Botones de la ventana, cerrar bajo el puntero](docs/capturas/botones-claro.png) |
+| ![Tarjeta de una pestaña, tema claro](docs/capturas/tarjeta-claro.png) | ![Tarjeta de una pestaña al costado, tema oscuro](docs/capturas/tarjeta-oscuro-vertical.png) |
 
 Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
 al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.
@@ -39,7 +58,7 @@ canal de control por script; lo que no se puede probar así está marcado.
 |---|---|---|
 | RF-01 | Campo único para direcciones y búsquedas | Verificado. Nada sale hasta Enter. |
 | RF-02 | Autocompletado desde el historial local | Verificado (sugerencias y completado en línea). |
-| RF-03 | Pestañas arriba o a la izquierda, barra lateral plegable | Verificado. |
+| RF-03 | Pestañas arriba o al costado, barra lateral plegable | Verificado. Se elige en Ajustes → Pestañas → Ubicación, en el menú de clic derecho de la fila (o de la ventana) y con Ctrl+Shift+S. |
 | RF-04 | Pestañas fijadas | Verificado; persisten entre sesiones. |
 | RF-05 | Restauración diferida | Verificado: al abrir sólo se crea la vista de la pestaña activa (y la de su par, si está dividida). |
 | RF-06 | Cambiar de pestaña por nombre | Verificado (búsqueda difusa por título y dirección). |
@@ -98,8 +117,8 @@ Todos se pueden cambiar en Ajustes (Ctrl+,).
 | Atrás / adelante | Alt+Izquierda / Alt+Derecha |
 | Pestaña anterior / siguiente | Ctrl+Shift+Tab / Ctrl+Tab (y Ctrl+RePág / Ctrl+AvPág) |
 | Ir a la pestaña 1 a 8 / a la última | Ctrl+1 … Ctrl+8 / Ctrl+9 |
-| Pestañas arriba / a la izquierda | Ctrl+Shift+S |
-| Plegar barra lateral | Ctrl+S |
+| Pestañas arriba / al costado | Ctrl+Shift+S |
+| Ocultar / mostrar las pestañas | Ctrl+S |
 | Buscar en la página | Ctrl+F |
 | Duplicar pestaña | Ctrl+D |
 | Copiar dirección / pegar e ir | Ctrl+Shift+C / Ctrl+Shift+V |
@@ -113,6 +132,13 @@ Todos se pueden cambiar en Ajustes (Ctrl+,).
 | Ir a la página dividida de la izquierda / derecha | Alt+Shift+Izquierda / Alt+Shift+Derecha |
 | Contraseñas | Ctrl+Alt+L |
 | Ajustes | Ctrl+, |
+
+Las pestañas van arriba o al costado según Ajustes → Pestañas → Ubicación
+(ahí también se ocultan), y desde el menú de clic derecho de una pestaña o
+del espacio libre de la fila ("Pestañas al costado" / "Pestañas arriba").
+Si otro programa tiene tomado un atajo para todo el sistema (PowerToys suele
+quedarse con Ctrl+Shift+S), Ajustes lo marca "otro programa" en la lista de
+atajos: ese atajo no le llega a Liviano y conviene asignarle otro.
 
 Fijar una pestaña, mantener un sitio despierto, el bloqueo de anuncios en un
 sitio y "Permitir ventanas emergentes en este sitio" están en el menú de la
@@ -228,6 +254,40 @@ los escenarios de memoria. `LIVIANO_CREDENTIAL_PREFIX` (por ejemplo
 Con otra aplicación al frente, Liviano no toma el teclado: una corrida por
 script no interrumpe a quien escribe en otra ventana.
 
+## Diagnóstico: cierres y cuelgues
+
+Siempre activo y sin costo apreciable (un hilo que mira una vez por segundo
+si la ventana sigue procesando mensajes). Nada sale de la máquina: son
+archivos de texto en la carpeta de datos (`%APPDATA%\Liviano`, o
+`LIVIANO_DATA_DIR`), de 256 KB como máximo cada uno (el anterior queda como
+`*.log.old`).
+
+| Archivo | Qué anota |
+|---|---|
+| `crash.log` | Un *panic* (mensaje, archivo y línea, hora, versión y qué estaba haciendo la ventana), una excepción no manejada (código y dirección dentro de `liviano.exe`) y cada proceso del motor que se cae o deja de responder: el del navegador, el de una página, la GPU… con su motivo y código de salida. |
+| `hang.log` | La ventana trabada más de 2 s: desde cuándo y haciendo qué (un evento del motor, un comando, un temporizador, el pipe de pruebas, una solicitud del bloqueador…), y cuándo volvió a responder. También cualquier paso suelto que tardó más de 250 ms. |
+
+Si Liviano se cierra solo o se queda "sin responder", esos dos archivos
+dicen dónde. Cuando se cae el proceso del motor entero, Liviano lo vuelve a
+arrancar y recarga las pestañas visibles (hasta tres veces en dos minutos);
+si se cae la GPU o un proceso auxiliar, el motor se recupera solo y las
+pestañas no se tocan.
+
+Para que Enter no espere al motor, Liviano prepara una vista de reserva
+cuando está por necesitarla: al abrir el campo de pestaña nueva, mientras se
+escribe en él, con el puntero sobre una pestaña dormida o al cambiar de
+pestaña habiendo alguna dormida. Con la ventana vacía, el motor arranca con
+la primera tecla y no al abrirla. Si nadie usa la vista en 30 s se cierra, y
+si el motor se había arrancado sólo para ella también se apaga: una ventana
+quieta no guarda nada de más.
+
+Para medir, `LIVIANO_TRACE=1` agrega `trace.log`: una marca con hora (en ms
+desde el arranque) por cada paso entre Enter y la página, y cada manejador
+que tardó más de 4 ms. `tools\latency.ps1` lo usa para medir la latencia del
+campo en frío, en caliente y con una pestaña dormida, y con `-Usage` una
+pasada de uso pesado (30 pestañas reales, historial de 20 000 entradas) que
+resume los manejadores lentos y lo que haya quedado en `hang.log`.
+
 ## Actualizaciones
 
 Una vez por día, en segundo plano, Liviano lee un manifiesto (`latest.json`).
@@ -278,6 +338,7 @@ nada hasta presionar Enter: el autocompletado sale del historial local.
 | Listas de filtros (anuncios, rastreo, cookies) y extensiones de la Web Store | `%APPDATA%\Liviano\shield`, `%APPDATA%\Liviano\extensions` |
 | Sitios con excepción de bloqueo o con ventanas emergentes permitidas | `settings.json` (`shield_disabled`, `popups_allowed`) |
 | Contraseñas | Administrador de credenciales de Windows (genéricas `Liviano:<origen> <usuario>`) |
+| Íconos de los sitios (nunca los de pestañas privadas), hasta 4 MB | `%APPDATA%\Liviano\favicons` |
 | Cookies, caché y datos de sitios | `%LOCALAPPDATA%\Liviano\engine` (perfil propio, separado de Edge) |
 | Actualización descargada | `%LOCALAPPDATA%\Liviano\update` |
 | Programa instalado | `%LOCALAPPDATA%\Programs\Liviano` |

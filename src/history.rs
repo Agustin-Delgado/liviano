@@ -88,8 +88,8 @@ impl History {
     /// The panel's list: entries with every word typed in the title or the
     /// address, most recent first.
     pub fn recent(&self, query: &str, limit: usize) -> Vec<&Entry> {
-        let mut found: Vec<&Entry> =
-            self.entries.iter().filter(|e| crate::panels::matches(query, &[&e.title, &e.url])).collect();
+        let query = crate::panels::Query::new(query);
+        let mut found: Vec<&Entry> = self.entries.iter().filter(|e| query.matches(&[&e.title, &e.url])).collect();
         found.sort_by(|a, b| b.last.cmp(&a.last));
         found.truncate(limit);
         found
@@ -112,16 +112,18 @@ impl History {
         if query.is_empty() {
             return Vec::new();
         }
+        // Every keystroke scans the whole history: no lowercase copies of
+        // twenty thousand addresses and titles each time.
         let mut scored: Vec<(f64, &Entry)> = self
             .entries
             .iter()
             .filter_map(|e| {
-                let address = strip_for_match(&e.url).to_lowercase();
-                let base = if address.starts_with(&query) {
+                let address = strip_for_match(&e.url);
+                let base = if starts_with_folded(address, &query) {
                     3.0
-                } else if address.contains(&query) {
+                } else if contains_folded(address, &query) {
                     1.5
-                } else if e.title.to_lowercase().contains(&query) {
+                } else if contains_folded(&e.title, &query) {
                     1.0
                 } else {
                     return None;
@@ -146,7 +148,7 @@ impl History {
         let mut best: Option<(&str, u32)> = None;
         for entry in &self.entries {
             let address = strip_for_match(&entry.url);
-            if !address.to_lowercase().starts_with(&typed_lower) {
+            if !starts_with_folded(address, &typed_lower) {
                 continue;
             }
             // Complete up to the end of the host when the typed text is still
@@ -163,5 +165,27 @@ impl History {
         }
         best.map(|(candidate, _)| candidate[typed.len()..].to_string())
     }
+}
+
+/// `text` starts with `lower` (already lowercase) ignoring case. ASCII is
+/// compared in place; anything else falls back to a lowercase copy.
+fn starts_with_folded(text: &str, lower: &str) -> bool {
+    if lower.is_ascii() {
+        let (text, lower) = (text.as_bytes(), lower.as_bytes());
+        return text.len() >= lower.len() && text[..lower.len()].eq_ignore_ascii_case(lower);
+    }
+    text.to_lowercase().starts_with(lower)
+}
+
+/// `text` contains `lower` (already lowercase) ignoring case, as above.
+fn contains_folded(text: &str, lower: &str) -> bool {
+    if lower.is_empty() {
+        return true;
+    }
+    if lower.is_ascii() {
+        let (text, lower) = (text.as_bytes(), lower.as_bytes());
+        return text.windows(lower.len()).any(|w| w.eq_ignore_ascii_case(lower));
+    }
+    text.to_lowercase().contains(lower)
 }
 

@@ -286,7 +286,7 @@ impl Curtain {
     }
 
     fn save(&self) {
-        let _ = storage::write_json(&self.path, &self.store);
+        storage::write_json_later(self.path.clone(), self.store.clone());
     }
 
     /// Wires a new view: its messages to the queue, and the hiding script.

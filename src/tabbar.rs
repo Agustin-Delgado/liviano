@@ -10,6 +10,7 @@ use windows::Win32::Foundation::RECT;
 
 use crate::{
     design::{Palette, Rgb, motion, size},
+    frame::{self, Frame, WindowButton},
     gfx::{Align, Color, Font, Painter, RectF},
 };
 
@@ -22,6 +23,8 @@ pub enum Hit {
     Extensions,
     /// A pinned extension next to it, by its place among the pinned ones.
     PinnedExtension(usize),
+    /// Minimize, maximize or close: the window's own buttons.
+    Window(WindowButton),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -56,6 +59,8 @@ pub struct TabInfo<'a> {
     pub asleep: bool,
     pub loading: bool,
     pub private: bool,
+    /// The site's icon, when one is known; the initial stands in otherwise.
+    pub icon: Option<std::rc::Rc<crate::favicon::Icon>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +84,8 @@ pub struct Layout {
     pub extensions: Rect,
     /// The pinned extensions beside it, in order.
     pub extension_marks: Vec<Rect>,
+    /// The window's caption band and buttons (there is no title bar).
+    pub frame: Frame,
 }
 
 impl Default for Rect {
@@ -113,7 +120,16 @@ pub fn layout_with(
     extensions: Option<usize>,
 ) -> Layout {
     if collapsed {
-        return Layout { content: Rect::new(0, 0, width, height), vertical, ..Default::default() };
+        // No tabs, but the window still needs its buttons and somewhere to
+        // be dragged from: a slim caption row over the page.
+        let row = m.px(frame::ROW);
+        let caption = Rect::new(0, 0, width, row);
+        return Layout {
+            content: Rect::new(0, row, width, height.max(row)),
+            vertical,
+            frame: Frame::new(caption, width, m.scale),
+            ..Default::default()
+        };
     }
     let mut layout =
         if vertical { layout_vertical(tabs, width, height, m) } else { layout_horizontal(tabs, width, height, m, extensions) };
@@ -122,6 +138,10 @@ pub fn layout_with(
     }
     layout
 }
+
+/// Room always left free between the last tab (or +) and what sits at the
+/// right of the strip, so the window can be grabbed however many tabs there are.
+const DRAG_ROOM: i32 = 32;
 
 /// Width the extensions block takes at the right of a horizontal strip.
 fn extensions_width(pinned: usize, width: i32, m: &Metrics) -> i32 {
@@ -151,7 +171,7 @@ fn place_extensions(layout: &mut Layout, pinned: usize, m: &Metrics) {
         }
     } else {
         let (top, bottom) = (m.px(6), strip.bottom - m.px(6));
-        let right = strip.right - m.px(8);
+        let right = layout.frame.buttons[0].left - m.px(4);
         layout.extensions = Rect::new(right - button_w, top, right, bottom);
         let mut x = layout.extensions.left - gap;
         for _ in 0..shown_marks(pinned, strip.width() / 4, m) {
@@ -172,7 +192,8 @@ fn layout_horizontal(tabs: &[TabInfo], width: i32, height: i32, m: &Metrics, ext
 
     let pinned = tabs.iter().filter(|t| t.pinned).count() as i32;
     let normal = tabs.len() as i32 - pinned;
-    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m));
+    let frame = Frame::new(Rect::new(0, 0, width, bar), width, m.scale);
+    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m)) + frame.width() + m.px(DRAG_ROOM);
     let available = width - 2 * pad - plus_w - pinned * (pinned_w + gap) - normal * gap - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
@@ -196,6 +217,7 @@ fn layout_horizontal(tabs: &[TabInfo], width: i32, height: i32, m: &Metrics, ext
         items,
         new_tab,
         vertical: false,
+        frame,
         ..Default::default()
     }
 }
@@ -208,9 +230,14 @@ fn layout_vertical(tabs: &[TabInfo], width: i32, height: i32, m: &Metrics) -> La
     let cell = m.px(40);
 
     let mut items = Vec::with_capacity(tabs.len());
-    // Pinned tabs: a grid of squares at the top.
+    // The top row is the caption: the window's buttons at its right, the
+    // rest of it moves the window (as the traffic lights above Search's column).
+    let caption = Rect::new(0, 0, side, m.px(BAR));
+    let frame = Frame::new(caption, side - 1, m.scale);
+    // Pinned tabs: a grid of squares under it.
     let per_row = ((side - 2 * pad + gap) / (cell + gap)).max(1);
-    let mut y = pad;
+    let start = caption.bottom + m.px(2);
+    let mut y = start;
     let mut col = 0;
     for tab in tabs.iter().filter(|t| t.pinned) {
         let x = pad + col * (cell + gap);
@@ -224,7 +251,7 @@ fn layout_vertical(tabs: &[TabInfo], width: i32, height: i32, m: &Metrics) -> La
     if col > 0 {
         y += cell + gap;
     }
-    if y > pad {
+    if y > start {
         y += m.px(6);
     }
     for tab in tabs.iter().filter(|t| !t.pinned) {
@@ -242,12 +269,16 @@ fn layout_vertical(tabs: &[TabInfo], width: i32, height: i32, m: &Metrics) -> La
         items,
         new_tab,
         vertical: true,
+        frame,
         ..Default::default()
     }
 }
 
 impl Layout {
     pub fn hit(&self, x: i32, y: i32) -> Option<Hit> {
+        if let Some(button) = self.frame.button_at(x, y) {
+            return Some(Hit::Window(button));
+        }
         if !self.strip.contains(x, y) {
             return None;
         }
@@ -291,6 +322,10 @@ pub struct Paint<'a> {
     /// Initials of the pinned extensions, in `layout.extension_marks` order.
     pub extension_initials: &'a [char],
     pub motion: &'a Motion,
+    /// The window is maximized: the middle button draws "restore".
+    pub maximized: bool,
+    /// A window button held down.
+    pub pressed: Option<WindowButton>,
 }
 
 impl From<Rect> for RectF {
@@ -372,6 +407,10 @@ pub fn paint(g: &Painter, width: i32, height: i32, p: &Paint) {
             let (mx, my) = mark_rect.center();
             g.arc(mx, my, r, 0.0, std::f32::consts::TAU - 0.01, px(1.5), Color::from(pal.ink_muted).with_alpha(0.25));
             g.arc(mx, my, r, p.motion.spin(), 1.9, px(1.5), pal.accent);
+        } else if let Some(icon) = &tab.icon {
+            let opacity = if tab.asleep && !active { 0.55 } else { 1.0 };
+            let px = &icon.pixels;
+            g.image(&px.data, px.width, px.height, snap(mark_rect), opacity);
         } else {
             draw_mark(g, mark_rect, tab.initial, tab.private, tab.asleep && !active, pal, p.scale);
         }
@@ -453,6 +492,13 @@ pub fn paint(g: &Painter, width: i32, height: i32, p: &Paint) {
         }
     }
 
+    // Collapsed: the caption row stands alone over the page, with its line.
+    if p.layout.strip.width() == 0 && p.layout.frame.caption.width() > 0 {
+        let c = p.layout.frame.caption;
+        g.fill(RectF::new(0.0, c.bottom as f32 - 1.0, c.right as f32, c.bottom as f32), pal.line);
+    }
+    frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.pressed, |b| p.motion.hover(HoverKey::Window(b)));
+
     if let Some(hint) = p.hint {
         let font = Font::new(px(size::TEXT), size::REGULAR, Align::Center);
         g.text(hint, p.layout.content.into(), font, pal.ink_asleep);
@@ -474,6 +520,12 @@ pub fn draw_mark(g: &Painter, rect: RectF, initial: char, private: bool, dim: bo
     let text: &str = upper.encode_utf8(&mut buffer);
     let font = Font::new(size::TEXT_MARK * scale, size::SEMIBOLD, Align::Center);
     g.text(text, rect, font, letter.with_alpha(alpha));
+}
+
+/// A rectangle on whole pixels: an icon drawn at its own size stays sharp.
+fn snap(r: RectF) -> RectF {
+    let (l, t) = (r.left.round(), r.top.round());
+    RectF::new(l, t, l + r.width().round(), t + r.height().round())
 }
 
 fn draw_cross(g: &Painter, rect: RectF, arm: f32, ink: Color, scale: f32) {
@@ -521,6 +573,7 @@ pub enum HoverKey {
     NewTab,
     Extensions,
     PinnedExtension(usize),
+    Window(WindowButton),
 }
 
 impl HoverKey {
@@ -531,6 +584,7 @@ impl HoverKey {
             Hit::NewTab => [Some(HoverKey::NewTab), None],
             Hit::Extensions => [Some(HoverKey::Extensions), None],
             Hit::PinnedExtension(i) => [Some(HoverKey::PinnedExtension(i)), None],
+            Hit::Window(b) => [Some(HoverKey::Window(b)), None],
         }
     }
 }

@@ -22,13 +22,14 @@ use windows::{
             Direct2D::{
                 Common::{
                     D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW,
-                    D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+                    D2D_SIZE_U, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
                 },
                 D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
                 D2D1_CAP_STYLE_ROUND, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
                 D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
                 D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT,
                 D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
                 D2D1CreateFactory, ID2D1DCRenderTarget, ID2D1Factory,
                 ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
             },
@@ -380,6 +381,32 @@ impl Painter<'_> {
                 return 0.0;
             }
             metrics.widthIncludingTrailingWhitespace
+        }
+    }
+
+    /// A picture (premultiplied BGRA, `width` × `height`) drawn into `rect`.
+    /// The bitmap is made for this one draw: the pictures drawn here are
+    /// small (a site's icon, one page preview), and keeping them as device
+    /// bitmaps would tie them to a target that can be recreated.
+    pub fn image(&self, pixels: &[u8], width: u32, height: u32, rect: RectF, opacity: f32) {
+        if width == 0 || height == 0 || pixels.len() < (width * height * 4) as usize {
+            return;
+        }
+        let props = D2D1_BITMAP_PROPERTIES {
+            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            dpiX: 96.0,
+            dpiY: 96.0,
+        };
+        unsafe {
+            let Ok(bitmap) = self.rt().CreateBitmap(
+                D2D_SIZE_U { width, height },
+                Some(pixels.as_ptr() as *const _),
+                width * 4,
+                &props,
+            ) else {
+                return;
+            };
+            self.rt().DrawBitmap(&bitmap, Some(&rect.d2d()), opacity, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, None);
         }
     }
 

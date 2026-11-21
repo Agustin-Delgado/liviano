@@ -39,12 +39,31 @@ pub fn fold(text: &str) -> String {
 /// Every word of the query appears in one of the fields (an empty query
 /// matches everything).
 pub fn matches(query: &str, fields: &[&str]) -> bool {
-    let words: Vec<String> = query.split_whitespace().map(fold).collect();
-    if words.is_empty() {
-        return true;
+    Query::new(query).matches(fields)
+}
+
+/// A search folded once, to test against many records: the history panel
+/// runs it over tens of thousands of entries per keystroke.
+pub struct Query(Vec<String>);
+
+impl Query {
+    pub fn new(query: &str) -> Self {
+        Query(query.split_whitespace().map(fold).collect())
     }
-    let haystack: Vec<String> = fields.iter().map(|f| fold(f)).collect();
-    words.iter().all(|w| haystack.iter().any(|h| h.contains(w.as_str())))
+
+    pub fn matches(&self, fields: &[&str]) -> bool {
+        self.0.iter().all(|word| fields.iter().any(|field| contains_folded(field, word)))
+    }
+}
+
+/// `field` contains `word` (already folded). An ASCII field, nearly every
+/// address and most titles, is compared in place instead of folded first.
+fn contains_folded(field: &str, word: &str) -> bool {
+    if !field.is_ascii() {
+        return fold(field).contains(word);
+    }
+    let (field, word) = (field.as_bytes(), word.as_bytes());
+    word.is_empty() || field.windows(word.len()).any(|w| w.eq_ignore_ascii_case(word))
 }
 
 /// "3,2 MB", with the decimal comma the rest of the screen uses.

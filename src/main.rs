@@ -6,13 +6,18 @@ mod bookmarks;
 mod crx;
 mod curtain;
 mod design;
+mod diag;
 mod download_watch;
 mod downloads;
 mod extension_host;
+mod frame;
 mod extensions;
+mod favicon;
 mod gfx;
 mod history;
+mod hovercard;
 mod http;
+mod image;
 mod inject;
 mod installer;
 mod omnibar;
@@ -61,5 +66,6 @@ fn main() -> windows::core::Result<()> {
     if updater::apply_pending() {
         return Ok(());
     }
+    diag::install(&storage::data_dir());
     app::run()
 }

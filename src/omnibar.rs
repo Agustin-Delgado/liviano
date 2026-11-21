@@ -334,11 +334,16 @@ impl Omnibar {
     pub fn set_rows(&mut self, rows: &[String]) {
         HOVERED.with(|h| h.set(None));
         unsafe {
+            // Each add repaints a shown list otherwise: two hundred rows of
+            // the history panel were a third of a second per keystroke.
+            SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(0)), None);
             SendMessageW(self.list, LB_RESETCONTENT, None, None);
             for row in rows {
                 let text = HSTRING::from(row.as_str());
                 SendMessageW(self.list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
             }
+            SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(1)), None);
+            let _ = InvalidateRect(Some(self.list), None, false);
         }
         self.rows = rows.len();
     }

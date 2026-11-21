@@ -73,7 +73,7 @@ impl BenchState {
             Event::NavigationCompleted(id, ok) => {
                 self.loaded.insert(*id, *ok);
             }
-            Event::ProcessFailed(id) => {
+            Event::ProcessFailed(id, _) => {
                 self.loaded.remove(id);
             }
             _ => {}
@@ -305,6 +305,11 @@ impl App {
                 self.run(command);
             }
             Action::State => reply.ok(self.bench_state()),
+            Action::Hover { x, y } => {
+                let hit = self.layout.hit(x, y);
+                self.set_hover(hit);
+                reply.ok(json!({ "hit": hit.map(|h| format!("{h:?}")) }));
+            }
             Action::Shield => {
                 let stats = crate::shield::stats();
                 reply.ok(json!({
@@ -504,6 +509,7 @@ impl App {
             "sidebar_collapsed": self.collapsed,
             "splits": self.split_groups().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
             "extensions_button": self.layout.extensions.width() > 0,
+            "card": self.card_state(),
             "field": self.field_state(),
             "engine": if self.env.is_some() { "ready" } else if self.env_requested { "starting" } else { "off" },
         })

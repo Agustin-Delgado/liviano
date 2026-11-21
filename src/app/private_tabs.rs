@@ -45,7 +45,7 @@ pub(super) fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id
 /// an InPrivate profile with its last view, but that teardown is
 /// asynchronous: a private tab opened right after could still find the old
 /// cookies.
-fn close_last(web: WebTab) {
+fn close_last(mut web: WebTab) {
     web.hide();
     let profile = unsafe {
         web.webview.cast::<ICoreWebView2_13>().and_then(|w| w.Profile()).and_then(|p| p.cast::<ICoreWebView2Profile2>())

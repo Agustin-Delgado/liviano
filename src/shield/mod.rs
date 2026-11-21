@@ -243,8 +243,11 @@ fn with_engine<R>(f: impl FnOnce(&Filters) -> R) -> Option<R> {
     ENGINE.with(|engine| {
         if HAS_INCOMING.swap(false, Ordering::Acquire) {
             if let Some(new) = INCOMING.lock().ok().and_then(|mut slot| slot.take()) {
-                // The old engine is dropped here, on the thread that used it.
-                *engine.borrow_mut() = Some(new);
+                // Freeing the old one (hundreds of thousands of rules) is
+                // left to another thread: this one is answering a request.
+                if let Some(old) = engine.borrow_mut().replace(new) {
+                    let _ = std::thread::Builder::new().name("shield-drop".into()).spawn(move || drop(old));
+                }
             }
         }
         engine.borrow().as_ref().map(f)
@@ -338,6 +341,7 @@ pub fn attach(webview: &ICoreWebView2) -> Result<()> {
         webview.AddScriptToExecuteOnDocumentCreated(&HSTRING::from(boot_script()), &handler)?;
         webview.add_WebResourceRequested(
             &WebResourceRequestedEventHandler::create(Box::new(move |_, args| {
+                let _doing = crate::diag::doing(&"filtro:solicitud", 0);
                 let Some(args) = args else { return Ok(()) };
                 let mut uri = PWSTR::null();
                 args.Request()?.Uri(&mut uri)?;

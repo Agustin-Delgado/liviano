@@ -8,9 +8,15 @@ fn on_settings_changed(settings: Settings) {
     with_app(|app| app.apply_settings(settings));
 }
 
+fn on_tab_layout_changed(vertical: bool, collapsed: bool) {
+    with_app(|app| app.set_tab_layout(vertical, collapsed));
+}
+
 impl App {
     pub(super) fn open_settings(&mut self) {
         self.close_omnibar();
+        settings_window::set_layout_handler(on_tab_layout_changed);
+        settings_window::set_tab_layout(self.vertical, self.collapsed);
         settings_window::open(self.hwnd, &self.settings, &self.palette, on_settings_changed);
         self.attach_settings_extensions();
     }

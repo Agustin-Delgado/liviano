@@ -38,7 +38,8 @@ pub enum Event {
     /// key was behind it. The engine's window is never opened: the app
     /// opens a tab or blocks it.
     NewWindow(u64, String, bool),
-    ProcessFailed(u64),
+    /// A process of the engine died or hung; the kind says which.
+    ProcessFailed(u64, COREWEBVIEW2_PROCESS_FAILED_KIND),
     /// The page of this tab took focus (a click on it).
     PageClicked(u64),
     FindChanged(u64),
@@ -51,6 +52,47 @@ pub enum Event {
     Vault(u64, crate::vault_watch::Message),
     /// The profile answered an extensions request (see `extension_host`).
     Extension(crate::extension_host::HostEvent),
+}
+
+impl Event {
+    /// What the diagnostics call it (see `diag::doing`).
+    pub fn name(&self) -> &'static &'static str {
+        match self {
+            Event::EnvironmentReady(_) => &"evento:EnvironmentReady",
+            Event::ControllerReady(..) => &"evento:ControllerReady",
+            Event::TitleChanged(_) => &"evento:TitleChanged",
+            Event::SourceChanged(_) => &"evento:SourceChanged",
+            Event::NavigationStarting(_) => &"evento:NavigationStarting",
+            Event::NavigationCompleted(..) => &"evento:NavigationCompleted",
+            Event::NewWindow(..) => &"evento:NewWindow",
+            Event::ProcessFailed(..) => &"evento:ProcessFailed",
+            Event::PageClicked(_) => &"evento:PageClicked",
+            Event::FindChanged(_) => &"evento:FindChanged",
+            Event::WebMessage(..) => &"evento:WebMessage",
+            Event::Command(_) => &"evento:Command",
+            Event::Download(_) => &"evento:Download",
+            Event::Vault(..) => &"evento:Vault",
+            Event::Extension(_) => &"evento:Extension",
+        }
+    }
+
+    /// The tab it is about, or 0.
+    pub fn tab(&self) -> u64 {
+        match self {
+            Event::ControllerReady(id, _)
+            | Event::TitleChanged(id)
+            | Event::SourceChanged(id)
+            | Event::NavigationStarting(id)
+            | Event::NavigationCompleted(id, _)
+            | Event::NewWindow(id, ..)
+            | Event::ProcessFailed(id, ..)
+            | Event::PageClicked(id)
+            | Event::FindChanged(id)
+            | Event::WebMessage(id, ..)
+            | Event::Vault(id, _) => *id,
+            _ => 0,
+        }
+    }
 }
 
 thread_local! {
@@ -86,6 +128,10 @@ pub struct WebTab {
     pub controller: ICoreWebView2Controller,
     pub webview: ICoreWebView2,
     pub suspended: bool,
+    /// Where the view is shown, or `None` while hidden. Every tab switch
+    /// walks all the tabs: telling the engine what it already knows is a
+    /// round trip to its process per tab.
+    shown: Option<RECT>,
     /// Saved passwords are offered and filled here. A private tab sets it to
     /// false before the view is wired: no capture, no account menu.
     pub passwords: bool,
@@ -102,7 +148,9 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
         options.set_are_browser_extensions_enabled(extensions);
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
+    crate::diag::trace(|| "environment requested".to_string());
     let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(|result, env| {
+        crate::diag::trace(|| format!("environment ready ok={}", result.is_ok()));
         push(Event::EnvironmentReady(result.and_then(|_| env.ok_or_else(|| windows::core::Error::from(E_POINTER)))));
         Ok(())
     }));
@@ -117,7 +165,9 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
 }
 
 pub fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id: u64) -> Result<()> {
+    crate::diag::trace(|| format!("controller requested tab={id}"));
     let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(move |result, controller| {
+        crate::diag::trace(|| format!("controller ready tab={id} ok={}", result.is_ok()));
         push(Event::ControllerReady(
             id,
             result.and_then(|_| controller.ok_or_else(|| windows::core::Error::from(E_POINTER))),
@@ -149,8 +199,20 @@ impl WebTab {
     pub fn new(id: u64, controller: ICoreWebView2Controller, shortcuts: Rc<Shortcuts>, theme: Theme) -> Result<Self> {
         unsafe {
             let webview = controller.CoreWebView2()?;
-            controller.SetIsVisible(false)?;
-            let tab = WebTab { controller, webview, suspended: false, passwords: true, find: None };
+            // A view parked visible at zero size (the spare, or one just
+            // made) shows nothing: left so. Hidden for seconds, its first
+            // showing rebuilds what draws it, ~80 ms waiting on the engine.
+            let mut visible = windows::core::BOOL::default();
+            let mut bounds = RECT::default();
+            let parked = controller.IsVisible(&mut visible).is_ok()
+                && controller.Bounds(&mut bounds).is_ok()
+                && visible.as_bool()
+                && bounds == RECT::default();
+            if !parked {
+                controller.SetIsVisible(false)?;
+            }
+            let shown = parked.then_some(bounds);
+            let tab = WebTab { controller, webview, suspended: false, shown, passwords: true, find: None };
             tab.apply_theme(theme);
 
             let settings = tab.webview.Settings()?;
@@ -175,7 +237,15 @@ impl WebTab {
                 &mut token,
             )?;
             tab.webview.add_NavigationStarting(
-                &NavigationStartingEventHandler::create(Box::new(move |_, _| {
+                &NavigationStartingEventHandler::create(Box::new(move |_, args| {
+                    if crate::diag::tracing() {
+                        let mut uri = PWSTR::null();
+                        if let Some(args) = args {
+                            let _ = args.Uri(&mut uri);
+                        }
+                        let uri = take_pwstr(uri);
+                        crate::diag::trace(|| format!("navigation starting tab={id} {uri}"));
+                    }
                     push(Event::NavigationStarting(id));
                     Ok(())
                 })),
@@ -187,6 +257,7 @@ impl WebTab {
                     if let Some(args) = args {
                         let _ = args.IsSuccess(&mut ok);
                     }
+                    crate::diag::trace(|| format!("navigation completed tab={id} ok={}", ok.as_bool()));
                     push(Event::NavigationCompleted(id, ok.as_bool()));
                     Ok(())
                 })),
@@ -207,12 +278,32 @@ impl WebTab {
                 &mut token,
             )?;
             tab.webview.add_ProcessFailed(
-                &ProcessFailedEventHandler::create(Box::new(move |_, _| {
-                    push(Event::ProcessFailed(id));
+                &ProcessFailedEventHandler::create(Box::new(move |_, args| {
+                    let failure = args.map(|a| ProcessFailure::read(&a)).unwrap_or_default();
+                    crate::diag::log(crate::diag::Log::Crash, format!("{} motor: {} (pestaña {id})", crate::diag::stamp(), failure.describe()));
+                    push(Event::ProcessFailed(id, failure.kind));
                     Ok(())
                 })),
                 &mut token,
             )?;
+            if crate::diag::tracing() {
+                tab.webview.add_ContentLoading(
+                    &ContentLoadingEventHandler::create(Box::new(move |_, _| {
+                        crate::diag::trace(|| format!("content loading tab={id}"));
+                        Ok(())
+                    })),
+                    &mut token,
+                )?;
+                if let Ok(w2) = tab.webview.cast::<ICoreWebView2_2>() {
+                    w2.add_DOMContentLoaded(
+                        &DOMContentLoadedEventHandler::create(Box::new(move |_, _| {
+                            crate::diag::trace(|| format!("dom content loaded tab={id}"));
+                            Ok(())
+                        })),
+                        &mut token,
+                    )?;
+                }
+            }
             // The app never moves focus into the page while the field is
             // open, so the page gaining focus then means the person clicked it.
             tab.controller.add_GotFocus(
@@ -279,6 +370,7 @@ impl WebTab {
     }
 
     pub fn navigate(&self, url: &str) {
+        crate::diag::trace(|| format!("navigate {url}"));
         unsafe {
             let _ = self.webview.Navigate(&HSTRING::from(url));
         }
@@ -299,22 +391,33 @@ impl WebTab {
     pub fn show(&mut self, bounds: RECT) {
         unsafe {
             if self.suspended {
+                let _doing = crate::diag::doing(&"vista:reanudar", 0);
                 if let Ok(w3) = self.webview.cast::<ICoreWebView2_3>() {
                     let _ = w3.Resume();
                 }
+                // Only `suspend` lowers it.
+                if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
+                    let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL);
+                }
                 self.suspended = false;
             }
-            if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
-                let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL);
+            if self.shown != Some(bounds) {
+                let _doing = crate::diag::doing(&"vista:límites", 0);
+                let _ = self.controller.SetBounds(bounds);
             }
-            let _ = self.controller.SetBounds(bounds);
-            let _ = self.controller.SetIsVisible(true);
+            if self.shown.is_none() {
+                let _doing = crate::diag::doing(&"vista:visible", 0);
+                let _ = self.controller.SetIsVisible(true);
+            }
+            self.shown = Some(bounds);
         }
     }
 
-    pub fn hide(&self) {
-        unsafe {
-            let _ = self.controller.SetIsVisible(false);
+    pub fn hide(&mut self) {
+        if self.shown.take().is_some() {
+            unsafe {
+                let _ = self.controller.SetIsVisible(false);
+            }
         }
     }
 
@@ -327,8 +430,9 @@ impl WebTab {
     /// Second stage of sleeping: the engine stops timers and scripts and
     /// trims memory. Fails on its own if the page plays audio.
     pub fn suspend(&mut self) {
+        // A background tab is hidden already.
+        self.hide();
         unsafe {
-            let _ = self.controller.SetIsVisible(false);
             if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
                 let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
             }
@@ -462,6 +566,74 @@ impl WebTab {
         unsafe {
             let _ = self.controller.Close();
         }
+    }
+}
+
+/// What the engine says about a process that failed, for the log.
+#[derive(Default)]
+pub struct ProcessFailure {
+    pub kind: COREWEBVIEW2_PROCESS_FAILED_KIND,
+    reason: Option<COREWEBVIEW2_PROCESS_FAILED_REASON>,
+    exit_code: Option<i32>,
+    description: String,
+}
+
+impl ProcessFailure {
+    fn read(args: &ICoreWebView2ProcessFailedEventArgs) -> Self {
+        let mut failure = ProcessFailure::default();
+        unsafe {
+            let _ = args.ProcessFailedKind(&mut failure.kind);
+            if let Ok(args2) = args.cast::<ICoreWebView2ProcessFailedEventArgs2>() {
+                let mut reason = COREWEBVIEW2_PROCESS_FAILED_REASON::default();
+                if args2.Reason(&mut reason).is_ok() {
+                    failure.reason = Some(reason);
+                }
+                let mut code = 0i32;
+                if args2.ExitCode(&mut code).is_ok() {
+                    failure.exit_code = Some(code);
+                }
+                let mut text = PWSTR::null();
+                if args2.ProcessDescription(&mut text).is_ok() {
+                    failure.description = take_pwstr(text);
+                }
+            }
+        }
+        failure
+    }
+
+    fn describe(&self) -> String {
+        let kind = match self.kind {
+            COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => "proceso del navegador terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED => "proceso de la página terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => "página sin responder",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_FRAME_RENDER_PROCESS_EXITED => "proceso de un marco terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_UTILITY_PROCESS_EXITED => "proceso utilitario terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_SANDBOX_HELPER_PROCESS_EXITED => "proceso del sandbox terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_GPU_PROCESS_EXITED => "proceso de la GPU terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_PLUGIN_PROCESS_EXITED => "plugin terminado",
+            COREWEBVIEW2_PROCESS_FAILED_KIND_PPAPI_BROKER_PROCESS_EXITED => "broker de plugin terminado",
+            _ => "proceso desconocido",
+        };
+        let reason = match self.reason {
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNEXPECTED) => "inesperado",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_UNRESPONSIVE) => "sin responder",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_TERMINATED) => "terminado",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_CRASHED) => "se cayó",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_LAUNCH_FAILED) => "no arrancó",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_OUT_OF_MEMORY) => "sin memoria",
+            Some(COREWEBVIEW2_PROCESS_FAILED_REASON_PROFILE_DELETED) => "perfil borrado",
+            Some(_) => "otro motivo",
+            None => "motivo desconocido",
+        };
+        let mut text = format!("{kind} ({}, motivo {reason}", self.kind.0);
+        if let Some(code) = self.exit_code {
+            text.push_str(&format!(", código de salida 0x{code:08X}"));
+        }
+        if !self.description.is_empty() {
+            text.push_str(&format!(", {}", self.description));
+        }
+        text.push(')');
+        text
     }
 }
 

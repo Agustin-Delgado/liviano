@@ -19,7 +19,10 @@ use windows::{
         UI::{
             Controls::{BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, ODS_SELECTED, ODT_BUTTON, SetWindowTheme},
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
-            Input::KeyboardAndMouse::{GetFocus, SetFocus},
+            Input::KeyboardAndMouse::{
+                GetFocus, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, SetFocus,
+                UnregisterHotKey,
+            },
             WindowsAndMessaging::*,
         },
     },
@@ -66,13 +69,21 @@ const ID_EXT_LOAD: i32 = 128;
 const ID_BENCH_LABEL: i32 = 129;
 const ID_TRACKERS: i32 = 130;
 const ID_TRACKERS_LABEL: i32 = 131;
+const ID_TAB_LAYOUT: i32 = 132;
+const ID_COLLAPSED: i32 = 133;
+const ID_PREVIEW: i32 = 135;
+const ID_PREVIEW_LABEL: i32 = 136;
+const ID_COLLAPSED_LABEL: i32 = 134;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
 const SS_NOTIFY: u32 = 0x0100;
 const SS_ENDELLIPSIS: u32 = 0x4000;
 const CLIENT_WIDTH: i32 = 780;
-const CLIENT_HEIGHT: i32 = 810;
+const CLIENT_HEIGHT: i32 = 898;
+/// Where the tabs go: the first thing in Ajustes, since the shortcut alone
+/// went unnoticed (and another program may hold it).
+const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "Arriba"), (true, "Al costado")];
 const THEMES: [(Theme, &str); 3] = [(Theme::System, "Del sistema"), (Theme::Light, "Claro"), (Theme::Dark, "Oscuro")];
 const OFFER_CHOICES: [(bool, &str); 2] = [(true, "Al iniciar sesión"), (false, "Nunca")];
 
@@ -106,6 +117,7 @@ struct State {
     discard: HWND,
     pressure: HWND,
     split: HWND,
+    preview: HWND,
     awake_list: HWND,
     awake_edit: HWND,
     keys_list: HWND,
@@ -115,6 +127,10 @@ struct State {
     bench: HWND,
     trackers: HWND,
     passwords_offer: HWND,
+    tab_layout: HWND,
+    collapsed: HWND,
+    /// Shortcuts another program registered system-wide: they never reach us.
+    taken: Vec<shortcuts::Chord>,
     /// "Importar…" was pressed: its menu opens after the state is released.
     status_after_import: bool,
     status: HWND,
@@ -141,6 +157,11 @@ thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static HANDLER: Cell<Option<fn(Settings)>> = const { Cell::new(None) };
     static EXTENSION_HANDLER: Cell<Option<fn(ExtensionCommand, Option<usize>)>> = const { Cell::new(None) };
+    /// Who applies the tab layout (vertical, collapsed): the app, which keeps
+    /// it in the session rather than in the settings.
+    static LAYOUT_HANDLER: Cell<Option<fn(bool, bool)>> = const { Cell::new(None) };
+    /// The layout in force, for the controls (also before the window opens).
+    static TAB_LAYOUT: Cell<(bool, bool)> = const { Cell::new((false, false)) };
     static COLORS: Cell<Colors> = Cell::new(Colors::default());
     /// The palette and scale, and the wells: read while painting, which can
     /// happen while the state is borrowed.
@@ -159,6 +180,8 @@ enum Outcome {
     /// Handed to the app once the state is no longer borrowed (it calls back
     /// into `set_extensions`).
     Extension(ExtensionCommand, Option<usize>),
+    /// A tab layout (vertical, collapsed) for the app, applied at once.
+    Layout(bool, bool),
 }
 
 fn wide(text: &str) -> HSTRING {
@@ -240,6 +263,62 @@ pub fn sync(current: &Settings) {
         st.settings = current.clone();
         fill_all(st);
     });
+}
+
+/// Who applies a tab layout picked here.
+pub fn set_layout_handler(handler: fn(bool, bool)) {
+    LAYOUT_HANDLER.with(|h| h.set(Some(handler)));
+}
+
+/// The app's tab layout changed (or is told for the first time): the
+/// controls follow it.
+pub fn set_tab_layout(vertical: bool, collapsed: bool) {
+    TAB_LAYOUT.with(|l| l.set((vertical, collapsed)));
+    with_state(|st| fill_tab_layout(st));
+}
+
+fn fill_tab_layout(st: &State) {
+    let (vertical, collapsed) = TAB_LAYOUT.with(|l| l.get());
+    let index = TAB_LAYOUTS.iter().position(|(v, _)| *v == vertical).unwrap_or(0);
+    let check = if collapsed { BST_CHECKED } else { BST_UNCHECKED };
+    unsafe {
+        SendMessageW(st.tab_layout, CB_SETCURSEL, Some(WPARAM(index)), None);
+        SendMessageW(st.collapsed, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
+    }
+}
+
+/// Hands a layout picked here to the app (after the state is released: the
+/// app calls back into `set_tab_layout`).
+fn emit_layout(vertical: bool, collapsed: bool) {
+    TAB_LAYOUT.with(|l| l.set((vertical, collapsed)));
+    if let Some(handler) = LAYOUT_HANDLER.with(|h| h.get()) {
+        handler(vertical, collapsed);
+    }
+}
+
+/// The chords among `chords` that another program holds system-wide: asked
+/// by trying to register each one for an instant. Only chords with Ctrl or
+/// Alt are asked (a bare F-key may be reserved by the system).
+fn taken_chords(hwnd: HWND, chords: &[shortcuts::Chord]) -> Vec<shortcuts::Chord> {
+    const PROBE_ID: i32 = 0x4C56;
+    let mut taken = Vec::new();
+    for chord in chords.iter().filter(|c| c.ctrl || c.alt) {
+        let mut mods = MOD_NOREPEAT;
+        for (on, m) in [(chord.ctrl, MOD_CONTROL), (chord.shift, MOD_SHIFT), (chord.alt, MOD_ALT)] {
+            if on {
+                mods |= m;
+            }
+        }
+        let mods: HOT_KEY_MODIFIERS = mods;
+        unsafe {
+            if RegisterHotKey(Some(hwnd), PROBE_ID, mods, chord.vk).is_ok() {
+                let _ = UnregisterHotKey(Some(hwnd), PROBE_ID);
+            } else if !taken.contains(chord) {
+                taken.push(*chord);
+            }
+        }
+    }
+    taken
 }
 
 /// Who handles the Extensiones section's buttons (the app, which owns the list).
@@ -407,45 +486,54 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let number_style = edit_style | ES_NUMBER as u32;
         let button_style = tab | BS_OWNERDRAW as u32;
 
-        // Left column: General and Pestañas.
+        // Left column: Pestañas first (where they go is the first thing
+        // asked for), then General.
         let l = 24;
-        heading(&mut add, "General", (l, 18, 340, 22));
-        label(&mut add, "Tema", (l, 52, 140, 22));
-        let theme = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 48, 190, 200), ID_THEME, Kind::Combo, false);
-        label(&mut add, "Buscador por defecto (dirección con {q})", (l, 88, 340, 22));
-        let search = add(w!("EDIT"), "", edit_style, edge, (l, 110, 340, 26), ID_SEARCH, Kind::Edit, false);
+        heading(&mut add, "Pestañas", (l, 18, 340, 22));
+        label(&mut add, "Ubicación", (l, 52, 140, 22));
+        let tab_layout = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 48, 190, 200), ID_TAB_LAYOUT, Kind::Combo, false);
+        // The checkboxes have no text of their own: a themed checkbox ignores
+        // the dark palette's ink, a label doesn't.
+        let collapsed = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 86, 18, 18), ID_COLLAPSED, Kind::Button, false);
+        add(w!("STATIC"), "Ocultar las pestañas", SS_NOTIFY, none, (l + 22, 84, 150, 22), ID_COLLAPSED_LABEL, Kind::Label, false);
+        let split = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l + 180, 86, 18, 18), ID_SPLIT, Kind::Button, false);
+        add(w!("STATIC"), "Vista dividida", SS_NOTIFY, none, (l + 202, 84, 138, 22), ID_SPLIT_LABEL, Kind::Label, false);
 
-        heading(&mut add, "Pestañas", (l, 156, 140, 22));
-        // The checkbox has no text of its own: a themed checkbox ignores the
-        // dark palette's ink, a label doesn't.
-        let split = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l + 150, 158, 18, 18), ID_SPLIT, Kind::Button, false);
-        add(w!("STATIC"), "Vista dividida", SS_NOTIFY, none, (l + 172, 156, 168, 22), ID_SPLIT_LABEL, Kind::Label, false);
-        label(&mut add, "Dormir las de fondo tras (segundos)", (l, 190, 260, 22));
-        let suspend = add(w!("EDIT"), "", number_style, edge, (l + 264, 186, 76, 26), ID_SUSPEND, Kind::Edit, false);
-        label(&mut add, "Descartarlas tras (minutos)", (l, 224, 260, 22));
-        let discard = add(w!("EDIT"), "", number_style, edge, (l + 264, 220, 76, 26), ID_DISCARD, Kind::Edit, false);
-        label(&mut add, "Descartar ya con la memoria al (%)", (l, 258, 260, 22));
-        let pressure = add(w!("EDIT"), "", number_style, edge, (l + 264, 254, 76, 26), ID_PRESSURE, Kind::Edit, false);
-        label(&mut add, "Sitios que nunca se duermen (usan más memoria)", (l, 296, 340, 22));
+        let preview = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 112, 18, 18), ID_PREVIEW, Kind::Button, false);
+        add(w!("STATIC"), "Vista previa de la página al pasar el mouse", SS_NOTIFY, none, (l + 22, 110, 318, 22), ID_PREVIEW_LABEL, Kind::Label, false);
+
+        heading(&mut add, "General", (l, 146, 340, 22));
+        label(&mut add, "Tema", (l, 180, 140, 22));
+        let theme = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 176, 190, 200), ID_THEME, Kind::Combo, false);
+        label(&mut add, "Buscador por defecto (dirección con {q})", (l, 216, 340, 22));
+        let search = add(w!("EDIT"), "", edit_style, edge, (l, 238, 340, 26), ID_SEARCH, Kind::Edit, false);
+
+        label(&mut add, "Dormir las de fondo tras (segundos)", (l, 278, 260, 22));
+        let suspend = add(w!("EDIT"), "", number_style, edge, (l + 264, 274, 76, 26), ID_SUSPEND, Kind::Edit, false);
+        label(&mut add, "Descartarlas tras (minutos)", (l, 312, 260, 22));
+        let discard = add(w!("EDIT"), "", number_style, edge, (l + 264, 308, 76, 26), ID_DISCARD, Kind::Edit, false);
+        label(&mut add, "Descartar ya con la memoria al (%)", (l, 346, 260, 22));
+        let pressure = add(w!("EDIT"), "", number_style, edge, (l + 264, 342, 76, 26), ID_PRESSURE, Kind::Edit, false);
+        label(&mut add, "Sitios que nunca se duermen (usan más memoria)", (l, 384, 340, 22));
         let list_style = tab | WS_VSCROLL.0 | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32;
-        let awake_list = add(w!("LISTBOX"), "", list_style, edge, (l, 318, 340, 104), ID_AWAKE_LIST, Kind::List, false);
-        let awake_edit = add(w!("EDIT"), "", edit_style, edge, (l, 430, 196, 26), ID_AWAKE_EDIT, Kind::Edit, false);
-        add(w!("BUTTON"), "Agregar", button_style, none, (l + 204, 430, 66, 26), ID_AWAKE_ADD, Kind::Button, false);
-        add(w!("BUTTON"), "Quitar", button_style, none, (l + 276, 430, 64, 26), ID_AWAKE_REMOVE, Kind::Button, false);
+        let awake_list = add(w!("LISTBOX"), "", list_style, edge, (l, 406, 340, 104), ID_AWAKE_LIST, Kind::List, false);
+        let awake_edit = add(w!("EDIT"), "", edit_style, edge, (l, 518, 196, 26), ID_AWAKE_EDIT, Kind::Edit, false);
+        add(w!("BUTTON"), "Agregar", button_style, none, (l + 204, 518, 66, 26), ID_AWAKE_ADD, Kind::Button, false);
+        add(w!("BUTTON"), "Quitar", button_style, none, (l + 276, 518, 64, 26), ID_AWAKE_REMOVE, Kind::Button, false);
 
-        heading(&mut add, "Contraseñas", (l, 478, 340, 22));
-        label(&mut add, "Ofrecer guardarlas", (l, 512, 140, 22));
-        let passwords_offer = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 508, 190, 200), ID_PASSWORDS_OFFER, Kind::Combo, false);
-        add(w!("BUTTON"), "Importar…", button_style, none, (l, 544, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
-        add(w!("BUTTON"), "Ver las guardadas…", button_style, none, (l + 118, 544, 150, 26), ID_PASSWORDS_LIST, Kind::Button, false);
-        heading(&mut add, "Extensiones", (l, 600, 140, 22));
-        let ext_note = label(&mut add, "", (l + 150, 600, 582, 22));
-        let ext_list = add(w!("LISTBOX"), "", list_style, edge, (l, 626, 732, 88), ID_EXT_LIST, Kind::List, false);
-        add(w!("BUTTON"), "Habilitar / deshabilitar", button_style, none, (l, 722, 170, 26), ID_EXT_TOGGLE, Kind::Button, false);
-        add(w!("BUTTON"), "Fijar / desfijar", button_style, none, (l + 176, 722, 120, 26), ID_EXT_PIN, Kind::Button, false);
-        add(w!("BUTTON"), "Recargar", button_style, none, (l + 302, 722, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
-        add(w!("BUTTON"), "Quitar…", button_style, none, (l + 392, 722, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
-        add(w!("BUTTON"), "Cargar sin empaquetar…", button_style, none, (l + 478, 722, 170, 26), ID_EXT_LOAD, Kind::Button, false);
+        heading(&mut add, "Contraseñas", (l, 566, 340, 22));
+        label(&mut add, "Ofrecer guardarlas", (l, 600, 140, 22));
+        let passwords_offer = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 596, 190, 200), ID_PASSWORDS_OFFER, Kind::Combo, false);
+        add(w!("BUTTON"), "Importar…", button_style, none, (l, 632, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
+        add(w!("BUTTON"), "Ver las guardadas…", button_style, none, (l + 118, 632, 150, 26), ID_PASSWORDS_LIST, Kind::Button, false);
+        heading(&mut add, "Extensiones", (l, 688, 140, 22));
+        let ext_note = label(&mut add, "", (l + 150, 688, 582, 22));
+        let ext_list = add(w!("LISTBOX"), "", list_style, edge, (l, 714, 732, 88), ID_EXT_LIST, Kind::List, false);
+        add(w!("BUTTON"), "Habilitar / deshabilitar", button_style, none, (l, 810, 170, 26), ID_EXT_TOGGLE, Kind::Button, false);
+        add(w!("BUTTON"), "Fijar / desfijar", button_style, none, (l + 176, 810, 120, 26), ID_EXT_PIN, Kind::Button, false);
+        add(w!("BUTTON"), "Recargar", button_style, none, (l + 302, 810, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
+        add(w!("BUTTON"), "Quitar…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
+        add(w!("BUTTON"), "Cargar sin empaquetar…", button_style, none, (l + 478, 810, 170, 26), ID_EXT_LOAD, Kind::Button, false);
 
         // Right column: Atajos.
         let r = 400;
@@ -478,6 +566,10 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             let text = wide(name);
             SendMessageW(theme, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
         }
+        for (_, name) in TAB_LAYOUTS {
+            let text = wide(name);
+            SendMessageW(tab_layout, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+        }
         for (_, name) in OFFER_CHOICES {
             let text = wide(name);
             SendMessageW(passwords_offer, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
@@ -490,10 +582,17 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             }
         }
 
+        let commands = shortcuts::all_commands();
+        let every_chord: Vec<shortcuts::Chord> =
+            commands.iter().flat_map(|c| shortcuts::chords_of(&current.shortcuts, *c)).collect();
+        let taken = taken_chords(hwnd, &every_chord);
         Ok(State {
             hwnd,
             settings: current.clone(),
-            commands: shortcuts::all_commands(),
+            commands,
+            tab_layout,
+            collapsed,
+            taken,
             children,
             theme,
             search,
@@ -501,6 +600,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
             discard,
             pressure,
             split,
+            preview,
             awake_list,
             awake_edit,
             keys_list,
@@ -531,8 +631,10 @@ fn fill_all(st: &mut State) {
     set_text(st.discard, &(st.settings.discard_after_secs / 60).max(1).to_string());
     set_text(st.pressure, &st.settings.memory_pressure_percent.to_string());
     let check = if st.settings.split_view { BST_CHECKED.0 } else { 0 };
+    let preview = if st.settings.hover_preview { BST_CHECKED.0 } else { 0 };
     unsafe {
         SendMessageW(st.split, BM_SETCHECK, Some(WPARAM(check as usize)), None);
+        SendMessageW(st.preview, BM_SETCHECK, Some(WPARAM(preview as usize)), None);
     }
     let offer_index = OFFER_CHOICES.iter().position(|(on, _)| *on == st.settings.passwords_offer).unwrap_or(0);
     unsafe {
@@ -540,6 +642,7 @@ fn fill_all(st: &mut State) {
     }
     fill_awake(st, None);
     fill_keys(st);
+    fill_tab_layout(st);
     let check = if st.settings.check_updates { BST_CHECKED } else { BST_UNCHECKED };
     unsafe {
         SendMessageW(st.updates, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
@@ -630,7 +733,9 @@ fn fill_keys(st: &State) {
         .map(|c| {
             let chords = shortcuts::chords_of(&st.settings.shortcuts, *c);
             let shown = if chords.is_empty() { "sin atajo".to_string() } else { shortcuts::format_chords(&chords) };
-            format!("{}\t{shown}", c.label())
+            // A third field marks a chord another program holds.
+            let taken = if chords.iter().any(|ch| st.taken.contains(ch)) { "\tocupado" } else { "" };
+            format!("{}\t{shown}{taken}", c.label())
         })
         .collect();
     list_fill(st.keys_list, &rows, selected);
@@ -753,13 +858,39 @@ fn toggle_split(st: &mut State, flip: bool) -> Outcome {
     Outcome::Changed
 }
 
+/// The hover card's picture, like `toggle_split`.
+fn toggle_preview(st: &mut State, flip: bool) -> Outcome {
+    unsafe {
+        if flip {
+            let checked = SendMessageW(st.preview, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+            let next = if checked { 0 } else { BST_CHECKED.0 };
+            SendMessageW(st.preview, BM_SETCHECK, Some(WPARAM(next as usize)), None);
+        }
+        st.settings.hover_preview = SendMessageW(st.preview, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+    }
+    status(
+        st,
+        if st.settings.hover_preview {
+            "La tarjeta de cada pestaña muestra cómo estaba la página."
+        } else {
+            "La tarjeta muestra sólo el título y el estado."
+        },
+    );
+    Outcome::Changed
+}
+
 fn selected_command(st: &State) -> Option<Command> {
     list_selection(st.keys_list).and_then(|i| st.commands.get(i).copied())
 }
 
 fn show_command(st: &State) {
     if let Some(command) = selected_command(st) {
-        set_text(st.key_edit, &shortcuts::format_chords(&shortcuts::chords_of(&st.settings.shortcuts, command)));
+        let chords = shortcuts::chords_of(&st.settings.shortcuts, command);
+        set_text(st.key_edit, &shortcuts::format_chords(&chords));
+        let taken: Vec<_> = chords.iter().filter(|c| st.taken.contains(c)).map(|c| shortcuts::format_chord(*c)).collect();
+        if !taken.is_empty() {
+            status(st, &format!("{} lo usa otro programa: asignale otro.", taken.join(", ")));
+        }
     }
 }
 
@@ -834,8 +965,30 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
             Outcome::Nothing
         }
         (ID_SEARCH | ID_SUSPEND | ID_DISCARD | ID_PRESSURE, EN_KILLFOCUS) => commit_field(st, id),
+        (ID_TAB_LAYOUT, CBN_SELCHANGE) => {
+            let index = unsafe { SendMessageW(st.tab_layout, CB_GETCURSEL, None, None).0 };
+            let (_, collapsed) = TAB_LAYOUT.with(|l| l.get());
+            match TAB_LAYOUTS.get(index.max(0) as usize) {
+                Some((vertical, _)) => Outcome::Layout(*vertical, collapsed),
+                None => Outcome::Nothing,
+            }
+        }
+        (ID_COLLAPSED | ID_COLLAPSED_LABEL, _) if code == BN_CLICKED_CODE || code == STN_CLICKED => {
+            let (vertical, collapsed) = TAB_LAYOUT.with(|l| l.get());
+            if id == ID_COLLAPSED_LABEL {
+                let check = if collapsed { BST_UNCHECKED } else { BST_CHECKED };
+                unsafe {
+                    SendMessageW(st.collapsed, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
+                }
+            }
+            let now = unsafe { SendMessageW(st.collapsed, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0 };
+            status(st, if now { "Pestañas ocultas: Ctrl+K para ir a una, o volvé a mostrarlas acá." } else { "Pestañas a la vista." });
+            Outcome::Layout(vertical, now)
+        }
         (ID_SPLIT, BN_CLICKED_CODE) => toggle_split(st, false),
         (ID_SPLIT_LABEL, STN_CLICKED) => toggle_split(st, true),
+        (ID_PREVIEW, BN_CLICKED_CODE) => toggle_preview(st, false),
+        (ID_PREVIEW_LABEL, STN_CLICKED) => toggle_preview(st, true),
         (ID_AWAKE_ADD, BN_CLICKED_CODE) => add_awake(st),
         (ID_AWAKE_REMOVE, BN_CLICKED_CODE) => remove_awake(st),
         (ID_KEYS_LIST, LBN_SELCHANGE) => {
@@ -925,6 +1078,10 @@ fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
         String::from_utf16_lossy(&buffer[..len as usize])
     };
     let (label, chords) = text.split_once('\t').unwrap_or((&text, ""));
+    let (chords, taken) = match chords.split_once('\t') {
+        Some((chords, _)) => (chords, true),
+        None => (chords, false),
+    };
     let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
     SURFACES.with(|s| {
         s.borrow_mut().2.paint(item.hDC, item.rcItem, |g| {
@@ -935,8 +1092,18 @@ fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
             }
             let inner = rect.inset(10.0 * scale, 0.0);
             let small = Font::new(size::TEXT_SMALL * scale, size::REGULAR, Align::Leading);
+            let mut chords_rect = RectF::new(inner.right, inner.top, inner.right, inner.bottom);
+            if taken {
+                // The chord never reaches us: said in the row, in the
+                // private violet (the one non-grey ink the interface has).
+                let note = "otro programa";
+                let note_w = g.measure(note, small);
+                let note_rect = RectF::new(inner.right - note_w - 1.0, inner.top, inner.right, inner.bottom);
+                g.text(note, note_rect, small, palette.private_mark);
+                chords_rect.right = note_rect.left - 6.0 * scale;
+            }
             let chords_w = g.measure(chords, small).min(inner.width() * 0.5);
-            let chords_rect = RectF::new(inner.right - chords_w - 1.0, inner.top, inner.right, inner.bottom);
+            chords_rect.left = chords_rect.right - chords_w - 1.0;
             g.text(chords, chords_rect, small, palette.ink_muted);
             let label_rect = RectF::new(inner.left, inner.top, chords_rect.left - 8.0 * scale, inner.bottom);
             g.text(label, label_rect, Font::new(size::TEXT * scale, size::REGULAR, Align::Leading), palette.ink);
@@ -951,7 +1118,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let id = (wparam.0 & 0xFFFF) as u16 as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
             let mut extension = None;
+            let mut layout = None;
             let outcome = with_state(|st| match on_command(st, id, code) {
+                Outcome::Layout(vertical, collapsed) => {
+                    layout = Some((vertical, collapsed));
+                    Some(None)
+                }
                 Outcome::Changed => Some(Some(st.settings.clone())),
                 Outcome::Close => None,
                 Outcome::Nothing => Some(None),
@@ -971,6 +1143,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             if with_state(|st| std::mem::take(&mut st.status_after_import)) == Some(true) {
                 crate::vault_import::run(hwnd, None);
+            }
+            if let Some((vertical, collapsed)) = layout {
+                emit_layout(vertical, collapsed);
             }
             if let (Some((command, row)), Some(handler)) = (extension, EXTENSION_HANDLER.with(|h| h.get())) {
                 handler(command, row);

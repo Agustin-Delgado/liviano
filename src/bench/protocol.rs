@@ -57,6 +57,10 @@ pub enum Action {
     Close { tab: Option<u64> },
     /// Closes the window as the person would (the session is saved).
     Quit,
+    /// Rests the pointer's hover on what is at (x, y) of the strip, in
+    /// client pixels, without moving the mouse: for captures of hover
+    /// states. A point outside the strip clears it.
+    Hover { x: i32, y: i32 },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
