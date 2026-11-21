@@ -5,7 +5,10 @@
 use windows::{
     Win32::{
         Graphics::Imaging::*,
-        System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, IStream, STATFLAG_NONAME, STREAM_SEEK_SET, StructuredStorage::CreateStreamOnHGlobal},
+        System::Com::{
+            CLSCTX_INPROC_SERVER, CoCreateInstance, IStream, STATFLAG_NONAME, STREAM_SEEK_SET,
+            StructuredStorage::CreateStreamOnHGlobal,
+        },
     },
     core::Result,
 };
@@ -56,7 +59,14 @@ fn read(f: &IWICImagingFactory, from: &IWICBitmapSource, width: u32, height: u32
         let scaler = f.CreateBitmapScaler()?;
         scaler.Initialize(from, width, height, WICBitmapInterpolationModeHighQualityCubic)?;
         let converter = f.CreateFormatConverter()?;
-        converter.Initialize(&scaler, &GUID_WICPixelFormat32bppPBGRA, WICBitmapDitherTypeNone, None, 0.0, WICBitmapPaletteTypeCustom)?;
+        converter.Initialize(
+            &scaler,
+            &GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            None,
+            0.0,
+            WICBitmapPaletteTypeCustom,
+        )?;
         let stride = width * 4;
         let mut data = vec![0u8; (stride * height) as usize];
         converter.CopyPixels(std::ptr::null(), stride, &mut data)?;
@@ -153,4 +163,3 @@ pub fn stream_bytes(stream: &IStream) -> Option<Vec<u8>> {
         Some(data)
     }
 }
-

@@ -106,11 +106,11 @@ fn follow(id: u64, started: u64, operation: &ICoreWebView2DownloadOperation) -> 
     unsafe {
         operation.add_BytesReceivedChanged(
             &BytesReceivedChangedEventHandler::create(Box::new(move |sender, _| {
-                if let Some(operation) = sender {
-                    if last.get().elapsed() >= PROGRESS_EVERY {
-                        last.set(Instant::now());
-                        web::push(Event::Download(snapshot(id, started, &operation)));
-                    }
+                if let Some(operation) = sender
+                    && last.get().elapsed() >= PROGRESS_EVERY
+                {
+                    last.set(Instant::now());
+                    web::push(Event::Download(snapshot(id, started, &operation)));
                 }
                 Ok(())
             })),

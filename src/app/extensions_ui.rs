@@ -129,11 +129,17 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
                 }
                 ACTION_REMOVE => {
                     let index = lparam.0 as usize;
-                    let name = with_app(|app| app.extensions.registry.extensions.get(index).map(|e| e.name.clone())).flatten();
-                    if let Some(name) = name {
-                        if confirm(hwnd, &format!("¿Quitar «{name}»?\n\nSe borran sus datos y deja de funcionar en todas las pestañas.")) {
-                            with_app(|app| app.remove_extension(index, &name));
-                        }
+                    let name =
+                        with_app(|app| app.extensions.registry.extensions.get(index).map(|e| e.name.clone())).flatten();
+                    if let Some(name) = name
+                        && confirm(
+                            hwnd,
+                            &format!(
+                                "¿Quitar «{name}»?\n\nSe borran sus datos y deja de funcionar en todas las pestañas."
+                            ),
+                        )
+                    {
+                        with_app(|app| app.remove_extension(index, &name));
                     }
                 }
                 _ => {}
@@ -146,8 +152,12 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
 
 fn confirm(owner: HWND, text: &str) -> bool {
     unsafe {
-        MessageBoxW(Some(owner), &HSTRING::from(text), w!("Extensiones — Liviano"), MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2)
-            == IDYES
+        MessageBoxW(
+            Some(owner),
+            &HSTRING::from(text),
+            w!("Extensiones — Nea"),
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2,
+        ) == IDYES
     }
 }
 
@@ -348,10 +358,8 @@ impl App {
                         let extension = &mut self.extensions.registry.extensions[index];
                         extension.engine_id = Some(id.clone());
                         let (enabled, name) = (extension.enabled, extension.name.clone());
-                        if !enabled {
-                            if let Some(webview) = self.any_webview() {
-                                extension_host::apply(&webview, vec![(id, false)], Vec::new());
-                            }
+                        if !enabled && let Some(webview) = self.any_webview() {
+                            extension_host::apply(&webview, vec![(id, false)], Vec::new());
                         }
                         self.save_extensions();
                         self.extension_notice(format!("Extensión lista: {name}"));
@@ -400,7 +408,7 @@ impl App {
                             }
                         }
                         Some(false) => self.extension_notice(format!(
-                            "Instalada: {name}. Se activa al reiniciar Liviano: sin extensiones el motor arranca sin ellas, para ahorrar memoria."
+                            "Instalada: {name}. Se activa al reiniciar Nea: sin extensiones el motor arranca sin ellas, para ahorrar memoria."
                         )),
                         None => self.extension_notice(format!("Instalada: {name}.")),
                     }
@@ -424,7 +432,7 @@ impl App {
                         }
                         None => self.extensions.synced = false,
                     },
-                    Some(false) => self.extension_notice(format!("Agregada: {name}. Se activa al reiniciar Liviano.")),
+                    Some(false) => self.extension_notice(format!("Agregada: {name}. Se activa al reiniciar Nea.")),
                     None => self.extension_notice(format!("Agregada: {name}.")),
                 }
             }
@@ -446,7 +454,11 @@ impl App {
             self.sync_extensions();
         }
         let state = if enabled { "habilitada" } else { "deshabilitada" };
-        let tail = if self.restart_needed() { " Reiniciá Liviano para que el cambio libere o active el soporte de extensiones." } else { "" };
+        let tail = if self.restart_needed() {
+            " Reiniciá Nea para que el cambio libere o active el soporte de extensiones."
+        } else {
+            ""
+        };
         self.extension_notice(format!("{name}: {state}.{tail}"));
     }
 
@@ -478,7 +490,9 @@ impl App {
     fn remove_extension(&mut self, index: usize, name: &str) {
         let Some(extension) = self.extensions.registry.remove(index) else { return };
         self.close_extension_tabs(extension.engine_id.as_deref());
-        if let (Some(true), Some(webview), Some(id)) = (self.extensions.engine_on, self.any_webview(), extension.engine_id.clone()) {
+        if let (Some(true), Some(webview), Some(id)) =
+            (self.extensions.engine_on, self.any_webview(), extension.engine_id.clone())
+        {
             extension_host::apply(&webview, Vec::new(), vec![id.clone()]);
             self.extensions.registry.removed.retain(|r| *r != id);
         }
@@ -556,7 +570,11 @@ impl App {
                 append(sub, MF_SEPARATOR, 0, "");
                 let about = format!("Versión {} · {}", extension.version, source_label(extension));
                 append(sub, MF_STRING | MF_GRAYED, MENU_NOTE, &about);
-                let title = if extension.enabled { extension.name.clone() } else { format!("{} (deshabilitada)", extension.name) };
+                let title = if extension.enabled {
+                    extension.name.clone()
+                } else {
+                    format!("{} (deshabilitada)", extension.name)
+                };
                 let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, &HSTRING::from(title));
             }
             if !self.extensions.registry.extensions.is_empty() {
@@ -569,7 +587,7 @@ impl App {
             append(menu, MF_STRING, MENU_SETTINGS, "Extensiones en Ajustes…");
             append(menu, MF_SEPARATOR, 0, "");
             let note = if self.restart_needed() {
-                "Reiniciá Liviano para aplicar los cambios de extensiones"
+                "Reiniciá Nea para aplicar los cambios de extensiones"
             } else {
                 "Cada extensión habilitada suma procesos y memoria"
             };
@@ -647,7 +665,8 @@ impl App {
             .collect();
         let enabled = self.extensions.registry.extensions.iter().filter(|e| e.enabled).count();
         let note = if self.restart_needed() {
-            "Reiniciá Liviano para aplicar los cambios: el soporte de extensiones se decide al arrancar el motor.".to_string()
+            "Reiniciá Nea para aplicar los cambios: el soporte de extensiones se decide al arrancar el motor."
+                .to_string()
         } else if enabled == 0 {
             "Sin extensiones habilitadas el motor arranca sin soporte de extensiones: no gastan memoria.".to_string()
         } else {

@@ -47,20 +47,22 @@ use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
         Graphics::Gdi::{
-            AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BeginPaint, BitBlt, ClientToScreen,
-            CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
-            DT_SINGLELINE, DT_TOP, DeleteDC, DeleteObject, DrawTextW, EndPaint, ExtCreateRegion, FillRect, GetDC,
-            GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RDH_RECTANGLES, RGNDATA,
-            RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetBkMode, SetTextColor, SetWindowRgn,
-            TEXTMETRICW, TRANSPARENT,
+            AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BeginPaint, BitBlt,
+            ClientToScreen, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DT_END_ELLIPSIS,
+            DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DeleteDC, DeleteObject, DrawTextW, EndPaint, ExtCreateRegion,
+            FillRect, GetDC, GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT,
+            RDH_RECTANGLES, RGNDATA, RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetBkMode,
+            SetTextColor, SetWindowRgn, TEXTMETRICW, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{DRAWITEMSTRUCT, EM_GETSEL, EM_SETMARGINS, EM_SETSEL, ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE},
+            Controls::{
+                DRAWITEMSTRUCT, EM_GETSEL, EM_SETMARGINS, EM_SETSEL, ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE,
+            },
             Input::KeyboardAndMouse::{
                 GetActiveWindow, GetAsyncKeyState, GetKeyState, SetActiveWindow, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
-                TrackMouseEvent, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_RETURN, VK_SHIFT,
-                VK_UP,
+                TrackMouseEvent, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_RETURN,
+                VK_SHIFT, VK_UP,
             },
             Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
@@ -111,9 +113,14 @@ const EN_CHANGE_CODE: u32 = 0x0300;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Signal {
     Changed,
-    Submit { row: Option<usize>, shift: bool },
+    Submit {
+        row: Option<usize>,
+        shift: bool,
+    },
     /// Supr on a selected row of a panel.
-    Delete { row: usize },
+    Delete {
+        row: usize,
+    },
     Cancel,
 }
 
@@ -139,7 +146,7 @@ thread_local! {
 }
 
 /// The placeholder's ink: `ink-muted`, a step stronger than the
-/// `ink-subtle` celagem gives placeholders, so it reads on the dark ground
+/// `ink-subtle` the design system gives placeholders, so it reads on the dark ground
 /// too (over 4.5:1 on the field in both themes) and still sits well under
 /// the typed text's `ink`.
 fn placeholder_ink(palette: &Palette) -> Rgb {
@@ -169,7 +176,9 @@ const WM_CLICKED_OUTSIDE: u32 = WM_APP + 60;
 /// Whether a mouse button is down with the pointer outside the panel: what
 /// a deactivation looks like when a click caused it.
 fn clicked_outside(panel: HWND) -> bool {
-    let down = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter().any(|k| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0);
+    let down = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON]
+        .iter()
+        .any(|k| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0);
     let mut cursor = POINT::default();
     let mut rect = RECT::default();
     unsafe {
@@ -284,13 +293,14 @@ fn layout(position: FieldPosition, frame: Frame, m: Metrics, rows: usize, max_ro
         let rule = list.bottom + m.pad;
         Layout { panel, field_top: rule + 1, list, shown, rule: Some(rule), radii: (m.list_radius, end), upward }
     } else {
-        let list = RECT { left: m.pad, top: m.field + 1 + m.pad, right: width - m.pad, bottom: m.field + 1 + m.pad + list_h };
+        let list =
+            RECT { left: m.pad, top: m.field + 1 + m.pad, right: width - m.pad, bottom: m.field + 1 + m.pad + list_h };
         Layout { panel, field_top: 0, list, shown, rule: Some(m.field), radii: (end, m.list_radius), upward }
     }
 }
 
 /// The px a popover travels as it comes and goes, toward the edge it hangs
-/// from (celagem's popovers grow from the side that faces their trigger):
+/// from (the design system's popovers grow from the side that faces their trigger):
 /// down from the top, up from the bottom, and only the fade in the middle.
 fn slide(position: FieldPosition, scale: f32) -> i32 {
     let px = (anim::POPOVER_SLIDE * scale).round() as i32;
@@ -490,7 +500,9 @@ fn region_bands(width: i32, height: i32, radii: (f32, f32)) -> Vec<(i32, i32, i3
     for y in 0..height {
         let cy = y as f32 + 0.5;
         // The shape is the same on both sides: find the left end only.
-        let Some(left) = (0..width / 2 + 1).find(|x| shape.distance(*x as f32 + 0.5, cy) < -REGION_INSET) else { continue };
+        let Some(left) = (0..width / 2 + 1).find(|x| shape.distance(*x as f32 + 0.5, cy) < -REGION_INSET) else {
+            continue;
+        };
         let right = width - left;
         match bands.last_mut() {
             Some(band) if band.1 == y && band.2 == left && band.3 == right => band.1 = y + 1,
@@ -518,7 +530,11 @@ fn apply_region(hwnd: HWND, width: i32, height: i32, radii: (f32, f32)) {
     unsafe {
         let base = buffer.as_mut_ptr() as *mut u8;
         std::ptr::copy_nonoverlapping(&head as *const RGNDATAHEADER as *const u8, base, header);
-        std::ptr::copy_nonoverlapping(rects.as_ptr() as *const u8, base.add(header), rects.len() * std::mem::size_of::<RECT>());
+        std::ptr::copy_nonoverlapping(
+            rects.as_ptr() as *const u8,
+            base.add(header),
+            rects.len() * std::mem::size_of::<RECT>(),
+        );
         let region = ExtCreateRegion(None, bytes as u32, buffer.as_ptr() as *const RGNDATA);
         if !region.is_invalid() {
             // The window owns the region from here on.
@@ -532,7 +548,9 @@ fn alpha_of(hwnd: HWND) -> u8 {
     let mut alpha = 255u8;
     let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
     unsafe {
-        if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_err() || flags.0 & LWA_ALPHA.0 == 0 {
+        if GetLayeredWindowAttributes(hwnd, None, Some(&mut alpha), Some(&mut flags)).is_err()
+            || flags.0 & LWA_ALPHA.0 == 0
+        {
             return 255;
         }
     }
@@ -540,7 +558,12 @@ fn alpha_of(hwnd: HWND) -> u8 {
 }
 
 fn blend(alpha: u8) -> BLENDFUNCTION {
-    BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: AC_SRC_ALPHA as u8 }
+    BLENDFUNCTION {
+        BlendOp: AC_SRC_OVER as u8,
+        BlendFlags: 0,
+        SourceConstantAlpha: alpha,
+        AlphaFormat: AC_SRC_ALPHA as u8,
+    }
 }
 
 // ---------- coming and going ----------
@@ -569,7 +592,17 @@ fn pivot(position: FieldPosition, panel: RECT) -> (f32, f32) {
 /// same size) scaled by `scale` about `pivot`, moved `dy` px down and at
 /// `opacity`: bilinear, transparent past the source's edges. At rest
 /// (scale 1, no offset, opacity 1) it is a plain copy, pixel for pixel.
-fn resample(src: &[u32], width: usize, height: usize, dst: &mut [u32], pivot: (f32, f32), scale: f32, dy: f32, opacity: f32) {
+#[allow(clippy::too_many_arguments, reason = "one hot loop's inputs; a struct for its single caller adds nothing")]
+fn resample(
+    src: &[u32],
+    width: usize,
+    height: usize,
+    dst: &mut [u32],
+    pivot: (f32, f32),
+    scale: f32,
+    dy: f32,
+    opacity: f32,
+) {
     let opacity = opacity.clamp(0.0, 1.0);
     if scale == 1.0 && dy == 0.0 && opacity >= 1.0 {
         dst.copy_from_slice(src);
@@ -590,7 +623,11 @@ fn resample(src: &[u32], width: usize, height: usize, dst: &mut [u32], pivot: (f
     let columns = along(width, pivot.0, 0.0);
     let rows = along(height, pivot.1, dy);
     let fetch = |x: isize, y: isize| -> u32 {
-        if x < 0 || y < 0 || x >= width as isize || y >= height as isize { 0 } else { src[y as usize * width + x as usize] }
+        if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
+            0
+        } else {
+            src[y as usize * width + x as usize]
+        }
     };
     let fade = (opacity * 256.0).round() as u32;
     for (y, &(sy, fy)) in rows.iter().enumerate() {
@@ -751,7 +788,11 @@ impl Canvas {
         }
     }
 
-    fn pixels(&self) -> &mut [u32] {
+    fn pixels(&self) -> &[u32] {
+        unsafe { std::slice::from_raw_parts(self.bits, self.len) }
+    }
+
+    fn pixels_mut(&mut self) -> &mut [u32] {
         unsafe { std::slice::from_raw_parts_mut(self.bits, self.len) }
     }
 }
@@ -791,18 +832,20 @@ unsafe extern "system" fn backdrop_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             // Mid-motion the picture is the frame on screen.
             let framed = MOTION.with(|m| {
                 let m = m.borrow();
-                let Some((frame, still)) = m.as_ref().and_then(|m| m.frame.as_ref().zip(m.still.as_ref())) else { return false };
+                let Some((frame, still)) = m.as_ref().and_then(|m| m.frame.as_ref().zip(m.still.as_ref())) else {
+                    return false;
+                };
                 unsafe {
                     let _ = BitBlt(hdc, 0, 0, still.width, still.height, Some(frame.dc), 0, 0, SRCCOPY);
                 }
                 true
             });
-            if let Some(p) = PAINTED.with(|p| p.get()).filter(|_| !framed) {
-                if let Some(canvas) = Canvas::new(p.size.0, p.size.1) {
-                    render_backdrop(canvas.pixels(), p.size.0 as usize, p.shape, p.look, p.scale);
-                    unsafe {
-                        let _ = BitBlt(hdc, 0, 0, p.size.0, p.size.1, Some(canvas.dc), 0, 0, SRCCOPY);
-                    }
+            if let Some(p) = PAINTED.with(|p| p.get()).filter(|_| !framed)
+                && let Some(mut canvas) = Canvas::new(p.size.0, p.size.1)
+            {
+                render_backdrop(canvas.pixels_mut(), p.size.0 as usize, p.shape, p.look, p.scale);
+                unsafe {
+                    let _ = BitBlt(hdc, 0, 0, p.size.0, p.size.1, Some(canvas.dc), 0, 0, SRCCOPY);
                 }
             }
             if msg == WM_PAINT {
@@ -861,7 +904,7 @@ impl Omnibar {
             let class = WNDCLASSW {
                 lpfnWndProc: Some(popup_proc),
                 hInstance: instance,
-                lpszClassName: w!("LivianoOmnibar"),
+                lpszClassName: w!("NeaOmnibar"),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 ..Default::default()
             };
@@ -869,13 +912,13 @@ impl Omnibar {
             let shadow_class = WNDCLASSW {
                 lpfnWndProc: Some(backdrop_proc),
                 hInstance: instance,
-                lpszClassName: w!("LivianoOmnibarBackdrop"),
+                lpszClassName: w!("NeaOmnibarBackdrop"),
                 ..Default::default()
             };
             RegisterClassW(&shadow_class);
             let backdrop = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                w!("LivianoOmnibarBackdrop"),
+                w!("NeaOmnibarBackdrop"),
                 PCWSTR::null(),
                 WS_POPUP,
                 0,
@@ -889,7 +932,7 @@ impl Omnibar {
             )?;
             let popup = CreateWindowExW(
                 WS_EX_TOOLWINDOW,
-                w!("LivianoOmnibar"),
+                w!("NeaOmnibar"),
                 PCWSTR::null(),
                 WS_POPUP | WS_CLIPCHILDREN,
                 0,
@@ -1075,7 +1118,8 @@ impl Omnibar {
                 let _ = ShowWindow(self.popup, SW_SHOWNOACTIVATE);
             }
             if animate {
-                let _ = SetWindowPos(self.backdrop, Some(self.popup), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+                let _ =
+                    SetWindowPos(self.backdrop, Some(self.popup), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
         mirror(self.popup);
@@ -1184,8 +1228,8 @@ impl Omnibar {
         }
         let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
         let painted = Painted { size: (bw, bh), shape, look, scale: self.scale };
-        let Some(canvas) = Canvas::new(bw, bh) else { return };
-        render_backdrop(canvas.pixels(), bw as usize, shape, look, self.scale);
+        let Some(mut canvas) = Canvas::new(bw, bh) else { return };
+        render_backdrop(canvas.pixels_mut(), bw as usize, shape, look, self.scale);
         let at = POINT { x: layout.panel.left + clip.left, y: layout.panel.top + clip.top };
         let size = SIZE { cx: bw, cy: bh };
         let zero = POINT::default();
@@ -1224,10 +1268,11 @@ impl Omnibar {
         let mut pixels = vec![0u32; (bw * bh) as usize];
         render_backdrop(&mut pixels, bw as usize, shape, look, self.scale);
         let (w, h) = (layout.width(), layout.height());
-        let content = Canvas::new(w, h)?;
+        let mut content = Canvas::new(w, h)?;
         let rect = RECT { left: 0, top: 0, right: w, bottom: h };
         let m = self.metrics;
-        SURFACES.with(|s| s.borrow_mut().0.paint(content.dc, rect, |g| paint_panel(g, rect, &layout, m, &palette, scale)));
+        SURFACES
+            .with(|s| s.borrow_mut().0.paint(content.dc, rect, |g| paint_panel(g, rect, &layout, m, &palette, scale)));
         let mut origin = RECT::default();
         unsafe {
             let _ = GetWindowRect(self.popup, &mut origin);
@@ -1249,7 +1294,7 @@ impl Omnibar {
                 SendMessageW(child, WM_PRINT, Some(WPARAM(piece.dc.0 as usize)), Some(LPARAM(flags as isize)));
             }
             let (dx, dy) = (r.left - origin.left, r.top - origin.top);
-            let (src, dst) = (piece.pixels(), content.pixels());
+            let (src, dst) = (piece.pixels(), content.pixels_mut());
             for y in 0..ch {
                 let ty = y + dy;
                 if !(0..h).contains(&ty) {
@@ -1301,8 +1346,11 @@ impl Omnibar {
                 None if closing => (1.0, 1.0),
                 None => (0.0, 0.0),
             };
-            let (target, fade, grow) =
-                if closing { (0.0, specs::FIELD_OUT, specs::FIELD_OUT) } else { (1.0, specs::FIELD_FADE_IN, specs::FIELD_GROW) };
+            let (target, fade, grow) = if closing {
+                (0.0, specs::FIELD_OUT, specs::FIELD_OUT)
+            } else {
+                (1.0, specs::FIELD_FADE_IN, specs::FIELD_GROW)
+            };
             let presence = Tween::new(presence, target, now, fade);
             let size = Tween::new(size, target, now, grow);
             match m.as_mut() {
@@ -1338,11 +1386,11 @@ impl Omnibar {
             self.finish_motion(motion);
             return false;
         }
-        if let (Some(still), Some(frame)) = (motion.still.as_ref(), motion.frame.as_ref()) {
+        if let (Some(still), Some(frame)) = (motion.still.as_ref(), motion.frame.as_mut()) {
             let (scale, dy) = pose(motion.size.value(now), still.slide);
             let opacity = motion.presence.value(now);
             let (w, h) = (still.width as usize, still.height as usize);
-            resample(&still.pixels, w, h, frame.pixels(), still.pivot, scale, dy, opacity);
+            resample(&still.pixels, w, h, frame.pixels_mut(), still.pivot, scale, dy, opacity);
             let size = SIZE { cx: still.width, cy: still.height };
             let zero = POINT::default();
             unsafe {
@@ -1544,7 +1592,14 @@ pub fn register(omnibar: &Omnibar) {
     INSTANCE.with(|i| i.set(Some(omnibar as *const Omnibar)));
 }
 
-unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+unsafe extern "system" fn edit_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    _: usize,
+) -> LRESULT {
     match msg {
         WM_KEYDOWN => {
             let key = wparam.0 as u16;
@@ -1820,7 +1875,14 @@ fn item_text(list: HWND, index: usize) -> String {
 }
 
 /// Tracks the row under the pointer for its quieter ground.
-unsafe extern "system" fn list_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+unsafe extern "system" fn list_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    _: usize,
+) -> LRESULT {
     match msg {
         WM_MOUSEMOVE => {
             let mut tme = TRACKMOUSEEVENT {
@@ -1856,4 +1918,3 @@ fn set_hovered(list: HWND, row: Option<usize>) {
         }
     }
 }
-

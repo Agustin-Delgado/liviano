@@ -152,7 +152,7 @@ const DECOMPRESSION_FLAG_ALL: u32 = 3;
 fn download(host: &str, path: &str) -> Option<Vec<u8>> {
     unsafe {
         let session =
-            Handle(WinHttpOpen(w!("Liviano"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0));
+            Handle(WinHttpOpen(w!("Nea"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0));
         if session.0.is_null() {
             return None;
         }
@@ -210,4 +210,3 @@ fn download(host: &str, path: &str) -> Option<Vec<u8>> {
         Some(body)
     }
 }
-

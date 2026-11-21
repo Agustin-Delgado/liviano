@@ -4,8 +4,8 @@
   frío y en caliente, más una pasada de uso pesado que junta los cuelgues.
 
 .DESCRIPTION
-  Cada corrida arranca Liviano de cero con un LIVIANO_DATA_DIR temporal, el
-  control por script en un pipe propio y LIVIANO_TRACE=1, que deja en
+  Cada corrida arranca Nea de cero con un NEA_DATA_DIR temporal, el
+  control por script en un pipe propio y NEA_TRACE=1, que deja en
   trace.log una marca con hora para cada paso (Enter, vista pedida, vista
   lista, NavigationStarting, ContentLoading, NavigationCompleted). El script
   lee esas marcas: no mide desde afuera, así que no cuenta lo que tarda el
@@ -49,7 +49,7 @@ $ErrorActionPreference = 'Stop'
 $Only = @($Only | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
 . (Join-Path $PSScriptRoot 'bench.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if (-not $Exe) { $Exe = Join-Path $root 'target\release\liviano.exe' }
+if (-not $Exe) { $Exe = Join-Path $root 'target\release\nea.exe' }
 $Exe = (Resolve-Path $Exe).Path
 
 $HeavyUrls = @(
@@ -106,36 +106,36 @@ $script:HistoryFile = $null
 $script:Runs = @()
 
 function Start-Run([hashtable]$settings, $session) {
-    $dir = New-TempDir 'liviano-latency'
+    $dir = New-TempDir 'nea-latency'
     $all = @{ bench_enabled = $true }
     foreach ($k in $settings.Keys) { $all[$k] = $settings[$k] }
     [IO.File]::WriteAllText((Join-Path $dir 'settings.json'), ($all | ConvertTo-Json -Compress -Depth 5))
     if ($session) { [IO.File]::WriteAllText((Join-Path $dir 'session.json'), ($session | ConvertTo-Json -Compress -Depth 5)) }
     if ($script:HistoryFile) { Copy-Item -LiteralPath $script:HistoryFile -Destination (Join-Path $dir 'history.json') }
     if ($script:ShieldCache) { Copy-Item -Recurse -LiteralPath $script:ShieldCache -Destination (Join-Path $dir 'shield') }
-    $env:LIVIANO_DATA_DIR = $dir
-    $env:LIVIANO_BENCH = '1'
-    $env:LIVIANO_TRACE = '1'
-    $env:LIVIANO_BENCH_PIPE = 'latency-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
+    $env:NEA_DATA_DIR = $dir
+    $env:NEA_BENCH = '1'
+    $env:NEA_TRACE = '1'
+    $env:NEA_BENCH_PIPE = 'latency-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
     $process = Start-Process -FilePath $Exe -PassThru
     $script:Runs += $process.Id
-    Connect-Liviano -TimeoutSec 20
-    $ping = Invoke-Liviano ping
+    Connect-Nea -TimeoutSec 20
+    $ping = Invoke-Nea ping
     if ($ping.pid -ne $process.Id) { throw "El pipe lo atiende otro proceso ($($ping.pid))" }
     [pscustomobject]@{ Process = $process; Dir = $dir }
 }
 
 $script:RunCount = 0
 function Stop-Run($run, [switch]$Keep) {
-    try { Invoke-Liviano quit | Out-Null } catch { }
+    try { Invoke-Nea quit | Out-Null } catch { }
     $script:RunCount++
     $trace = Join-Path $run.Dir 'trace.log'
     if ($KeepTrace -and (Test-Path $trace)) { Copy-Item -LiteralPath $trace -Destination "$KeepTrace-$($script:RunCount).log" -Force }
-    Disconnect-Liviano
+    Disconnect-Nea
     if (-not $run.Process.WaitForExit(15000)) { Stop-Process -Id $run.Process.Id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
     foreach ($p in (Get-ProcessesMentioning 'msedgewebview2.exe' $run.Dir)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
-    Remove-Item Env:LIVIANO_DATA_DIR, Env:LIVIANO_BENCH, Env:LIVIANO_BENCH_PIPE, Env:LIVIANO_TRACE -ErrorAction SilentlyContinue
+    Remove-Item Env:NEA_DATA_DIR, Env:NEA_BENCH, Env:NEA_BENCH_PIPE, Env:NEA_TRACE -ErrorAction SilentlyContinue
     if (-not $Keep) { Remove-TempDir $run.Dir }
 }
 
@@ -194,15 +194,15 @@ function Add-Result([string]$case, $m) {
 }
 
 function Submit-Field([string]$command, [string]$text) {
-    Invoke-Liviano run @{ name = $command } | Out-Null
+    Invoke-Nea run @{ name = $command } | Out-Null
     if ($TypingMs -gt 0) { Start-Sleep -Milliseconds $TypingMs }
-    Invoke-Liviano type @{ text = $text; submit = $true } | Out-Null
+    Invoke-Nea type @{ text = $text; submit = $true } | Out-Null
 }
 
 function Open-Background([int]$count) {
     $ids = @()
     for ($i = 0; $i -lt $count; $i++) {
-        $ids += (Invoke-Liviano open @{ url = $HeavyUrls[$i % $HeavyUrls.Count]; background = $true }).tab
+        $ids += (Invoke-Nea open @{ url = $HeavyUrls[$i % $HeavyUrls.Count]; background = $true }).tab
         Start-Sleep -Milliseconds 150
     }
     $ids
@@ -211,23 +211,23 @@ function Open-Background([int]$count) {
 function Initialize-Cache {
     $run = Start-Run @{} $null
     try {
-        Invoke-Liviano open @{ url = 'about:blank' } | Out-Null
+        Invoke-Nea open @{ url = 'about:blank' } | Out-Null
         $stamp = Join-Path $run.Dir 'shield\updated'
         $deadline = (Get-Date).AddSeconds(90)
         while (-not (Test-Path $stamp) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
         if (Test-Path $stamp) {
-            $cache = New-TempDir 'liviano-latency-shield'
+            $cache = New-TempDir 'nea-latency-shield'
             Get-ChildItem -LiteralPath (Join-Path $run.Dir 'shield') -File | Where-Object { $_.Extension -ne '.tmp' } | Copy-Item -Destination $cache
             $script:ShieldCache = $cache
         } else {
             Write-Warning 'No se bajaron las listas: sólo la mínima incorporada.'
         }
     } finally { Stop-Run $run }
-    $script:HistoryFile = Join-Path ([IO.Path]::GetTempPath()) ("liviano-latency-history-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
+    $script:HistoryFile = Join-Path ([IO.Path]::GetTempPath()) ("nea-latency-history-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
     Write-History $script:HistoryFile $HistoryEntries
 }
 
-Write-Host "Liviano: $Exe"
+Write-Host "Nea: $Exe"
 Initialize-Cache
 try {
     if (Test-Wanted 'frio') {
@@ -238,11 +238,11 @@ try {
                 # The field is already open (no tabs): type and Enter, engine off.
                 if ($TypingMs -gt 0) {
                     # The first keystroke, then the rest at a person's pace.
-                    Invoke-Liviano type @{ text = $TargetUrl.Substring(0, 1) } | Out-Null
+                    Invoke-Nea type @{ text = $TargetUrl.Substring(0, 1) } | Out-Null
                     Start-Sleep -Milliseconds $TypingMs
-                    Invoke-Liviano type @{ text = $TargetUrl.Substring(1); submit = $true } | Out-Null
+                    Invoke-Nea type @{ text = $TargetUrl.Substring(1); submit = $true } | Out-Null
                 } else {
-                    Invoke-Liviano type @{ text = $TargetUrl; submit = $true } | Out-Null
+                    Invoke-Nea type @{ text = $TargetUrl; submit = $true } | Out-Null
                 }
                 Add-Result 'frio' (Wait-Navigation $run '^submit' 0)
             } finally { Stop-Run $run }
@@ -263,10 +263,10 @@ try {
     if ((Test-Wanted 'misma-pestana') -or (Test-Wanted 'pestana-nueva') -or (Test-Wanted 'dormida')) {
         $run = Start-Run @{} $null
         try {
-            $first = (Invoke-Liviano open @{ url = 'https://example.org/' }).tab
-            Invoke-Liviano wait @{ tab = $first; timeout_ms = 30000 } | Out-Null
+            $first = (Invoke-Nea open @{ url = 'https://example.org/' }).tab
+            Invoke-Nea wait @{ tab = $first; timeout_ms = 30000 } | Out-Null
             if ($Tabs -gt 0) { Open-Background $Tabs | Out-Null; Start-Sleep -Seconds 15 }
-            Invoke-Liviano run @{ name = 'go_to_tab_1' } | Out-Null
+            Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
             Start-Sleep -Seconds 1
             if (Test-Wanted 'misma-pestana') {
                 for ($r = 0; $r -lt $Repeat; $r++) {
@@ -281,20 +281,20 @@ try {
                     $after = Last-Ms $run
                     Submit-Field 'new_tab' ($TargetUrl + "?n=$r")
                     Add-Result 'pestana-nueva' (Wait-Navigation $run '^submit' $after)
-                    Invoke-Liviano run @{ name = 'go_to_tab_1' } | Out-Null
+                    Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
                     Start-Sleep -Seconds 2
                 }
             }
             if (Test-Wanted 'dormida') {
                 for ($r = 0; $r -lt $Repeat; $r++) {
-                    Invoke-Liviano run @{ name = 'go_to_tab_1' } | Out-Null
+                    Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
                     Start-Sleep -Milliseconds 500
-                    Invoke-Liviano discard | Out-Null
+                    Invoke-Nea discard | Out-Null
                     Start-Sleep -Seconds 2
                     $after = Last-Ms $run
                     # The last tab is one opened in the background (discard only
                     # takes those): now asleep, the switch wakes it.
-                    Invoke-Liviano run @{ name = 'go_to_tab_9' } | Out-Null
+                    Invoke-Nea run @{ name = 'go_to_tab_9' } | Out-Null
                     Add-Result 'dormida' (Wait-Navigation $run '^command go_to_tab_9' $after)
                 }
             }
@@ -305,30 +305,30 @@ try {
         Write-Host "Uso pesado: $Tabs pestañas, $UsageSec s"
         $run = Start-Run @{ suspend_after_secs = 10; discard_after_secs = 30 } $null
         try {
-            $first = (Invoke-Liviano open @{ url = 'https://example.org/' }).tab
-            Invoke-Liviano wait @{ tab = $first; timeout_ms = 30000 } | Out-Null
+            $first = (Invoke-Nea open @{ url = 'https://example.org/' }).tab
+            Invoke-Nea wait @{ tab = $first; timeout_ms = 30000 } | Out-Null
             Open-Background $Tabs | Out-Null
             $deadline = (Get-Date).AddSeconds($UsageSec)
             $i = 0
             while ((Get-Date) -lt $deadline) {
                 $i++
-                Invoke-Liviano run @{ name = 'next_tab' } | Out-Null
+                Invoke-Nea run @{ name = 'next_tab' } | Out-Null
                 Start-Sleep -Milliseconds 400
                 if ($i % 5 -eq 0) {
-                    Invoke-Liviano run @{ name = 'new_tab' } | Out-Null
-                    Invoke-Liviano type @{ text = 'noticias deportes' } | Out-Null
-                    Invoke-Liviano type @{ text = 'https://www.wikipedia.org/'; submit = $true } | Out-Null
+                    Invoke-Nea run @{ name = 'new_tab' } | Out-Null
+                    Invoke-Nea type @{ text = 'noticias deportes' } | Out-Null
+                    Invoke-Nea type @{ text = 'https://www.wikipedia.org/'; submit = $true } | Out-Null
                 }
                 if ($i % 7 -eq 0) {
-                    Invoke-Liviano run @{ name = 'history' } | Out-Null
-                    Invoke-Liviano type @{ text = 'receta' } | Out-Null
-                    Invoke-Liviano run @{ name = 'focus_address' } | Out-Null
-                    Invoke-Liviano type @{ text = 'sitio12' } | Out-Null
+                    Invoke-Nea run @{ name = 'history' } | Out-Null
+                    Invoke-Nea type @{ text = 'receta' } | Out-Null
+                    Invoke-Nea run @{ name = 'focus_address' } | Out-Null
+                    Invoke-Nea type @{ text = 'sitio12' } | Out-Null
                 }
-                if ($i % 9 -eq 0) { Invoke-Liviano run @{ name = 'close_tab' } | Out-Null }
-                if ($i % 11 -eq 0) { Invoke-Liviano run @{ name = 'reopen_tab' } | Out-Null }
+                if ($i % 9 -eq 0) { Invoke-Nea run @{ name = 'close_tab' } | Out-Null }
+                if ($i % 11 -eq 0) { Invoke-Nea run @{ name = 'reopen_tab' } | Out-Null }
             }
-            $memory = Invoke-Liviano memory
+            $memory = Invoke-Nea memory
             Write-Host ("  memoria: app {0:N1} MB, total {1:N1} MB, {2} procesos" -f ($memory.app / 1MB), ($memory.total / 1MB), @($memory.processes).Count)
             $trace = Read-Trace $run
             $slow = $trace | Where-Object { $_.text -match '^slow (\S+) (\d+) ([\d.]+) ms' } | ForEach-Object {

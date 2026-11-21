@@ -1,0 +1,34 @@
+name: Pedido de función
+description: Algo que a Nea le falta o que podría hacer mejor.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Nea es chico a propósito: cada función compite con la memoria y con la simpleza. Contá el problema antes que la solución.
+  - type: textarea
+    id: problema
+    attributes:
+      label: Qué problema resuelve
+      description: Qué querés hacer y hoy no podés, o te cuesta.
+    validations:
+      required: true
+  - type: textarea
+    id: propuesta
+    attributes:
+      label: Cómo lo imaginás
+      description: Cómo se vería o se usaría. Si otro navegador lo hace bien, contá cuál y cómo.
+    validations:
+      required: true
+  - type: textarea
+    id: alternativas
+    attributes:
+      label: Alternativas
+      description: Otras formas de resolverlo que pensaste, o cómo lo resolvés hoy.
+  - type: checkboxes
+    id: chequeo
+    attributes:
+      label: Antes de enviar
+      options:
+        - label: Busqué entre los issues y no hay uno igual.
+          required: true

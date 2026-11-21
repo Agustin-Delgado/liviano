@@ -1,4 +1,4 @@
-//! Floating video (RF-12): the engine's own Picture-in-Picture window, which
+//! Floating video: the engine's own Picture-in-Picture window, which
 //! stays above other apps, over the largest visible video (a playing one
 //! first). Validated on WebView2: `requestPictureInPicture()` from a plain
 //! `ExecuteScript` is refused for lack of a user gesture, and the app's own
@@ -16,4 +16,3 @@ pub fn script() -> String {
 pub fn toggle(web: &WebTab) {
     inject::execute_with_gesture(&web.webview, &script());
 }
-

@@ -87,7 +87,10 @@ pub fn list(webview: &ICoreWebView2) {
 pub fn add(webview: &ICoreWebView2, folder: &str) {
     match profile(webview) {
         Some(profile) => add_with(&profile, folder),
-        None => push(Event::Extension(HostEvent::Added(folder.to_string(), Err("el motor no admite extensiones".to_string())))),
+        None => push(Event::Extension(HostEvent::Added(
+            folder.to_string(),
+            Err("el motor no admite extensiones".to_string()),
+        ))),
     }
 }
 

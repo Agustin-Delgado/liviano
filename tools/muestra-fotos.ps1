@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  Saca las fotos de docs/muestra con un Liviano propio (tools/muestra.ps1).
+  Saca las fotos de docs/muestra con un Nea propio (tools/muestra.ps1).
 
 .DESCRIPTION
   -Part elige qué tanda: 'claro' (todas las funciones en tema claro),
@@ -96,7 +96,7 @@ function Shoot-Panels([string]$t) {
 
 function Shoot-Settings([string]$t) {
     Run settings; Wait-Quiet 900
-    Save-Shot "16-ajustes-$t" -Class LivianoSettings | Out-Null
+    Save-Shot "16-ajustes-$t" -Class NeaSettings | Out-Null
     Close-Settings; Wait-Quiet 500
 }
 
@@ -116,7 +116,7 @@ function Shoot-Private([string]$t) {
     Run new_private_tab; Wait-Quiet 300
     Save-Shot "18-campo-pestana-privada-$t" | Out-Null
     Type-Field 'https://es.wikipedia.org/wiki/Mate_(infusi%C3%B3n)' -Submit
-    try { Lv wait @{ timeout_ms = 20000 } | Out-Null } catch { }
+    try { Nea wait @{ timeout_ms = 20000 } | Out-Null } catch { }
     Wait-Quiet 1200
     Save-Shot "19-pestana-privada-$t" | Out-Null
     Run close_tab; Wait-Quiet 600
@@ -129,14 +129,14 @@ function Shoot-Reader([string]$t, $ids) {
     Run reader_mode; Wait-Quiet 800
 }
 
-# Ad blocking: the same front page in two fresh windows, one as Liviano
+# Ad blocking: the same front page in two fresh windows, one as Nea
 # comes (ad blocking and tracking prevention on) and one with both off.
 function Shoot-AdBlock {
     $url = 'https://www.infobae.com/'
     Start-Muestra -Theme light | Out-Null
     Open-Page $url -Wait 30000 | Out-Null
     Wait-Quiet 8000
-    $blocked = (Lv shield).blocked
+    $blocked = (Nea shield).blocked
     $with = Save-Shot 'infobae-con'
     Stop-Muestra
     Start-Muestra -Theme light -Settings @{ block_trackers = $false; shield_disabled = @('infobae.com') } | Out-Null
@@ -144,11 +144,11 @@ function Shoot-AdBlock {
     Wait-Quiet 8000
     $without = Save-Shot 'infobae-sin'
     Stop-Muestra
-    Save-SideBySide $with "Liviano como viene: bloqueo de anuncios y de rastreadores ($blocked solicitudes bloqueadas)" $without 'Sin bloqueo de anuncios ni de rastreadores' '26-bloqueo-de-anuncios-infobae' | Out-Null
+    Save-SideBySide $with "Nea como viene: bloqueo de anuncios y de rastreadores ($blocked solicitudes bloqueadas)" $without 'Sin bloqueo de anuncios ni de rastreadores' '26-bloqueo-de-anuncios-infobae' | Out-Null
     Remove-Item $with, $without
 }
 
-Disconnect-Liviano
+Disconnect-Nea
 if ($Part -in 'claro', 'todo') {
     Start-Muestra -Theme light
     $ids = Open-SampleTabs
@@ -169,16 +169,16 @@ if ($Part -in 'claro', 'todo') {
     $local = Open-Page (Get-SiteUrl 'ocultar.html')
     Run hide_element; Wait-Quiet 1000
     Save-Shot '21-ocultar-elemento-claro' | Out-Null
-    Lv click @{ selector = '#promo' } | Out-Null
+    Nea click @{ selector = '#promo' } | Out-Null
     Wait-Quiet 800
     Save-Shot '22-elemento-oculto-claro' | Out-Null
-    Lv close @{ tab = $local } | Out-Null
+    Nea close @{ tab = $local } | Out-Null
 
     # A window the page opens without a click.
     $popup = Open-Page (Get-SiteUrl 'emergente.html')
     Wait-Quiet 1500
     Save-Shot '23-emergente-bloqueada-claro' | Out-Null
-    Lv close @{ tab = $popup } | Out-Null
+    Nea close @{ tab = $popup } | Out-Null
     Select-Tab $ids.wiki; Wait-Quiet
 
     # The tab's context menu.
@@ -197,7 +197,7 @@ if ($Part -in 'claro', 'todo') {
     Close-Menus; Wait-Quiet 500
 
     # A sleeping tab: background views dropped, the card says so.
-    Lv discard | Out-Null; Wait-Quiet 800
+    Nea discard | Out-Null; Wait-Quiet 800
     $strip = Get-Strip
     $tab = $strip['Tab(4)']
     Set-Hover $tab[0] $tab[1] | Out-Null; Wait-Quiet 1600

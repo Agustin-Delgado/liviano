@@ -1,6 +1,6 @@
 //! Installed extensions (extensions.json) and what installing one means on
 //! disk: a Web Store package verified and unpacked under
-//! %APPDATA%\Liviano\extensions\<id>, or a developer's folder used where it
+//! %APPDATA%\Nea\extensions\<id>, or a developer's folder used where it
 //! is. The engine side (WebView2's profile) is `extension_host`; this file
 //! never touches it, so the rules are tested without a window.
 //!
@@ -136,10 +136,10 @@ impl Registry {
             return None;
         }
         let extension = self.extensions.remove(index);
-        if let Some(id) = &extension.engine_id {
-            if !self.removed.contains(id) {
-                self.removed.push(id.clone());
-            }
+        if let Some(id) = &extension.engine_id
+            && !self.removed.contains(id)
+        {
+            self.removed.push(id.clone());
         }
         Some(extension)
     }
@@ -273,8 +273,7 @@ pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extens
 /// A developer's folder, loaded as it is (nothing is copied).
 pub fn from_unpacked(folder: &Path) -> Result<Extension, String> {
     let info = read_manifest(folder)?;
-    let mut extension =
-        Extension { path: folder.to_string_lossy().into_owned(), enabled: true, ..Default::default() };
+    let mut extension = Extension { path: folder.to_string_lossy().into_owned(), enabled: true, ..Default::default() };
     extension.apply(info);
     Ok(extension)
 }
@@ -303,7 +302,9 @@ pub fn sweep(registry: &Registry) {
 pub fn delete_files(extension: &Extension) {
     let dir = extensions_dir();
     let path = Path::new(&extension.path);
-    if extension.store_id.is_some() && path.parent().is_some_and(|p| same_path(&p.to_string_lossy(), &dir.to_string_lossy())) {
+    if extension.store_id.is_some()
+        && path.parent().is_some_and(|p| same_path(&p.to_string_lossy(), &dir.to_string_lossy()))
+    {
         let _ = fs::remove_dir_all(path);
     }
 }
@@ -375,4 +376,3 @@ pub fn plan(registry: &Registry, engine: &EngineList) -> Plan {
     }
     plan
 }
-

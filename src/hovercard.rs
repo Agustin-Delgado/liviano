@@ -13,7 +13,10 @@ use std::{
 use windows::{
     Win32::{
         Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{BeginPaint, EndPaint, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromPoint, GetMonitorInfoW, PAINTSTRUCT},
+        Graphics::Gdi::{
+            BeginPaint, EndPaint, GetMonitorInfoW, InvalidateRect, MONITOR_DEFAULTTONEAREST, MONITORINFO,
+            MonitorFromPoint, PAINTSTRUCT,
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::WindowsAndMessaging::*,
     },
@@ -190,7 +193,7 @@ impl HoverCard {
                 style: CS_DROPSHADOW,
                 lpfnWndProc: Some(card_proc),
                 hInstance: instance,
-                lpszClassName: w!("LivianoHoverCard"),
+                lpszClassName: w!("NeaHoverCard"),
                 hCursor: LoadCursorW(None, IDC_ARROW)?,
                 ..Default::default()
             };
@@ -199,7 +202,7 @@ impl HoverCard {
             // nothing (it hides as soon as the pointer leaves the tab).
             let hwnd = CreateWindowExW(
                 WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
-                w!("LivianoHoverCard"),
+                w!("NeaHoverCard"),
                 None,
                 WS_POPUP,
                 0,
@@ -303,4 +306,3 @@ unsafe extern "system" fn card_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
-

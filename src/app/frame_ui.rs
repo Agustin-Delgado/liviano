@@ -18,14 +18,16 @@ use windows::{
         UI::{
             Controls::MARGINS,
             HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent},
+            Input::KeyboardAndMouse::{
+                ReleaseCapture, SetCapture, TME_LEAVE, TME_NONCLIENT, TRACKMOUSEEVENT, TrackMouseEvent,
+            },
             WindowsAndMessaging::*,
         },
     },
     core::PCWSTR,
 };
 
-use super::{App, with_app, wide, x_y};
+use super::{App, wide, with_app, x_y};
 use crate::{
     frame::{self, FrameHit, WindowButton},
     shortcuts::Command,
@@ -198,8 +200,20 @@ impl App {
     pub(super) fn sync_frame_menu(&self) {
         unsafe {
             let menu = GetSystemMenu(self.hwnd, false);
-            let _ = ModifyMenuW(menu, SC_TAB_LAYOUT as u32, MF_BYCOMMAND | MF_STRING, SC_TAB_LAYOUT, &wide(layout_label(self.vertical)));
-            let _ = ModifyMenuW(menu, SC_SIDEBAR as u32, MF_BYCOMMAND | MF_STRING, SC_SIDEBAR, &wide(sidebar_label(self.collapsed)));
+            let _ = ModifyMenuW(
+                menu,
+                SC_TAB_LAYOUT as u32,
+                MF_BYCOMMAND | MF_STRING,
+                SC_TAB_LAYOUT,
+                &wide(layout_label(self.vertical)),
+            );
+            let _ = ModifyMenuW(
+                menu,
+                SC_SIDEBAR as u32,
+                MF_BYCOMMAND | MF_STRING,
+                SC_SIDEBAR,
+                &wide(sidebar_label(self.collapsed)),
+            );
         }
     }
 
@@ -232,7 +246,8 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None).0 as usize;
+            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
+                .0 as usize;
             let _ = DestroyMenu(menu);
             chosen
         };

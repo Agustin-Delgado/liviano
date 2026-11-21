@@ -1,4 +1,4 @@
-// Runs at the start of every top-level document (RF-14). It never fills
+// Runs at the start of every top-level document. It never fills
 // anything on its own: it tells the app when a login form is sent, whether
 // the page that follows still asks for a password, and when the person
 // clicks a login field; it fills only when the app calls the fill function
@@ -10,7 +10,7 @@
   if (!webview) return;
 
   const post = (message) => {
-    message.liviano = 'vault';
+    message.nea = 'vault';
     try { webview.postMessage(message); } catch (_) { /* the view is closing */ }
   };
   const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set;
@@ -102,7 +102,7 @@
   };
   // Called by the app with the account the person chose. It checks the
   // origin again: the page may have moved on since the menu opened.
-  Object.defineProperty(window, '__livianoVaultFill', {
+  Object.defineProperty(window, '__neaVaultFill', {
     value: (origin, username, password) => {
       if (location.origin !== origin) return false;
       const active = document.activeElement;

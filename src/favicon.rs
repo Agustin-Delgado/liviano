@@ -67,7 +67,8 @@ pub fn key(url: &str) -> Option<String> {
     let authority = &rest[..end];
     let host = authority.rsplit_once('@').map_or(authority, |(_, h)| h);
     let host = host.strip_prefix("www.").unwrap_or(host).to_ascii_lowercase();
-    let clean: String = host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
+    let clean: String =
+        host.chars().map(|c| if c.is_ascii_alphanumeric() || c == '.' || c == '-' { c } else { '_' }).collect();
     (!clean.is_empty() && !clean.starts_with('.')).then_some(clean)
 }
 
@@ -141,10 +142,10 @@ impl Cache {
 
     fn store(&mut self, arrived: Arrived) -> bool {
         let Some(pixels) = image::decode_square(&arrived.png, self.size) else { return false };
-        if arrived.png.len() <= MAX_FILE {
-            if let Some(dir) = &self.dir {
-                write_file(dir, &arrived.host, &arrived.png);
-            }
+        if arrived.png.len() <= MAX_FILE
+            && let Some(dir) = &self.dir
+        {
+            write_file(dir, &arrived.host, &arrived.png);
         }
         self.remember(arrived.host, Some(Rc::new(Icon { pixels })));
         true
@@ -192,7 +193,12 @@ pub fn take_arrived() -> bool {
     let arrived = ARRIVED.with(|a| std::mem::take(&mut *a.borrow_mut()));
     CACHE.with(|c| {
         let mut cache = c.borrow_mut();
-        arrived.into_iter().fold(false, |any, a| cache.store(a) || any)
+        // Every icon is stored, so this can't stop at the first change.
+        let mut changed = false;
+        for icon in arrived {
+            changed |= cache.store(icon);
+        }
+        changed
     })
 }
 
@@ -248,4 +254,3 @@ fn fetch(view: &ICoreWebView2, window: isize) {
         let _ = view.GetFavicon(COREWEBVIEW2_FAVICON_IMAGE_FORMAT_PNG, &handler);
     }
 }
-

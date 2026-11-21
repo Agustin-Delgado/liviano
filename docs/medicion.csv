@@ -1,16 +1,16 @@
 ﻿scenario,browser,total_mb,app_mb,engine_mb,processes,note
-solo-programa,Liviano,1.6,1.6,0,1,
-about-blank,Liviano,86.8,4.1,82.7,7,
+solo-programa,Nea,1.6,1.6,0,1,
+about-blank,Nea,86.8,4.1,82.7,7,
 about-blank,Edge,184.1,0,184.1,12,
 about-blank,Chrome,239.7,0,239.7,10,
-liviana,Liviano,109.8,3.9,105.9,7,
+liviana,Nea,109.8,3.9,105.9,7,
 liviana,Edge,201.2,0,201.2,12,
 liviana,Chrome,246.8,0,246.8,10,
-pesada-con-bloqueo,Liviano,394.9,4.3,390.6,9,44 de 197 solicitudes bloqueadas
-pesada-sin-bloqueo,Liviano,559.3,4.3,555,16,0 de 306 solicitudes bloqueadas
+pesada-con-bloqueo,Nea,394.9,4.3,390.6,9,44 de 197 solicitudes bloqueadas
+pesada-sin-bloqueo,Nea,559.3,4.3,555,16,0 de 306 solicitudes bloqueadas
 pesada,Edge,641.4,0,641.4,20,
 pesada,Chrome,783.9,0,783.9,21,
-20-pestanas,Liviano,182.7,5,177.7,7,19 dormidas
+20-pestanas,Nea,182.7,5,177.7,7,19 dormidas
 20-pestanas,Edge,451.3,0,451.3,26,
 20-pestanas,Chrome,491.2,0,491.2,27,
-restaurar-50,Liviano,109.8,3.9,105.8,7,50 pestañas restauradas
+restaurar-50,Nea,109.8,3.9,105.8,7,50 pestañas restauradas

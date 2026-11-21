@@ -1,6 +1,6 @@
-# Ejemplo, sin publicar (ver Liviano.Liviano.yaml).
+# Ejemplo, sin publicar (ver Nea.Nea.yaml).
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.installer.1.6.0.schema.json
-PackageIdentifier: Liviano.Liviano
+PackageIdentifier: Nea.Nea
 PackageVersion: 0.1.0
 MinimumOSVersion: 10.0.17763.0
 InstallerType: exe
@@ -13,14 +13,14 @@ InstallerSwitches:
   Silent: --install --quiet
   SilentWithProgress: --install --quiet
 UpgradeBehavior: install
-# The installer writes HKCU\...\Uninstall\Liviano.
-ProductCode: Liviano
+# The installer writes HKCU\...\Uninstall\Nea.
+ProductCode: Nea
 Dependencies:
   PackageDependencies:
     - PackageIdentifier: Microsoft.EdgeWebView2Runtime
 Installers:
   - Architecture: x64
-    InstallerUrl: https://github.com/Agustin-Delgado/liviano/releases/download/v0.1.0/Liviano-0.1.0-setup.exe
+    InstallerUrl: https://github.com/Agustin-Delgado/nea/releases/download/v0.1.0/Nea-0.1.0-setup.exe
     InstallerSha256: 0000000000000000000000000000000000000000000000000000000000000000
 ManifestType: installer
 ManifestVersion: 1.6.0

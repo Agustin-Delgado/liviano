@@ -1,5 +1,5 @@
 //! The tooltip: a small pill in ink with the ground's colour for text,
-//! caption size, as HKUI draws its tooltips. It never takes the pointer or
+//! caption size, as the design system draws its tooltips. It never takes the pointer or
 //! the keyboard. The window is layered per pixel, so the pill's round ends
 //! and its soft shadow are real, and it fades in (100 ms) and out (80 ms)
 //! by its whole-window opacity.
@@ -63,13 +63,13 @@ impl Tooltip {
             let class = WNDCLASSW {
                 lpfnWndProc: Some(proc),
                 hInstance: instance,
-                lpszClassName: w!("LivianoTooltip"),
+                lpszClassName: w!("NeaTooltip"),
                 ..Default::default()
             };
             RegisterClassW(&class);
             let hwnd = CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                w!("LivianoTooltip"),
+                w!("NeaTooltip"),
                 None,
                 WS_POPUP,
                 0,
@@ -119,7 +119,12 @@ impl Tooltip {
                 let shade = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
                 for (grow, alpha) in [(0.0, 0.09), (1.5, 0.05), (3.0, 0.03)] {
                     let g2 = grow * scale;
-                    let drop = RectF::new(pill.left - g2 + 2.0 * scale, pill.top + 3.0 * scale, pill.right + g2 - 2.0 * scale, pill.bottom + (2.0 + grow) * scale);
+                    let drop = RectF::new(
+                        pill.left - g2 + 2.0 * scale,
+                        pill.top + 3.0 * scale,
+                        pill.right + g2 - 2.0 * scale,
+                        pill.bottom + (2.0 + grow) * scale,
+                    );
                     g.round(drop, drop.height() / 2.0, shade.with_alpha(if dark { alpha * 2.0 } else { alpha }));
                 }
                 g.round(pill, pill_h / 2.0, ground);
@@ -151,7 +156,12 @@ impl Tooltip {
                 return;
             }
             let from = s.level.value(now);
-            s.level = Tween::new(from, 0.0, now, Spec { ms: (specs::TOOLTIP_OUT.ms as f32 * from) as u32, ..specs::TOOLTIP_OUT });
+            s.level = Tween::new(
+                from,
+                0.0,
+                now,
+                Spec { ms: (specs::TOOLTIP_OUT.ms as f32 * from) as u32, ..specs::TOOLTIP_OUT },
+            );
         });
         if visible {
             anim::drive(step);

@@ -232,7 +232,7 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(true, false, false, key(b'R')), Command::Reload),
         (chord(true, false, false, VK_F5), Command::HardReload),
         (chord(true, true, false, key(b'B')), Command::ToggleBookmark),
-        // Not in the spec's table: a free chord beside the other panels'.
+        // Nea's own chord: a free chord beside the other panels'.
         (chord(true, true, false, key(b'O')), Command::Bookmarks),
         (chord(true, false, false, key(b'Y')), Command::History),
         (chord(true, false, false, VK_OEM_COMMA), Command::Settings),
@@ -241,12 +241,12 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(true, true, false, key(b'H')), Command::HideElement),
         (chord(true, true, false, key(b'U')), Command::ShowHidden),
         (chord(true, false, true, key(b'N')), Command::SplitPage),
-        // Not in the spec's table: the split chord with Shift undoes it.
+        // Nea's own chord: the split chord with Shift undoes it.
         (chord(true, true, true, key(b'N')), Command::Unsplit),
         (chord(false, true, true, VK_LEFT), Command::FocusLeftPage),
         (chord(false, true, true, VK_RIGHT), Command::FocusRightPage),
         (chord(true, false, true, key(b'L')), Command::Passwords),
-        // Not in the spec's table: G for group, free in the rest of it.
+        // Nea's own chord: G for group, free in the rest of it.
         (chord(true, true, false, key(b'G')), Command::GroupTab),
     ];
     for n in 1..=9u8 {
@@ -447,9 +447,8 @@ pub fn parse_chord(spec: &str) -> Option<Chord> {
 
 fn parse_key(token: &str) -> Option<u32> {
     let lower = token.to_lowercase();
-    if let Some((code, _, _)) = NAMED_KEYS
-        .iter()
-        .find(|(_, name, aliases)| name.to_lowercase() == lower || aliases.contains(&lower.as_str()))
+    if let Some((code, _, _)) =
+        NAMED_KEYS.iter().find(|(_, name, aliases)| name.to_lowercase() == lower || aliases.contains(&lower.as_str()))
     {
         return Some(*code);
     }
@@ -462,4 +461,3 @@ fn parse_key(token: &str) -> Option<u32> {
         _ => None,
     }
 }
-

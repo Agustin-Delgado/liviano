@@ -1,4 +1,4 @@
-//! Saved passwords in the app (RF-14): what the page script reports turns
+//! Saved passwords in the app: what the page script reports turns
 //! into an offer to save after a login that worked, a menu of accounts when
 //! a login field is clicked, and the passwords panel (Ctrl+Alt+L) in the
 //! single field. Nothing is ever filled without the person choosing it.
@@ -14,7 +14,9 @@ use windows::{
         Foundation::{CloseHandle, FreeLibrary, HANDLE, HMODULE, HWND, LPARAM, POINT, WPARAM},
         Graphics::Gdi::ClientToScreen,
         Security::{
-            Credentials::{CRED_PACK_PROTECTED_CREDENTIALS, CREDUI_INFOW, CREDUIWIN_ENUMERATE_CURRENT_USER, CREDUIWIN_FLAGS},
+            Credentials::{
+                CRED_PACK_PROTECTED_CREDENTIALS, CREDUI_INFOW, CREDUIWIN_ENUMERATE_CURRENT_USER, CREDUIWIN_FLAGS,
+            },
             EqualSid, GetTokenInformation, LOGON32_LOGON_NETWORK, LOGON32_PROVIDER_DEFAULT, LogonUserW, TOKEN_QUERY,
             TOKEN_USER, TokenUser,
         },
@@ -29,8 +31,9 @@ use windows::{
             Threading::{GetCurrentProcess, OpenProcessToken},
         },
         UI::WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, DestroyMenu, KillTimer, MB_ICONWARNING, MB_OK, MF_GRAYED, MF_SEPARATOR, MF_STRING,
-            MessageBoxW, PostMessageW, SetTimer, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN, TrackPopupMenu, WM_APP,
+            AppendMenuW, CreatePopupMenu, DestroyMenu, KillTimer, MB_ICONWARNING, MB_OK, MF_GRAYED, MF_SEPARATOR,
+            MF_STRING, MessageBoxW, PostMessageW, SetTimer, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN, TrackPopupMenu,
+            WM_APP,
         },
     },
     core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, w},
@@ -169,7 +172,8 @@ fn clipboard_block(bytes: &[u8]) -> Option<HANDLE> {
 /// after a while unless something else was copied since.
 fn copy_secret(hwnd: HWND, secret: &Secret) -> bool {
     const CF_UNICODETEXT: u32 = 13;
-    let mut bytes: Vec<u8> = secret.expose().encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
+    let mut bytes: Vec<u8> =
+        secret.expose().encode_utf16().chain(std::iter::once(0)).flat_map(u16::to_le_bytes).collect();
     let copied = unsafe {
         if OpenClipboard(Some(hwnd)).is_err() {
             wipe(&mut bytes);
@@ -220,8 +224,17 @@ type PromptFn = unsafe extern "system" fn(
     *mut BOOL,
     CREDUIWIN_FLAGS,
 ) -> u32;
-type UnpackFn =
-    unsafe extern "system" fn(u32, *const core::ffi::c_void, u32, PWSTR, *mut u32, PWSTR, *mut u32, PWSTR, *mut u32) -> BOOL;
+type UnpackFn = unsafe extern "system" fn(
+    u32,
+    *const core::ffi::c_void,
+    u32,
+    PWSTR,
+    *mut u32,
+    PWSTR,
+    *mut u32,
+    PWSTR,
+    *mut u32,
+) -> BOOL;
 
 /// Asks Windows to confirm that the person at the keyboard is the signed-in
 /// user, with the system's own credential prompt, and checks the answer
@@ -245,7 +258,7 @@ unsafe fn confirm_with(owner: HWND, module: HMODULE) -> bool {
         };
         let prompt: PromptFn = std::mem::transmute(prompt);
         let unpack: UnpackFn = std::mem::transmute(unpack);
-        let caption = HSTRING::from("Liviano");
+        let caption = HSTRING::from("Nea");
         let message = HSTRING::from("Confirmá que sos vos para ver la contraseña guardada.");
         let info = CREDUI_INFOW {
             cbSize: std::mem::size_of::<CREDUI_INFOW>() as u32,
@@ -274,7 +287,8 @@ unsafe fn confirm_with(owner: HWND, module: HMODULE) -> bool {
         let mut user = [0u16; 514];
         let mut domain = [0u16; 338];
         let mut password = [0u16; 512];
-        let (mut user_len, mut domain_len, mut password_len) = (user.len() as u32, domain.len() as u32, password.len() as u32);
+        let (mut user_len, mut domain_len, mut password_len) =
+            (user.len() as u32, domain.len() as u32, password.len() as u32);
         let unpacked = unpack(
             CRED_PACK_PROTECTED_CREDENTIALS.0,
             out,
@@ -305,7 +319,9 @@ fn split_user(user: &str, domain: &str) -> (String, Option<String>) {
 }
 
 fn logon_is_current_user(user: &[u16], domain: &[u16], password: &[u16]) -> bool {
-    let text = |buffer: &[u16]| String::from_utf16_lossy(&buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())]);
+    let text = |buffer: &[u16]| {
+        String::from_utf16_lossy(&buffer[..buffer.iter().position(|&c| c == 0).unwrap_or(buffer.len())])
+    };
     let (user, domain) = split_user(&text(user), &text(domain));
     let user = HSTRING::from(user);
     let domain = domain.map(HSTRING::from);
@@ -362,7 +378,7 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
             MessageBoxW(
                 Some(hwnd),
                 w!("No se pudo guardar la contraseña en el Administrador de credenciales de Windows."),
-                w!("Liviano"),
+                w!("Nea"),
                 MB_OK | MB_ICONWARNING,
             );
         },
@@ -374,15 +390,27 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
 fn account_menu(hwnd: HWND, request: &MenuRequest) -> usize {
     unsafe {
         let Ok(menu) = CreatePopupMenu() else { return 0 };
-        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, &HSTRING::from(format!("Contraseñas de {}", host_of(&request.origin))));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            &HSTRING::from(format!("Contraseñas de {}", host_of(&request.origin))),
+        );
         for (i, account) in request.accounts.iter().enumerate() {
             let _ = AppendMenuW(menu, MF_STRING, i + 1, &HSTRING::from(user_label(&account.username)));
         }
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(menu, MF_STRING, MENU_MANAGE, w!("Administrar contraseñas…"));
-        let chosen =
-            TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, request.at.x, request.at.y, None, hwnd, None).0
-                as usize;
+        let chosen = TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+            request.at.x,
+            request.at.y,
+            None,
+            hwnd,
+            None,
+        )
+        .0 as usize;
         let _ = DestroyMenu(menu);
         chosen
     }
@@ -440,15 +468,28 @@ impl App {
         }
         let host = host_of(&pending.origin).to_string();
         let question = match (&saved, pending.username.is_empty()) {
-            (Some(_), _) => format!("¿Actualizar la contraseña guardada de {} para {host}?", user_label(&pending.username)),
+            (Some(_), _) => {
+                format!("¿Actualizar la contraseña guardada de {} para {host}?", user_label(&pending.username))
+            }
             (None, true) => format!("¿Guardar la contraseña para {host}?"),
             (None, false) => format!("¿Guardar la contraseña de {} para {host}?", pending.username),
         };
         let save = if saved.is_some() { "Actualizar" } else { "Guardar" };
         self.vault.bar = None;
-        self.vault.bar =
-            VaultBar::create(self.hwnd, &self.palette, self.font, self.scale, [&question, save, "Nunca para este sitio", "Ahora no"], on_bar_choice);
-        self.vault.offer = Some(Offer { tab: pending.tab, origin: pending.origin, username: pending.username, password: pending.password });
+        self.vault.bar = VaultBar::create(
+            self.hwnd,
+            &self.palette,
+            self.font,
+            self.scale,
+            [&question, save, "Nunca para este sitio", "Ahora no"],
+            on_bar_choice,
+        );
+        self.vault.offer = Some(Offer {
+            tab: pending.tab,
+            origin: pending.origin,
+            username: pending.username,
+            password: pending.password,
+        });
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_OFFER, OFFER_MS, Some(offer_expired));
         }
@@ -537,7 +578,9 @@ impl App {
             .filter(|a| crate::panels::matches(query, &[&a.username, host_of(&a.origin)]))
             .collect();
         if panel.accounts.is_empty() {
-            rows.push(info("Todavía no hay contraseñas guardadas: se ofrece guardarlas al iniciar sesión.".to_string()));
+            rows.push(info(
+                "Todavía no hay contraseñas guardadas: se ofrece guardarlas al iniciar sesión.".to_string(),
+            ));
         } else if found.is_empty() {
             rows.push(info("Sin resultados".to_string()));
         }
@@ -548,10 +591,16 @@ impl App {
                 .iter()
                 .filter(|origin| crate::panels::matches(query, &[host_of(origin)]))
                 .map(|origin| {
-                    (format!("No se ofrece guardar en {}    Supr vuelve a ofrecerlo", host_of(origin)), Row::Panel(Item::NeverSite(origin.clone())))
+                    (
+                        format!("No se ofrece guardar en {}    Supr vuelve a ofrecerlo", host_of(origin)),
+                        Row::Panel(Item::NeverSite(origin.clone())),
+                    )
                 }),
         );
-        rows.push(("Importar contraseñas de otro navegador o de un CSV…".to_string(), Row::Panel(Item::ImportPasswords)));
+        rows.push((
+            "Importar contraseñas de otro navegador o de un CSV…".to_string(),
+            Row::Panel(Item::ImportPasswords),
+        ));
         rows
     }
 
@@ -591,7 +640,8 @@ impl App {
     pub(super) fn password_delete(&mut self, item: Item, row: usize) {
         match item {
             Item::Account(account) => {
-                let confirmed = self.panels.passwords.as_ref().is_some_and(|p| p.confirm_delete.as_ref() == Some(&account));
+                let confirmed =
+                    self.panels.passwords.as_ref().is_some_and(|p| p.confirm_delete.as_ref() == Some(&account));
                 let text = if confirmed {
                     if self.vault.store.delete(&account) {
                         format!("Se borró la contraseña de {}", account_label(&account))
@@ -634,8 +684,12 @@ impl App {
                     panel.shown = Some((account, secret));
                 }
             }
-            None if confirmed => self.panel_notice("Esa contraseña ya no está en el Administrador de credenciales".to_string()),
-            None => self.panel_notice("Windows no confirmó tu identidad: la contraseña sigue oculta (Enter la copia)".to_string()),
+            None if confirmed => {
+                self.panel_notice("Esa contraseña ya no está en el Administrador de credenciales".to_string())
+            }
+            None => self.panel_notice(
+                "Windows no confirmó tu identidad: la contraseña sigue oculta (Enter la copia)".to_string(),
+            ),
         }
         self.refresh_password_panel(Some(0));
         self.restore_focus();
@@ -658,4 +712,3 @@ impl App {
         self.refresh_panel(PanelKind::Passwords, keep);
     }
 }
-

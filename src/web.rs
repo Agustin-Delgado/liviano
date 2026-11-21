@@ -163,14 +163,7 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
         push(Event::EnvironmentReady(result.and_then(|_| env.ok_or_else(|| windows::core::Error::from(E_POINTER)))));
         Ok(())
     }));
-    unsafe {
-        CreateCoreWebView2EnvironmentWithOptions(
-            None,
-            &HSTRING::from(data_dir.as_os_str()),
-            &options,
-            &handler,
-        )
-    }
+    unsafe { CreateCoreWebView2EnvironmentWithOptions(None, &HSTRING::from(data_dir.as_os_str()), &options, &handler) }
 }
 
 pub fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id: u64) -> Result<()> {
@@ -188,11 +181,7 @@ pub fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id: u64) 
 
 fn modifiers_down() -> (bool, bool, bool) {
     unsafe {
-        (
-            GetKeyState(VK_CONTROL.0 as i32) < 0,
-            GetKeyState(VK_SHIFT.0 as i32) < 0,
-            GetKeyState(VK_MENU.0 as i32) < 0,
-        )
+        (GetKeyState(VK_CONTROL.0 as i32) < 0, GetKeyState(VK_SHIFT.0 as i32) < 0, GetKeyState(VK_MENU.0 as i32) < 0)
     }
 }
 
@@ -296,7 +285,10 @@ impl WebTab {
             tab.webview.add_ProcessFailed(
                 &ProcessFailedEventHandler::create(Box::new(move |_, args| {
                     let failure = args.map(|a| ProcessFailure::read(&a)).unwrap_or_default();
-                    crate::diag::log(crate::diag::Log::Crash, format!("{} motor: {} (pestaña {id})", crate::diag::stamp(), failure.describe()));
+                    crate::diag::log(
+                        crate::diag::Log::Crash,
+                        format!("{} motor: {} (pestaña {id})", crate::diag::stamp(), failure.describe()),
+                    );
                     push(Event::ProcessFailed(id, failure.kind));
                     Ok(())
                 })),
@@ -334,7 +326,9 @@ impl WebTab {
                     let Some(args) = args else { return Ok(()) };
                     let mut kind = COREWEBVIEW2_KEY_EVENT_KIND::default();
                     args.KeyEventKind(&mut kind)?;
-                    if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN {
+                    if kind != COREWEBVIEW2_KEY_EVENT_KIND_KEY_DOWN
+                        && kind != COREWEBVIEW2_KEY_EVENT_KIND_SYSTEM_KEY_DOWN
+                    {
                         return Ok(());
                     }
                     let mut vk = 0u32;
@@ -379,7 +373,12 @@ impl WebTab {
     pub fn apply_privacy(&self, block_trackers: bool) {
         let level = tracking_level(block_trackers);
         unsafe {
-            if let Ok(profile) = self.webview.cast::<ICoreWebView2_13>().and_then(|w| w.Profile()).and_then(|p| p.cast::<ICoreWebView2Profile3>()) {
+            if let Ok(profile) = self
+                .webview
+                .cast::<ICoreWebView2_13>()
+                .and_then(|w| w.Profile())
+                .and_then(|p| p.cast::<ICoreWebView2Profile3>())
+            {
                 let _ = profile.SetPreferredTrackingPreventionLevel(level);
             }
         }
@@ -394,9 +393,7 @@ impl WebTab {
 
     pub fn title(&self) -> String {
         let mut value = PWSTR::null();
-        unsafe {
-            if self.webview.DocumentTitle(&mut value).is_ok() { take_pwstr(value) } else { String::new() }
-        }
+        unsafe { if self.webview.DocumentTitle(&mut value).is_ok() { take_pwstr(value) } else { String::new() } }
     }
 
     pub fn source(&self) -> String {
@@ -502,7 +499,11 @@ impl WebTab {
             Ok(())
         }));
         unsafe {
-            let _ = self.webview.CallDevToolsProtocolMethod(&HSTRING::from("Page.getNavigationHistory"), &HSTRING::from("{}"), &handler);
+            let _ = self.webview.CallDevToolsProtocolMethod(
+                &HSTRING::from("Page.getNavigationHistory"),
+                &HSTRING::from("{}"),
+                &handler,
+            );
         }
     }
 
@@ -511,7 +512,11 @@ impl WebTab {
         let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
         let params = format!(r#"{{"entryId":{entry}}}"#);
         unsafe {
-            let _ = self.webview.CallDevToolsProtocolMethod(&HSTRING::from("Page.navigateToHistoryEntry"), &HSTRING::from(params), &handler);
+            let _ = self.webview.CallDevToolsProtocolMethod(
+                &HSTRING::from("Page.navigateToHistoryEntry"),
+                &HSTRING::from(params),
+                &handler,
+            );
         }
     }
 
@@ -688,7 +693,11 @@ impl ProcessFailure {
 }
 
 fn tracking_level(block_trackers: bool) -> COREWEBVIEW2_TRACKING_PREVENTION_LEVEL {
-    if block_trackers { COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_STRICT } else { COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BALANCED }
+    if block_trackers {
+        COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_STRICT
+    } else {
+        COREWEBVIEW2_TRACKING_PREVENTION_LEVEL_BALANCED
+    }
 }
 
 /// The engine's active match index is already 1-based (measured: the first
@@ -696,4 +705,3 @@ fn tracking_level(block_trackers: bool) -> COREWEBVIEW2_TRACKING_PREVENTION_LEVE
 fn match_position(index: i32, count: i32) -> (i32, i32) {
     (index.clamp(1, count.max(1)), count)
 }
-

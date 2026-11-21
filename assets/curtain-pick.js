@@ -3,8 +3,8 @@
 // arrows walk to the container and back, Esc leaves. Running it again while
 // it is active leaves too.
 (() => {
-  if (window.__livianoPick) {
-    window.__livianoPick.stop();
+  if (window.__neaPick) {
+    window.__neaPick.stop();
     return "off";
   }
 
@@ -69,11 +69,11 @@
   };
 
   const sheet = () => {
-    let current = window.__livianoCurtainSheet;
+    let current = window.__neaCurtainSheet;
     if (!current) {
       current = new CSSStyleSheet();
       document.adoptedStyleSheets = [...document.adoptedStyleSheets, current];
-      window.__livianoCurtainSheet = current;
+      window.__neaCurtainSheet = current;
     }
     return current;
   };
@@ -172,11 +172,11 @@
   const stop = () => {
     listen(false);
     host.remove();
-    window.__livianoPick = undefined;
+    window.__neaPick = undefined;
     window.chrome.webview.postMessage({ kind: "curtain.done" });
   };
 
   listen(true);
-  window.__livianoPick = { stop };
+  window.__neaPick = { stop };
   return "on";
 })();

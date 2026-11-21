@@ -1,5 +1,5 @@
-//! Saved passwords (RF-14): they live only in Windows Credential Manager, as
-//! generic credentials named "Liviano:<origin> <user name>". The app keeps no
+//! Saved passwords: they live only in Windows Credential Manager, as
+//! generic credentials named "Nea:<origin> <user name>". The app keeps no
 //! copy on disk, and a password read from the store is held in a `Secret`
 //! that wipes itself when dropped.
 
@@ -9,15 +9,15 @@ use windows::{
     Win32::{
         Foundation::{ERROR_NOT_FOUND, WIN32_ERROR},
         Security::Credentials::{
-            CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredEnumerateW, CredFree, CredReadW,
-            CredWriteW,
+            CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredDeleteW, CredEnumerateW, CredFree,
+            CredReadW, CredWriteW,
         },
     },
     core::{HSTRING, PWSTR},
 };
 
 /// What every credential of the app is named with.
-pub const PREFIX: &str = "Liviano:";
+pub const PREFIX: &str = "Nea:";
 /// Credential Manager rejects larger secrets (CRED_MAX_CREDENTIAL_BLOB_SIZE).
 const MAX_BLOB: usize = 5 * 512;
 
@@ -96,7 +96,7 @@ pub fn origin_of(url: &str) -> Option<String> {
     valid.then(|| format!("{scheme}://{host}"))
 }
 
-/// The credential name of an account: "Liviano:https://example.com ana@x.com".
+/// The credential name of an account: "Nea:https://example.com ana@x.com".
 /// An origin never holds a space, so the first one ends it.
 pub fn target(prefix: &str, origin: &str, username: &str) -> String {
     format!("{prefix}{origin} {username}")
@@ -120,7 +120,7 @@ fn encode_secret(password: &str) -> Vec<u8> {
 }
 
 fn decode_secret(bytes: &[u8]) -> Secret {
-    if bytes.len() % 2 == 0 {
+    if bytes.len().is_multiple_of(2) {
         let units: Vec<u16> = bytes.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect();
         if let Ok(text) = String::from_utf16(&units) {
             return Secret(text);
@@ -135,23 +135,67 @@ fn not_found(error: &windows::core::Error) -> bool {
 
 /// The app's corner of Credential Manager. Tests use a prefix of their own
 /// (so they never touch real entries) and so can the app, through
-/// LIVIANO_CREDENTIAL_PREFIX, the same way LIVIANO_DATA_DIR moves its files.
+/// NEA_CREDENTIAL_PREFIX, the same way NEA_DATA_DIR moves its files.
 #[derive(Clone, Debug)]
 pub struct Store {
     prefix: String,
 }
 
+/// A prefix named by an environment variable, when it is a usable one.
+pub fn prefix_from_env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|p| p.ends_with(':') && !p.contains(char::is_whitespace) && p.len() > 1)
+}
+
 impl Default for Store {
     fn default() -> Self {
-        let prefix = std::env::var("LIVIANO_CREDENTIAL_PREFIX")
-            .ok()
-            .filter(|p| p.ends_with(':') && !p.contains(char::is_whitespace) && p.len() > 1)
-            .unwrap_or_else(|| PREFIX.to_string());
-        Self { prefix }
+        Self { prefix: prefix_from_env("NEA_CREDENTIAL_PREFIX").unwrap_or_else(|| PREFIX.to_string()) }
     }
 }
 
+/// What `Store::take_from` did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Taken {
+    /// Written here, read back equal, and deleted there.
+    pub moved: usize,
+    /// Left where they were: a write or a read back failed, or this store
+    /// already had the account with another password.
+    pub left: usize,
+}
+
 impl Store {
+    pub fn with_prefix(prefix: &str) -> Self {
+        Self { prefix: prefix.to_string() }
+    }
+
+    /// Moves every password saved under `old`'s prefix to this store's. Each
+    /// one is written, read back and compared before the old entry goes, so
+    /// a failure anywhere leaves it where it was. An account this store
+    /// already has wins: its password is never overwritten, and the old entry
+    /// is only removed when it says the same. Run again, it finds nothing.
+    pub fn take_from(&self, old: &Store) -> Taken {
+        let mut taken = Taken::default();
+        if old.prefix == self.prefix {
+            return taken;
+        }
+        for account in old.accounts(None) {
+            let Some(password) = old.password(&account) else {
+                taken.left += 1;
+                continue;
+            };
+            let existing = self.password(&account);
+            let written = match &existing {
+                Some(_) => true,
+                None => self.save(&account.origin, &account.username, password.expose()).is_ok(),
+            };
+            let verified = written && self.password(&account).is_some_and(|back| back == password);
+            if verified && old.delete(&account) {
+                taken.moved += 1;
+            } else {
+                taken.left += 1;
+            }
+        }
+        taken
+    }
 
     /// Saves (or replaces) the password of an account. Kept on this machine
     /// only: never in the roaming part of the profile.
@@ -163,7 +207,7 @@ impl Store {
         }
         let mut target = wide0(&target(&self.prefix, origin, username));
         let mut user = wide0(username);
-        let mut comment = wide0("Contraseña guardada por Liviano");
+        let mut comment = wide0("Contraseña guardada por Nea");
         let credential = CREDENTIALW {
             Type: CRED_TYPE_GENERIC,
             TargetName: PWSTR(target.as_mut_ptr()),
@@ -199,10 +243,10 @@ impl Store {
                     continue;
                 }
                 let name = credential.TargetName.to_string().unwrap_or_default();
-                if let Some(account) = parse_target(&self.prefix, &name) {
-                    if origin.is_none_or(|o| o == account.origin) {
-                        accounts.push(account);
-                    }
+                if let Some(account) = parse_target(&self.prefix, &name)
+                    && origin.is_none_or(|o| o == account.origin)
+                {
+                    accounts.push(account);
                 }
             }
             CredFree(list as *const _);
@@ -239,4 +283,3 @@ impl Store {
         }
     }
 }
-

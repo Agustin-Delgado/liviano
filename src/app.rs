@@ -11,11 +11,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Environment;
 use windows::{
     Win32::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::{
-            Gdi::{
-                BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
-                LOGFONTW, PAINTSTRUCT,
-            },
+        Graphics::Gdi::{
+            BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
+            LOGFONTW, PAINTSTRUCT,
         },
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
@@ -24,10 +22,8 @@ use windows::{
             SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX},
         },
         UI::{
-            Input::KeyboardAndMouse::{
-                SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
-            },
             Controls::WM_MOUSELEAVE,
+            Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
             WindowsAndMessaging::*,
         },
     },
@@ -40,8 +36,8 @@ mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
 mod groups_ui;
-mod nav_ui;
 mod hovercard_ui;
+mod nav_ui;
 mod panel_ui;
 mod popups_ui;
 mod private_tabs;
@@ -216,7 +212,11 @@ pub fn run() -> windows::core::Result<()> {
     let loading = Instant::now();
     let history = History::from_entries(storage::read_json::<Vec<Entry>>(&data.join("history.json")));
     crate::diag::trace(|| {
-        format!("startup: history of {} entries read in {:.1} ms", history.entries().len(), loading.elapsed().as_secs_f64() * 1000.0)
+        format!(
+            "startup: history of {} entries read in {:.1} ms",
+            history.entries().len(),
+            loading.elapsed().as_secs_f64() * 1000.0
+        )
     });
     shield::set_disabled(&settings.shield_disabled);
     shield::set_cosmetic(settings.block_trackers);
@@ -241,8 +241,11 @@ pub fn run() -> windows::core::Result<()> {
     apply_window_theme(hwnd, &palette);
 
     let mut tabs = TabList::default();
-    let restored: Vec<(u64, Option<usize>)> =
-        session.tabs.iter().map(|saved| (tabs.insert(&saved.url, &saved.title, saved.pinned, None), saved.group)).collect();
+    let restored: Vec<(u64, Option<usize>)> = session
+        .tabs
+        .iter()
+        .map(|saved| (tabs.insert(&saved.url, &saved.title, saved.pinned, None), saved.group))
+        .collect();
     // Selected after the groups are back: a live tab in a folded group unfolds it.
     tabs.restore_groups(&session.groups, &restored);
     let restored: Vec<u64> = restored.into_iter().map(|(id, _)| id).collect();
@@ -356,7 +359,7 @@ fn create_window(session: &Session) -> windows::core::Result<HWND> {
             style: CS_HREDRAW | CS_VREDRAW,
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
-            lpszClassName: w!("LivianoWindow"),
+            lpszClassName: w!("NeaWindow"),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hIcon: LoadIconW(Some(instance), PCWSTR(crate::app_icon::ICON_ID as usize as _)).unwrap_or_default(),
             ..Default::default()
@@ -368,7 +371,7 @@ fn create_window(session: &Session) -> windows::core::Result<HWND> {
         };
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
-            w!("LivianoWindow"),
+            w!("NeaWindow"),
             &wide(storage::DISPLAY_NAME),
             WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
             x,
@@ -743,7 +746,6 @@ impl App {
                 }
             }
         }
-        drop(paint);
         self.surface = surface;
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
@@ -956,10 +958,10 @@ impl App {
     fn close_tab(&mut self, id: u64) {
         self.forget_thumb(id);
         let heir = self.unpair_closing(id);
-        if let Some(tab) = self.tabs.close(id) {
-            if let Live::Ready(web) = tab.live {
-                if tab.private { self.close_private_view(web) } else { web.close() }
-            }
+        if let Some(tab) = self.tabs.close(id)
+            && let Live::Ready(web) = tab.live
+        {
+            if tab.private { self.close_private_view(web) } else { web.close() }
         }
         if let Some(partner) = heir {
             self.tabs.select(partner);
@@ -1071,23 +1073,23 @@ impl App {
             Event::ControllerReady(id, result) => self.controller_ready(id, result),
             Event::TitleChanged(id) => {
                 let records = self.tabs.records(id);
-                if let Some(tab) = self.tabs.get_mut(id) {
-                    if let Live::Ready(web) = &tab.live {
-                        tab.title = web.title();
-                        if records {
-                            self.history.set_title(&tab.url, &tab.title);
-                        }
+                if let Some(tab) = self.tabs.get_mut(id)
+                    && let Live::Ready(web) = &tab.live
+                {
+                    tab.title = web.title();
+                    if records {
+                        self.history.set_title(&tab.url, &tab.title);
                     }
                 }
                 self.after_tab_change(id);
             }
             Event::SourceChanged(id) => {
-                if let Some(tab) = self.tabs.get_mut(id) {
-                    if let Live::Ready(web) = &tab.live {
-                        let source = web.source();
-                        if !source.is_empty() {
-                            tab.url = source;
-                        }
+                if let Some(tab) = self.tabs.get_mut(id)
+                    && let Live::Ready(web) = &tab.live
+                {
+                    let source = web.source();
+                    if !source.is_empty() {
+                        tab.url = source;
                     }
                 }
                 self.after_tab_change(id);
@@ -1165,7 +1167,11 @@ impl App {
         self.invalidate();
     }
 
-    fn controller_ready(&mut self, id: u64, result: windows::core::Result<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller>) {
+    fn controller_ready(
+        &mut self,
+        id: u64,
+        result: windows::core::Result<webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2Controller>,
+    ) {
         let started = Instant::now();
         let _traced = Traced(started, id);
         let Ok(controller) = result else {
@@ -1290,11 +1296,11 @@ impl App {
                 }
             }
             Command::PasteAndGo => {
-                if let Some(text) = get_clipboard(self.hwnd) {
-                    if let Some(url) = omnibox::resolve(&text, &self.settings.search_url) {
-                        self.close_omnibar();
-                        self.navigate_active(&url);
-                    }
+                if let Some(text) = get_clipboard(self.hwnd)
+                    && let Some(url) = omnibox::resolve(&text, &self.settings.search_url)
+                {
+                    self.close_omnibar();
+                    self.navigate_active(&url);
                 }
             }
             Command::PinTab => {
@@ -1318,19 +1324,19 @@ impl App {
             Command::ReaderMode => self.with_active_web(|w| reader::toggle(w)),
             Command::FloatingVideo => self.with_active_web(|w| pip::toggle(w)),
             Command::HideElement => {
-                if let Some(tab) = self.tabs.active_tab().filter(|t| !t.private) {
-                    if let Live::Ready(web) = &tab.live {
-                        self.curtain.toggle_picker(tab.id, web);
-                    }
+                if let Some(tab) = self.tabs.active_tab().filter(|t| !t.private)
+                    && let Live::Ready(web) = &tab.live
+                {
+                    self.curtain.toggle_picker(tab.id, web);
                 }
             }
             Command::ShowHidden => {
                 let frame = self.omnibar_frame();
                 let (x, y, width) = (frame.left, frame.top, frame.width);
-                if let Some(tab) = self.tabs.active_tab() {
-                    if let Live::Ready(web) = &tab.live {
-                        self.curtain.show_hidden(self.hwnd, (x + width / 2, y), web, live_webs(&self.tabs));
-                    }
+                if let Some(tab) = self.tabs.active_tab()
+                    && let Live::Ready(web) = &tab.live
+                {
+                    self.curtain.show_hidden(self.hwnd, (x + width / 2, y), web, live_webs(&self.tabs));
                 }
                 self.focus_page();
             }
@@ -1364,12 +1370,11 @@ impl App {
     }
 
     fn with_active_web(&mut self, f: impl FnOnce(&mut WebTab)) {
-        if let Some(id) = self.tabs.active {
-            if let Some(tab) = self.tabs.get_mut(id) {
-                if let Live::Ready(web) = &mut tab.live {
-                    f(web);
-                }
-            }
+        if let Some(id) = self.tabs.active
+            && let Some(tab) = self.tabs.get_mut(id)
+            && let Live::Ready(web) = &mut tab.live
+        {
+            f(web);
         }
     }
 
@@ -1380,10 +1385,10 @@ impl App {
             self.hover = hover;
             self.card_follow_hover();
             // A click on a sleeping tab is likely next: its view gets made meanwhile.
-            if let Some(Hit::Tab(id)) = hover {
-                if self.tabs.get(id).is_some_and(|t| matches!(t.live, Live::Asleep) && !t.private) {
-                    self.warm_up();
-                }
+            if let Some(Hit::Tab(id)) = hover
+                && self.tabs.get(id).is_some_and(|t| matches!(t.live, Live::Asleep) && !t.private)
+            {
+                self.warm_up();
             }
             self.tip_follow_hover();
             self.invalidate_hover_area();
@@ -1510,12 +1515,22 @@ impl App {
             let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
             let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, &wide(if pinned { "Desfijar" } else { "Fijar" }));
             let _ = AppendMenuW(menu, MF_STRING, MENU_DUPLICATE, w!("Duplicar"));
-            let _ = AppendMenuW(menu, MF_STRING | check(awake), MENU_KEEP_AWAKE, w!("Mantener sitio despierto (usa más memoria)"));
+            let _ = AppendMenuW(
+                menu,
+                MF_STRING | check(awake),
+                MENU_KEEP_AWAKE,
+                w!("Mantener sitio despierto (usa más memoria)"),
+            );
             if let Some(on) = shielded {
                 let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_SHIELD, w!("Bloqueo de anuncios en este sitio"));
             }
             if let Some(on) = popups {
-                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_POPUPS, w!("Permitir ventanas emergentes en este sitio"));
+                let _ = AppendMenuW(
+                    menu,
+                    MF_STRING | check(on),
+                    MENU_POPUPS,
+                    w!("Permitir ventanas emergentes en este sitio"),
+                );
             }
             if paired {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_UNSPLIT, w!("Deshacer vista dividida"));
@@ -1530,8 +1545,8 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Cerrar las demás"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            let chosen =
-                TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None).0 as usize;
+            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
+                .0 as usize;
             let _ = DestroyMenu(menu);
             if chosen == MENU_TAB_LAYOUT {
                 self.run(Command::ToggleTabLayout);
@@ -1610,7 +1625,9 @@ impl App {
             Mode::Switch => ("Ir a una pestaña abierta", String::new(), false),
             Mode::Find => ("Buscar en la página", String::new(), false),
             Mode::Panel(kind) => (kind.cue(), String::new(), false),
-            Mode::Split => ("Al lado: dirección, búsqueda o pestaña abierta (Enter vacío: la misma página)", String::new(), false),
+            Mode::Split => {
+                ("Al lado: dirección, búsqueda o pestaña abierta (Enter vacío: la misma página)", String::new(), false)
+            }
             Mode::RenameGroup(group) => {
                 let (cue, name) = self.group_cue(group);
                 (cue, name, true)
@@ -1718,10 +1735,11 @@ impl App {
                 let (start, end) = self.omnibar.selection();
                 let caret_at_end = start == end && end == text.encode_utf16().count();
                 let _doing = crate::diag::doing(&"campo:historial", 0);
-                if typing_forward && caret_at_end {
-                    if let Some(completion) = self.history.inline_completion(&text) {
-                        self.omnibar.complete_inline(&text, &completion);
-                    }
+                if typing_forward
+                    && caret_at_end
+                    && let Some(completion) = self.history.inline_completion(&text)
+                {
+                    self.omnibar.complete_inline(&text, &completion);
                 }
                 let history = self
                     .history
@@ -1844,7 +1862,8 @@ impl App {
     }
 
     fn session(&self) -> Session {
-        let mut placement = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+        let mut placement =
+            WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
         unsafe {
             let _ = GetWindowPlacement(self.hwnd, &mut placement);
         }
@@ -1909,9 +1928,7 @@ fn fuzzy_match(query: &str, text: &str) -> bool {
 
 fn memory_load() -> u32 {
     let mut status = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
-    unsafe {
-        if GlobalMemoryStatusEx(&mut status).is_ok() { status.dwMemoryLoad } else { 0 }
-    }
+    unsafe { if GlobalMemoryStatusEx(&mut status).is_ok() { status.dwMemoryLoad } else { 0 } }
 }
 
 const CF_UNICODETEXT: u32 = 13;
@@ -1956,4 +1973,3 @@ fn get_clipboard(hwnd: HWND) -> Option<String> {
         text
     }
 }
-

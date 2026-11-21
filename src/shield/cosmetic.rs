@@ -53,8 +53,22 @@ const MAX_SELECTOR: usize = 1024;
 /// Pseudo-classes of other blockers that no engine parses: a rule with one
 /// is not CSS.
 const PROCEDURAL: &[&str] = &[
-    ":-abp-", ":has-text(", ":contains(", ":xpath(", ":upward(", ":remove(", ":style(", ":matches-", ":min-text-length(",
-    ":watch-attr(", ":others(", ":if(", ":if-not(", ":nth-ancestor(", ":remove-attr(", ":remove-class(",
+    ":-abp-",
+    ":has-text(",
+    ":contains(",
+    ":xpath(",
+    ":upward(",
+    ":remove(",
+    ":style(",
+    ":matches-",
+    ":min-text-length(",
+    ":watch-attr(",
+    ":others(",
+    ":if(",
+    ":if-not(",
+    ":nth-ancestor(",
+    ":remove-attr(",
+    ":remove-class(",
 ];
 
 const TOO_BROAD: &[&str] = &["*", "html", "body", ":root", "head", "html > body"];
@@ -122,10 +136,9 @@ fn split_rule(line: &str) -> Option<(bool, &str, &str)> {
     let rest = &line[at..];
     let (exception, selector) = if let Some(s) = rest.strip_prefix("#@#") {
         (true, s)
-    } else if let Some(s) = rest.strip_prefix("##") {
-        (false, s)
     } else {
-        return None;
+        let s = rest.strip_prefix("##")?;
+        (false, s)
     };
     let domains = &line[..at];
     // A network rule with a `#` in its pattern has a `$` or `/` before it.
@@ -159,13 +172,12 @@ impl Cosmetic {
                 if !usable(selector) || cancelled.contains(selector) || domains.len() > u16::MAX as usize {
                     continue;
                 }
-                if domains.is_empty() {
-                    if exception || !seen_generic.insert(selector) {
-                        continue;
-                    }
+                if domains.is_empty() && (exception || !seen_generic.insert(selector)) {
+                    continue;
                 }
                 let id = c.push(selector, domains);
-                let included: Vec<&str> = domains.split(',').map(str::trim).filter(|d| !d.is_empty() && !d.starts_with('~')).collect();
+                let included: Vec<&str> =
+                    domains.split(',').map(str::trim).filter(|d| !d.is_empty() && !d.starts_with('~')).collect();
                 match (exception, domains.is_empty(), included.is_empty()) {
                     (false, true, _) => match leading_token(selector) {
                         Some(token) => c.by_token.push((hash32(token.as_bytes()), id)),
@@ -267,7 +279,10 @@ impl Cosmetic {
                 let selector = self.selector(id);
                 // Hashes can collide: the selector has to start where the
                 // token says.
-                if leading_token(selector) == Some(key.as_str()) && !excepted.contains(selector) && seen.insert(selector) {
+                if leading_token(selector) == Some(key.as_str())
+                    && !excepted.contains(selector)
+                    && seen.insert(selector)
+                {
                     out.push(selector);
                 }
             }
@@ -286,4 +301,3 @@ impl Cosmetic {
             + (self.by_token.capacity() + self.by_domain.capacity() + self.exceptions.capacity()) * 8
     }
 }
-

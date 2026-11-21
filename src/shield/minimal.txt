@@ -1,4 +1,4 @@
-! Liviano: minimal built-in list, used until EasyList and EasyPrivacy are
+! Nea: minimal built-in list, used until EasyList and EasyPrivacy are
 ! downloaded (first start, or offline). The most common ad and tracker hosts.
 ||2mdn.net^
 ||33across.com^

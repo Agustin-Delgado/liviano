@@ -21,22 +21,22 @@ use windows::{
         Graphics::{
             Direct2D::{
                 Common::{
-                    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
-                    D2D_SIZE_U, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+                    D2D_RECT_F, D2D_SIZE_F, D2D_SIZE_U, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
+                    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN,
+                    D2D1_PIXEL_FORMAT,
                 },
                 D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
-                D2D1_CAP_STYLE_ROUND, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-                D2D1_FEATURE_LEVEL_DEFAULT, D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES,
-                D2D1_RENDER_TARGET_TYPE_SOFTWARE, D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT,
-                D2D1_STROKE_STYLE_PROPERTIES, D2D1_SWEEP_DIRECTION_CLOCKWISE,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES,
-                D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_BITMAP_PROPERTIES, D2D1_CAP_STYLE_ROUND,
+                D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_FEATURE_LEVEL_DEFAULT,
+                D2D1_LINE_JOIN_ROUND, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_SOFTWARE,
+                D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+                D2D1_SWEEP_DIRECTION_CLOCKWISE, D2D1CreateFactory, ID2D1Bitmap, ID2D1DCRenderTarget, ID2D1Factory,
                 ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
             },
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
-                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
                 DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
                 IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat,
             },
@@ -102,7 +102,12 @@ impl RectF {
     /// The rectangle `t` of the way from `self` to `to`.
     pub fn lerp(&self, to: &RectF, t: f32) -> Self {
         let mix = |a: f32, b: f32| a + (b - a) * t;
-        Self::new(mix(self.left, to.left), mix(self.top, to.top), mix(self.right, to.right), mix(self.bottom, to.bottom))
+        Self::new(
+            mix(self.left, to.left),
+            mix(self.top, to.top),
+            mix(self.right, to.right),
+            mix(self.bottom, to.bottom),
+        )
     }
     fn d2d(&self) -> D2D_RECT_F {
         D2D_RECT_F { left: self.left, top: self.top, right: self.right, bottom: self.bottom }
@@ -137,12 +142,15 @@ impl Font {
     }
 }
 
+/// Text formats by size, weight and alignment, each with its ellipsis sign.
+type Formats = HashMap<(u32, u16, Align), (IDWriteTextFormat, IDWriteInlineObject)>;
+
 struct Shared {
     d2d: ID2D1Factory,
     dwrite: IDWriteFactory,
     round: ID2D1StrokeStyle,
     family: HSTRING,
-    formats: RefCell<HashMap<(u32, u16, Align), (IDWriteTextFormat, IDWriteInlineObject)>>,
+    formats: RefCell<Formats>,
 }
 
 thread_local! {
@@ -241,14 +249,13 @@ fn pick_family(dwrite: &IDWriteFactory) -> &'static str {
     const PREFERRED: &str = "Segoe UI Variable Text";
     unsafe {
         let mut collection = None;
-        if dwrite.GetSystemFontCollection(&mut collection, false).is_ok() {
-            if let Some(collection) = collection {
-                let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
-                if collection.FindFamilyName(&HSTRING::from(PREFERRED), &mut index, &mut exists).is_ok()
-                    && exists.as_bool()
-                {
-                    return PREFERRED;
-                }
+        if dwrite.GetSystemFontCollection(&mut collection, false).is_ok()
+            && let Some(collection) = collection
+        {
+            let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
+            if collection.FindFamilyName(&HSTRING::from(PREFERRED), &mut index, &mut exists).is_ok() && exists.as_bool()
+            {
+                return PREFERRED;
             }
         }
     }
@@ -394,12 +401,25 @@ impl Painter<'_> {
             // 0 2px 6px -2px: a few widening layers below, each fainter.
             for (grow, alpha) in [(0.0, 0.5), (1.0, 0.3), (2.0, 0.2)] {
                 let g = grow * scale;
-                let drop = RectF::new(rect.left - g + 2.0 * scale, rect.top + 2.0 * scale, rect.right + g - 2.0 * scale, rect.bottom + (1.0 + grow) * scale);
-                self.round(drop, radius + g, shade.with_alpha(l::CARD_DROP * alpha * lift * if dark { 2.0 } else { 1.0 }));
+                let drop = RectF::new(
+                    rect.left - g + 2.0 * scale,
+                    rect.top + 2.0 * scale,
+                    rect.right + g - 2.0 * scale,
+                    rect.bottom + (1.0 + grow) * scale,
+                );
+                self.round(
+                    drop,
+                    radius + g,
+                    shade.with_alpha(l::CARD_DROP * alpha * lift * if dark { 2.0 } else { 1.0 }),
+                );
             }
         }
         self.round(rect, radius, fill);
-        let ring = if dark { Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.with_alpha(0.06) } else { shade.with_alpha(l::CARD_RING) };
+        let ring = if dark {
+            Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.with_alpha(0.06)
+        } else {
+            shade.with_alpha(l::CARD_RING)
+        };
         self.outline(rect, radius, 1.0, ring.with_alpha(lift.clamp(0.0, 1.0)));
     }
 
@@ -465,6 +485,7 @@ impl Painter<'_> {
 
     /// Part of a circle's edge, from `start` turning `sweep` (radians,
     /// clockwise, 0 at the top): the loading ring.
+    #[allow(clippy::too_many_arguments, reason = "the arc's geometry and look, as Direct2D's own calls take them")]
     pub fn arc(&self, cx: f32, cy: f32, radius: f32, start: f32, sweep: f32, width: f32, color: impl Into<Color>) {
         let at = |angle: f32| Vector2::new(cx + radius * angle.sin(), cy - radius * angle.cos());
         unsafe {
@@ -535,7 +556,10 @@ impl Painter<'_> {
 
     fn upload(&self, pixels: &[u8], width: u32, height: u32) -> Option<ID2D1Bitmap> {
         let props = D2D1_BITMAP_PROPERTIES {
-            pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
             dpiX: 96.0,
             dpiY: 96.0,
         };
@@ -565,7 +589,6 @@ impl Painter<'_> {
             )
         };
     }
-
 }
 
 /// The rectangles of `dirty` that `hdc` can really draw on, in client
@@ -576,7 +599,9 @@ impl Painter<'_> {
 pub fn visible_rects(hdc: HDC, hwnd: windows::Win32::Foundation::HWND, dirty: RECT) -> Vec<RECT> {
     use windows::Win32::{
         Foundation::POINT,
-        Graphics::Gdi::{ClientToScreen, CreateRectRgn, DeleteObject, GetRandomRgn, GetRegionData, RGNDATA, RGNDATAHEADER},
+        Graphics::Gdi::{
+            ClientToScreen, CreateRectRgn, DeleteObject, GetRandomRgn, GetRegionData, RGNDATA, RGNDATAHEADER,
+        },
     };
     const SYSRGN: i32 = 4;
     const MAX_PIECES: usize = 8;
@@ -588,7 +613,9 @@ pub fn visible_rects(hdc: HDC, hwnd: windows::Win32::Foundation::HWND, dirty: RE
             // u64 storage keeps the header and the RECTs after it aligned.
             let mut buffer = vec![0u64; size.div_ceil(8).max(1)];
             let data = buffer.as_mut_ptr() as *mut RGNDATA;
-            if size >= std::mem::size_of::<RGNDATAHEADER>() && GetRegionData(rgn, size as u32, Some(data)) as usize == size {
+            if size >= std::mem::size_of::<RGNDATAHEADER>()
+                && GetRegionData(rgn, size as u32, Some(data)) as usize == size
+            {
                 let header = (*data).rdh;
                 let count = header.nCount as usize;
                 if (1..=MAX_PIECES).contains(&count) {
@@ -628,4 +655,3 @@ pub fn fill_gdi(hdc: HDC, rect: RECT, color: Rgb) {
         let _ = DeleteObject(brush.into());
     }
 }
-

@@ -9,7 +9,7 @@
 //! anchored to, by a token their URL must contain, or by the site they are
 //! restricted to. No per-rule allocation survives compilation.
 //!
-//! Left out on purpose: cosmetic rules (a second phase per the spec), regex
+//! Left out on purpose: cosmetic rules (a later phase), regex
 //! rules (`/.../`, a handful, and a regex engine is not worth it) and options
 //! that rewrite rather than block (`$csp`, `$removeparam`, `$redirect-rule`…):
 //! a rule with an option we don't understand is dropped, never guessed.
@@ -236,18 +236,22 @@ impl Filters {
 
         // The common case: `||host^`, nothing else.
         let bare = flags & !(EXCEPTION | IMPORTANT) == HOST_ANCHOR && types == DEFAULT_TYPES && opts.domains.is_empty();
-        if bare {
-            if let Some(host) = pattern.strip_suffix('^').filter(|h| is_host(h)) {
-                index.hosts.push(hash64(host.as_bytes()));
-                return;
-            }
+        if bare && let Some(host) = pattern.strip_suffix('^').filter(|h| is_host(h)) {
+            index.hosts.push(hash64(host.as_bytes()));
+            return;
         }
 
         let id = self.rules.len() as u32;
         let start = self.text.len() as u32;
         self.text.push_str(&pattern);
         self.text.push_str(&opts.domains.to_ascii_lowercase());
-        self.rules.push(Rule { start, pattern_len: pattern.len() as u16, dom_len: opts.domains.len() as u16, types, flags });
+        self.rules.push(Rule {
+            start,
+            pattern_len: pattern.len() as u16,
+            dom_len: opts.domains.len() as u16,
+            types,
+            flags,
+        });
 
         if flags & HOST_ANCHOR != 0 {
             let end = pattern.find(['^', '/', ':', '?', '*', '|']).unwrap_or(pattern.len());
@@ -319,8 +323,14 @@ impl Filters {
         }
         // `@@||site^$document` turns blocking off for the whole page.
         if let Some((page_at, _)) = host_of(&page) {
-            let document =
-                Request { url: &page, host: page_host, host_at: page_at, page_host, kind: Kind::Document, third_party: false };
+            let document = Request {
+                url: &page,
+                host: page_host,
+                host_at: page_at,
+                page_host,
+                kind: Kind::Document,
+                third_party: false,
+            };
             if self.find(&self.allow, &document) {
                 return false;
             }
@@ -334,7 +344,8 @@ impl Filters {
         // Bare host rules have the default types, which leave out the page
         // itself; a popup to a bare ad or tracker host is blocked too.
         let bare_applies = request.kind != Kind::Document;
-        if bare_applies && suffixes(request.host).any(|(_, s)| index.hosts.binary_search(&hash64(s.as_bytes())).is_ok()) {
+        if bare_applies && suffixes(request.host).any(|(_, s)| index.hosts.binary_search(&hash64(s.as_bytes())).is_ok())
+        {
             return true;
         }
         if suffixes(request.host).any(|(_, s)| lookup(&index.by_host, hash32(s.as_bytes())).any(hit)) {
@@ -361,7 +372,8 @@ impl Filters {
         }
         let start = rule.start as usize;
         let pattern = &self.text.as_bytes()[start..start + rule.pattern_len as usize];
-        let domains = &self.text[start + rule.pattern_len as usize..start + rule.pattern_len as usize + rule.dom_len as usize];
+        let domains =
+            &self.text[start + rule.pattern_len as usize..start + rule.pattern_len as usize + rule.dom_len as usize];
         let url = request.url.as_bytes();
         let end = rule.flags & END_ANCHOR != 0;
         let matched = if rule.flags & HOST_ANCHOR != 0 {
@@ -512,7 +524,9 @@ struct Options<'a> {
 }
 
 fn looks_like_options(text: &str) -> bool {
-    !text.is_empty() && !text.contains('/') && text.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '~' || c == '_')
+    !text.is_empty()
+        && !text.contains('/')
+        && text.chars().next().is_some_and(|c| c.is_ascii_alphabetic() || c == '~' || c == '_')
 }
 
 /// `None` when the rule uses an option we don't implement: such a rule is
@@ -629,12 +643,15 @@ pub(super) fn host_of(url: &str) -> Option<(usize, &str)> {
 }
 
 /// Second-level labels under which a country's sites register ("com.ar", "co.uk").
-const SECOND_LEVELS: &[&str] = &["com", "net", "org", "gov", "gob", "edu", "co", "ac", "mil", "nom", "or", "ne", "go", "ltd", "plc", "sch", "info", "biz"];
+const SECOND_LEVELS: &[&str] = &[
+    "com", "net", "org", "gov", "gob", "edu", "co", "ac", "mil", "nom", "or", "ne", "go", "ltd", "plc", "sch", "info",
+    "biz",
+];
 
 /// The registrable part of a host ("www.lanacion.com.ar" -> "lanacion.com.ar"),
 /// what first party means. A small rule instead of the 200 KB public suffix list.
 pub fn site(host: &str) -> &str {
-    if host.bytes().all(|c| c.is_ascii_digit() || c == '.' as u8) || host.starts_with('[') {
+    if host.bytes().all(|c| c.is_ascii_digit() || c == b'.') || host.starts_with('[') {
         return host;
     }
     let labels: Vec<usize> = host.match_indices('.').map(|(i, _)| i).collect();
@@ -669,4 +686,3 @@ pub(super) fn hash32(bytes: &[u8]) -> u32 {
     }
     h
 }
-

@@ -1,14 +1,14 @@
 // Hides the cookie banners the list knows for this page. Runs once per
 // document (top frame only): the first caller leaves its sheet in
-// `window.__livianoCookieSheet`.
+// `window.__neaCookieSheet`.
 //
 // `selectors` are the ones that apply before the page has anything: the
 // site's own and the generic rules no id or class can pick. The rest of the
 // generic rules (a lone `#id` or `.class`, almost all of them) come from
 // `path` for the ids and classes this page really has, as they appear: a
 // sheet with all of them cost ~10 MB per tab.
-const livianoHideCookies = (selectors, path) => {
-  if (window.__livianoCookieSheet) return;
+const neaHideCookies = (selectors, path) => {
+  if (window.__neaCookieSheet) return;
   const sheet = new CSSStyleSheet();
   // In groups: one rule per selector would cost a rule object each. A
   // group the engine refuses (one bad selector spoils its list) is split.
@@ -30,7 +30,7 @@ const livianoHideCookies = (selectors, path) => {
   };
   add(selectors);
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-  window.__livianoCookieSheet = sheet;
+  window.__neaCookieSheet = sheet;
 
   // A banner often locks the page's scroll while it waits for an answer;
   // once it is hidden nobody can answer, so the lock goes too. Only when a

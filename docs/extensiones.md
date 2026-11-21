@@ -1,14 +1,14 @@
-# Extensiones (RF-20)
+# Extensiones
 
-Liviano carga extensiones de Chrome a través de WebView2. Para eso usa
+Nea carga extensiones de Chrome a través de WebView2. Para eso usa
 `AreBrowserExtensionsEnabled` en el entorno y `AddBrowserExtension` /
 `GetBrowserExtensions` en el perfil. Este documento recoge lo que se probó en
-el runtime **157.0.4341.60**, lo que funciona y lo que no. Es la "limitación
-documentada" que pide la especificación (sección 8).
+el runtime **157.0.4341.60**, lo que funciona y lo que no. Es la lista de
+limitaciones conocidas.
 
 ## Costo en memoria
 
-El soporte de extensiones se decide **al crear el motor**. Por eso Liviano lo
+El soporte de extensiones se decide **al crear el motor**. Por eso Nea lo
 prende sólo si hay al menos una extensión instalada y habilitada. Sin
 extensiones el motor arranca igual que antes, sin ese flag y sin procesos de
 más.
@@ -44,9 +44,9 @@ worker y deja el informe en la página.
 | `storage.local`, `storage.sync` | Funciona |
 | `runtime` (mensajes content ↔ SW, popup ↔ SW) | Funciona |
 | `tabs.query` | Funciona |
-| `tabs.create` | Abre la pestaña: llega a Liviano como `NewWindowRequested` y Liviano la abre como pestaña propia. La promesa devuelve `undefined`. |
+| `tabs.create` | Abre la pestaña: llega a Nea como `NewWindowRequested` y Nea la abre como pestaña propia. La promesa devuelve `undefined`. |
 | `windows.getAll` | Funciona |
-| `bookmarks`, `history`, `downloads` | Responden, pero con los datos **del motor**, no con los de Liviano. Liviano guarda sus propios marcadores, historial y descargas, así que la extensión ve listas vacías o distintas. |
+| `bookmarks`, `history`, `downloads` | Responden, pero con los datos **del motor**, no con los de Nea. Nea guarda sus propios marcadores, historial y descargas, así que la extensión ve listas vacías o distintas. |
 | `sidePanel.getOptions` | Responde, pero no hay panel lateral donde dibujarlo |
 | `sidePanel.open` | Falla: pide gesto del usuario y no hay panel |
 | `identity.getRedirectURL` | Funciona |
@@ -55,7 +55,7 @@ worker y deja el informe en la página.
 | `nativeMessaging` | Funciona, con el host registrado en `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\<nombre>` o en `HKCU\Software\Google\Chrome\NativeMessagingHosts\<nombre>` |
 | `action.setBadgeText`, `action.openPopup` | Existen, pero no hay barra de herramientas: el badge no se ve y el popup no se abre |
 | `contextMenus`, `alarms`, `scripting.executeScript`, `notifications`, `cookies`, `webRequest`, `declarativeNetRequest`, `i18n`, `permissions`, `offscreen` | Funcionan |
-| Navegar a `chrome-extension://<id>/popup.html` u `options.html` desde Liviano | Funciona |
+| Navegar a `chrome-extension://<id>/popup.html` u `options.html` desde Nea | Funciona |
 
 ## Limitaciones y cómo se resolvieron
 
@@ -71,7 +71,7 @@ worker y deja el informe en la página.
     que no es un sitio web.
 - **Sin badge ni contador.** Lo que la extensión pinta con `action` no se ve.
 - **Datos del navegador.** Las extensiones de marcadores, historial o
-  descargas operan sobre el almacén del motor, no sobre el de Liviano.
+  descargas operan sobre el almacén del motor, no sobre el de Nea.
 - **Recargar.**
   - Se vuelve a llamar `AddBrowserExtension` con la misma carpeta. El motor
     la recarga en el lugar, con el mismo id, conserva su `storage` y toma la
@@ -80,18 +80,18 @@ worker y deja el informe en la página.
     eso no se usa.
   - Durante la recarga, Chromium manda las pestañas de la extensión a
     `chrome-search://local-ntp/local-ntp.html`, que en WebView2 es
-    `ERR_INVALID_URL`. Por eso Liviano guarda esas pestañas antes de recargar
+    `ERR_INVALID_URL`. Por eso Nea guarda esas pestañas antes de recargar
     y las devuelve a su dirección después.
 - **Deshabilitar** cierra las pestañas `chrome-extension://` de esa extensión
   y detiene su service worker.
 - **Ids.**
   - Una extensión sin empaquetar recibe un id derivado de la carpeta.
-  - En las de la Web Store, Liviano escribe la clave pública del paquete
+  - En las de la Web Store, Nea escribe la clave pública del paquete
     (`key`) en el `manifest.json` desempaquetado. Así el motor usa el id de
     la tienda, y las páginas y el `storage` coinciden con los de Chrome.
 - **Extensiones internas del motor.** El Microsoft Clipboard Extension y el
-  visor de PDF vienen con WebView2 y Liviano nunca las toca. Sólo se quitan
-  del motor los ids que Liviano mismo registró y la persona quitó.
+  visor de PDF vienen con WebView2 y Nea nunca las toca. Sólo se quitan
+  del motor los ids que Nea mismo registró y la persona quitó.
 
 ## Instalar desde la Chrome Web Store
 
@@ -99,10 +99,10 @@ worker y deja el informe en la página.
    - `chromewebstore.google.com/detail/<slug>/<id>`
    - `chrome.google.com/webstore/detail/<slug>/<id>`
 
-   Liviano ofrece la fila "Instalar extensión de la Chrome Web Store". En
+   Nea ofrece la fila "Instalar extensión de la Chrome Web Store". En
    una página de la tienda, el menú de extensiones ofrece además "Instalar la
    extensión de esta página".
-2. Liviano descarga el CRX3 de `clients2.google.com/service/update2/crx`, con
+2. Nea descarga el CRX3 de `clients2.google.com/service/update2/crx`, con
    `prodversion` igual a la versión del runtime instalado.
 3. Verifica el paquete antes de escribir nada:
    - Formato `Cr24` versión 3.
@@ -111,7 +111,7 @@ worker y deja el informe en la página.
    - La firma de la Web Store, cuyo hash de clave pública es el `kPublisherKeyHash`
      de Chromium.
    - Que el id coincida con el del enlace.
-4. Descomprime en `%APPDATA%\Liviano\extensions\<id>`. El zip se lee a mano:
+4. Descomprime en `%APPDATA%\Nea\extensions\<id>`. El zip se lee a mano:
    rechaza rutas con `..` o absolutas y entradas cifradas o zip64. Después
    llama a `AddBrowserExtension`.
 5. Si el motor arrancó sin soporte de extensiones, queda registrada y se carga

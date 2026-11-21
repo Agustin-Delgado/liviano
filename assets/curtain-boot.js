@@ -16,5 +16,5 @@
     }
   }
   document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet];
-  window.__livianoCurtainSheet = sheet;
+  window.__neaCurtainSheet = sheet;
 })();

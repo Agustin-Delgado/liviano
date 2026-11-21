@@ -3,9 +3,9 @@
 //! wherever they are when the target changes, and one frame clock for the
 //! whole UI thread.
 //!
-//! The curves and durations are the ones celagem-svelte and its component
-//! library use (`docs/diseno.md` lists each one with the file it comes
-//! from), so a popover, a menu or a toast moves here as it moves there.
+//! The curves and durations come from a web design system and its
+//! component library (`docs/diseno.md` lists each one), so a popover, a
+//! menu or a toast moves here as it moves on the web.
 //!
 //! The clock is a single thread timer that exists only while something
 //! asked for a frame: every request is for the *next* frame, and a window
@@ -264,7 +264,7 @@ pub mod specs {
 /// Pixels a toast travels while it fades.
 pub const TOAST_RISE: f32 = 6.0;
 /// How far the field travels as it comes and goes, toward the edge it
-/// hangs from: celagem's popovers grow 2 % from that edge, about this much
+/// hangs from: the design system's popovers grow 2 % from that edge, about this much
 /// on the field's height.
 pub const POPOVER_SLIDE: f32 = 4.0;
 /// The size the field grows from and shrinks to (macOS panels: about 0.96).
@@ -441,7 +441,6 @@ impl<K: Eq + Hash + Copy> Levels<K> {
     pub fn prune(&mut self, now: Instant) {
         self.map.retain(|_, t| t.moving(now) || t.target() != 0.0);
     }
-
 }
 
 // ---------- the frame clock ----------
@@ -493,7 +492,11 @@ fn fine_timer(on: bool) {
     WINMM.with(|w| {
         if let Some((_, begin, end)) = w {
             unsafe {
-                if on { begin(1) } else { end(1) };
+                if on {
+                    begin(1)
+                } else {
+                    end(1)
+                };
             }
         }
     });
@@ -690,4 +693,3 @@ pub fn report_frame(took: Duration) {
 pub fn stats() -> Stats {
     CLOCK.with(|c| c.borrow().stats)
 }
-

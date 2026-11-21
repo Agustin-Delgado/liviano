@@ -1,4 +1,4 @@
-//! Hiding elements per site (RF-11). A picker in the page turns a click into
+//! Hiding elements per site. A picker in the page turns a click into
 //! a CSS selector; the app keeps the selectors per host in curtain.json and
 //! hands every view one script, run as each document is created, that hides
 //! them before the page paints. The page talks back through `postMessage`,
@@ -249,7 +249,12 @@ fn menu_text(text: &str) -> HSTRING {
 fn choose(owner: HWND, (x, y): (i32, i32), host: &str, rules: &[Rule]) -> Option<Choice> {
     unsafe {
         let menu = CreatePopupMenu().ok()?;
-        let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, &menu_text(&format!("Oculto en {host}: elegí qué volver a mostrar")));
+        let _ = AppendMenuW(
+            menu,
+            MF_STRING | MF_GRAYED,
+            0,
+            &menu_text(&format!("Oculto en {host}: elegí qué volver a mostrar")),
+        );
         let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
         for (index, rule) in rules.iter().enumerate() {
             let text = if rule.label.is_empty() { &rule.selector } else { &rule.label };
@@ -330,7 +335,13 @@ impl Curtain {
         inject::execute(&web.webview, PICK);
     }
 
-    pub fn on_message<'a>(&mut self, tab: u64, source: &str, json: &str, live: impl Iterator<Item = (u64, &'a WebTab)>) {
+    pub fn on_message<'a>(
+        &mut self,
+        tab: u64,
+        source: &str,
+        json: &str,
+        live: impl Iterator<Item = (u64, &'a WebTab)>,
+    ) {
         match Message::parse(json) {
             Some(Message::Done) => {
                 self.picking.remove(&tab);
@@ -350,7 +361,13 @@ impl Curtain {
     /// Ctrl+Shift+U: lists what is hidden on the tab's site and puts back
     /// what the person picks, on every open page of the site at once. The
     /// caller gives the focus back to the page afterwards.
-    pub fn show_hidden<'a>(&mut self, owner: HWND, at: (i32, i32), web: &WebTab, live: impl Iterator<Item = (u64, &'a WebTab)>) {
+    pub fn show_hidden<'a>(
+        &mut self,
+        owner: HWND,
+        at: (i32, i32),
+        web: &WebTab,
+        live: impl Iterator<Item = (u64, &'a WebTab)>,
+    ) {
         let Some(host) = host_of(&web.source()) else {
             inject::execute(&web.webview, &inject::toast_script("En esta página no se pueden ocultar elementos"));
             return;
@@ -377,12 +394,11 @@ impl Curtain {
         let apply = host.map(|h| self.store.apply_script(h));
         for (tab, web) in live {
             register(&web.webview, tab, boot.as_deref());
-            if let (Some(host), Some(apply)) = (host, &apply) {
-                if host_of(&web.source()).as_deref() == Some(host) {
-                    inject::execute(&web.webview, apply);
-                }
+            if let (Some(host), Some(apply)) = (host, &apply)
+                && host_of(&web.source()).as_deref() == Some(host)
+            {
+                inject::execute(&web.webview, apply);
             }
         }
     }
 }
-

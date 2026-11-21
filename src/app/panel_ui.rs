@@ -79,7 +79,10 @@ fn page_label(title: &str, url: &str) -> String {
 /// The local time zone, as seconds east of UTC (from the clock itself, so
 /// summer time is included).
 fn local_offset() -> i64 {
-    use windows::Win32::{Foundation::SYSTEMTIME, System::SystemInformation::{GetLocalTime, GetSystemTime}};
+    use windows::Win32::{
+        Foundation::SYSTEMTIME,
+        System::SystemInformation::{GetLocalTime, GetSystemTime},
+    };
     let seconds = |t: SYSTEMTIME| {
         panels::days_from_civil(t.wYear as i64, t.wMonth as u32, t.wDay as u32) * 86_400
             + t.wHour as i64 * 3600
@@ -154,7 +157,10 @@ impl App {
                 let found = self.panels.bookmarks.as_ref().map(|b| b.search(query)).unwrap_or_default();
                 if found.is_empty() {
                     rows.push(info(if query.trim().is_empty() {
-                        format!("Todavía no hay marcadores. {} marca la página actual.", self.chord_hint(Command::ToggleBookmark))
+                        format!(
+                            "Todavía no hay marcadores. {} marca la página actual.",
+                            self.chord_hint(Command::ToggleBookmark)
+                        )
                     } else {
                         "Sin resultados".to_string()
                     }));
@@ -182,11 +188,16 @@ impl App {
                     });
                 }
                 if found.is_empty() {
-                    rows.push(info(if query.trim().is_empty() { "El historial está vacío" } else { "Sin resultados" }));
+                    rows.push(info(if query.trim().is_empty() {
+                        "El historial está vacío"
+                    } else {
+                        "Sin resultados"
+                    }));
                 }
                 let (now, offset) = (unix_now(), local_offset());
                 rows.extend(found.into_iter().map(|e| {
-                    let label = format!("{}    {}", page_label(&e.title, &e.url), panels::format_when(e.last, now, offset));
+                    let label =
+                        format!("{}    {}", page_label(&e.title, &e.url), panels::format_when(e.last, now, offset));
                     (label, Row::Panel(Item::Url(e.url.clone())))
                 }));
             }
@@ -222,7 +233,8 @@ impl App {
             .collect();
         let limit = history.len().max(rows.len());
         for row in history {
-            let duplicate = matches!(&row.1, Row::Go(url) if rows.iter().any(|(_, r)| matches!(r, Row::Go(u) if u == url)));
+            let duplicate =
+                matches!(&row.1, Row::Go(url) if rows.iter().any(|(_, r)| matches!(r, Row::Go(u) if u == url)));
             if !duplicate {
                 rows.push(row);
             }
@@ -234,7 +246,10 @@ impl App {
     /// Enter on a panel. With nothing selected, the first entry is taken.
     pub(super) fn panel_submit(&mut self, kind: PanelKind, row: Option<usize>, shift: bool) {
         let chosen = row.and_then(|r| self.rows.get(r)).cloned().or_else(|| {
-            self.rows.iter().find(|r| matches!(r, Row::Panel(Item::Url(_) | Item::Download(_) | Item::Account(_)))).cloned()
+            self.rows
+                .iter()
+                .find(|r| matches!(r, Row::Panel(Item::Url(_) | Item::Download(_) | Item::Account(_))))
+                .cloned()
         });
         let Some(Row::Panel(item)) = chosen else { return };
         match item {
@@ -272,10 +287,10 @@ impl App {
         let Some(Row::Panel(item)) = self.rows.get(row).cloned() else { return };
         match item {
             Item::Url(url) if kind == PanelKind::Bookmarks => {
-                if let Some(bookmarks) = &mut self.panels.bookmarks {
-                    if bookmarks.remove(&url) {
-                        let _ = bookmarks.save();
-                    }
+                if let Some(bookmarks) = &mut self.panels.bookmarks
+                    && bookmarks.remove(&url)
+                {
+                    let _ = bookmarks.save();
                 }
             }
             Item::Url(url) => {

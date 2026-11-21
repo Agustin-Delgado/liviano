@@ -10,7 +10,8 @@ use windows::{
         Foundation::{HLOCAL, LocalFree, NTSTATUS},
         Security::Cryptography::{
             BCRYPT_AES_GCM_ALG_HANDLE, BCRYPT_ALG_HANDLE, BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO,
-            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_KEY_HANDLE, CRYPT_INTEGER_BLOB, CRYPTPROTECT_UI_FORBIDDEN,
+            BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO_VERSION, BCRYPT_KEY_HANDLE, CRYPT_INTEGER_BLOB,
+            CRYPTPROTECT_UI_FORBIDDEN,
         },
     },
     core::{BOOL, PWSTR, w},
@@ -94,9 +95,20 @@ type DpapiFn = unsafe extern "system" fn(
     u32,
     *mut CRYPT_INTEGER_BLOB,
 ) -> BOOL;
-type GenerateKeyFn = unsafe extern "system" fn(BCRYPT_ALG_HANDLE, *mut BCRYPT_KEY_HANDLE, *mut u8, u32, *const u8, u32, u32) -> NTSTATUS;
-type CipherFn =
-    unsafe extern "system" fn(BCRYPT_KEY_HANDLE, *const u8, u32, *const c_void, *mut u8, u32, *mut u8, u32, *mut u32, u32) -> NTSTATUS;
+type GenerateKeyFn =
+    unsafe extern "system" fn(BCRYPT_ALG_HANDLE, *mut BCRYPT_KEY_HANDLE, *mut u8, u32, *const u8, u32, u32) -> NTSTATUS;
+type CipherFn = unsafe extern "system" fn(
+    BCRYPT_KEY_HANDLE,
+    *const u8,
+    u32,
+    *const c_void,
+    *mut u8,
+    u32,
+    *mut u8,
+    u32,
+    *mut u32,
+    u32,
+) -> NTSTATUS;
 type DestroyKeyFn = unsafe extern "system" fn(BCRYPT_KEY_HANDLE) -> NTSTATUS;
 
 /// DPAPI and AES-GCM, loaded for one import.
@@ -232,4 +244,3 @@ impl Crypto {
         self.aes_gcm_decrypt(key, nonce, ciphertext, tag)
     }
 }
-

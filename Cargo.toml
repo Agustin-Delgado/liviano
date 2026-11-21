@@ -1,9 +1,10 @@
 [package]
-name = "liviano"
+name = "nea"
 version = "0.1.0"
 edition = "2024"
-description = "Navegador liviano para Windows: una fila de pestañas, un campo y la página."
+description = "Navegador para Windows: una fila de pestañas, un campo y la página."
 license = "MIT"
+repository = "https://github.com/Agustin-Delgado/nea"
 
 [dependencies]
 ed25519-compact = { version = "2.6.1", default-features = false }

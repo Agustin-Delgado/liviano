@@ -1,0 +1,22 @@
+# Ejemplo, sin publicar (ver Nea.Nea.yaml).
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+PackageIdentifier: Nea.Nea
+PackageVersion: 0.1.0
+PackageLocale: es-AR
+Publisher: Nea
+PublisherUrl: https://github.com/Agustin-Delgado/nea
+PackageName: Nea
+PackageUrl: https://github.com/Agustin-Delgado/nea
+License: MIT
+LicenseUrl: https://github.com/Agustin-Delgado/nea/blob/main/LICENSE
+ShortDescription: Navegador para Windows: una fila de pestañas, un campo y la página.
+Description: |-
+  Navegador pequeño y silencioso sobre WebView2, con interfaz Win32 nativa y la
+  memoria como prioridad. Sin cuentas, sin sincronización y sin telemetría.
+Moniker: nea
+Tags:
+  - browser
+  - navegador
+  - webview2
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

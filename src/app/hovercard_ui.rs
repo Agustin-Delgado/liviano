@@ -13,8 +13,7 @@
 use std::cell::RefCell;
 
 use webview2_com::{
-    CapturePreviewCompletedHandler,
-    Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
+    CapturePreviewCompletedHandler, Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
 };
 use windows::Win32::{
     Foundation::{HWND, POINT},
@@ -103,10 +102,10 @@ impl App {
                     let _ = KillTimer(Some(self.hwnd), TIMER_CARD);
                 }
             }
-            if s.shown.take().is_some() {
-                if let Some(window) = &s.window {
-                    window.hide();
-                }
+            if s.shown.take().is_some()
+                && let Some(window) = &s.window
+            {
+                window.hide();
             }
         });
     }
@@ -117,7 +116,12 @@ impl App {
             return;
         };
         let suspended = matches!(&tab.live, Live::Ready(web) if web.suspended);
-        let status = hovercard::status_line(tab.private, matches!(tab.live, Live::Asleep), suspended, self.keeps_awake(&tab.url));
+        let status = hovercard::status_line(
+            tab.private,
+            matches!(tab.live, Live::Asleep),
+            suspended,
+            self.keeps_awake(&tab.url),
+        );
         let on_screen = self.visible_tabs().contains(&id);
         let width = (hovercard::THUMB_WIDTH as f32 * self.scale).round() as u32;
         let thumb = (self.settings.hover_preview && !on_screen)
@@ -181,7 +185,7 @@ impl App {
         }
     }
 
-    /// For scripts (RF-23): the card up, and what the pictures weigh.
+    /// For scripts: the card up, and what the pictures weigh.
     pub(super) fn card_state(&self) -> serde_json::Value {
         let shown = STATE.with(|s| s.borrow().shown);
         let (pictures, bytes) = THUMBS.with(|t| {

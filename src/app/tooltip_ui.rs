@@ -1,5 +1,5 @@
 //! Tooltips for the strip's buttons that have no words (the gear, +, the
-//! puzzle piece), with HKUI's timing: the pointer rests 600 ms before one
+//! puzzle piece), with the design system's timing: the pointer rests 600 ms before one
 //! opens, it closes 100 ms after the pointer leaves, and for 300 ms after
 //! one closed the next opens at once, so running the pointer along the
 //! buttons reads each one without waiting again.
@@ -41,10 +41,10 @@ unsafe extern "system" fn on_open(hwnd: HWND, _: u32, id: usize, _: u32) {
         let _ = KillTimer(Some(hwnd), id);
     }
     with_app(|app| {
-        if let Some(hit) = STATE.with(|s| s.borrow_mut().waiting.take()) {
-            if app.hover == Some(hit) {
-                app.show_tip(hit);
-            }
+        if let Some(hit) = STATE.with(|s| s.borrow_mut().waiting.take())
+            && app.hover == Some(hit)
+        {
+            app.show_tip(hit);
         }
     });
 }

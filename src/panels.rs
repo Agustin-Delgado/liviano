@@ -122,4 +122,3 @@ pub fn format_when(at: u64, now: u64, offset: i64) -> String {
         }
     }
 }
-

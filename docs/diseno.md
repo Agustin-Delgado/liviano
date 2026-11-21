@@ -1,58 +1,57 @@
 # Diseño y movimiento
 
-La interfaz nativa habla el idioma de celagem-svelte. En el código, los
-tokens están en `src/design.rs` y los movimientos en `src/anim.rs`
-(`curves` y `specs`). Las rutas de **celagem** son relativas a
-`celagem-svelte/`. Las de **HKUI** son relativas a
-`svelte-components/packages/ui/`.
+La interfaz nativa sigue el lenguaje de un sistema de diseño web: grises
+neutros, un índigo para lo activo, siete pasos de tipo y nada más pesado que
+medium. En el código, los tokens están en `src/design.rs` y los movimientos en
+`src/anim.rs` (`curves` y `specs`).
 
 ## Tokens
 
-| Token | Valor en Liviano | Fuente |
-|---|---|---|
-| Lienzo de la página / del campo | `canvas` / `field` #FAFAFA | celagem `src/lib/styles/brand.css` (`--color-canvas`, oklch → sRGB) |
-| Fondo de la ventana (shell) | `chrome` #F5F5F5 | celagem `brand.css` (`--color-surface-muted`) |
-| Hover / fila | #F0F0F0 / #F3F3F3 | celagem `brand.css` (`--color-hover`, `--color-row-hover`) |
-| Tinta | ink #171717, quiet #525252, muted #696969, subtle #929292 | celagem `brand.css` (`--color-ink*`) |
-| Línea | #E8E8E8, fuerte #D7D7D7 | celagem `brand.css` (`--color-line*`) |
-| Marca (índigo) | #6468F0, hover #5756E4, texto encima #FCFCFC | celagem `brand.css` (`--color-brand`, `-hover`, `on-brand`) |
-| Tooltip | fondo tinta #171717, texto #FAFAFA, caption 11 px medium, padding 8×2, separación 8 px | celagem `src/lib/components/tooltip/`; HKUI `src/lib/tooltip/` |
-| Tipo | caption 11, small 12, body 13, emphasis 14; peso máximo 500 | celagem `brand.css` (`--text-*`) y la regla «Medium is the heaviest weight» de su `CLAUDE.md` |
-| Esquinas | mark 2, chip 4, control 6, field 8, panel 12 | celagem `brand.css` (`--radius-*`) |
-| Sombras | `shadow-card`: anillo 1 px negro/0.08 + caída 0 2 6 −2 negro/0.12; halo de foco brand/0.18 | celagem `brand.css` (`--shadow-card`, `--shadow-focus`) |
-| Botón | alto 26 px, esquina field, primario de marca, secundario con contorno | celagem `src/lib/components/button/recipe.ts` |
-| Casilla | esquina 4, borde `line-strong`, hover brand/40, marcada en brand con tilde blanco | celagem `src/lib/components/checkbox/` (receta de HKUI) |
-| Grupos de pestañas | nueve tonos: gris, azul, rojo, amarillo, verde, rosa, violeta, cian y naranja; en claro el paso `ink` del tono, en oscuro el `solid` (el relleno, ≥ 3:1 sobre la tira). El nombre se escribe en el color del grupo, llevado hacia la tinta un 20 % (25 % en oscuro), sobre un tinte del tono al 10 % (14 % en oscuro): ≥ 4.5:1 sobre la tira, sobre el tinte y con hover (lo comprueba un test). Arriba: etiqueta de alto 22, esquina control, texto small (12) medium, como el título de una pestaña; sin nombre, un punto de 6 px; línea de 1.5 px. Al costado: fila de 26, punto de 6 px, nombre (o el sitio de la primera pestaña), guía de 1 px y pestañas corridas 12 px | celagem `brand.css` (`--color-tone-*`) |
-| Botones de la ventana | los glifos de Windows (guion, cuadrado, cruz) en trazo fino de 9 px, en zonas de 30 px a 4 px del borde izquierdo; al pasar el puntero, un fondo de 26 × 24 con el radio de control (`tab_hover`; rojo #C42B1C con tinta blanca bajo cerrar); `ink_muted` en reposo, `ink_asleep` con la ventana inactiva | Windows 11, más chico |
-| Atrás, adelante, recargar | botones de 28×28, fondo fantasma con hover; apagados en `subtle` sin hover; trazo de 1.5 px | celagem `button/recipe.ts` (variante `ghost`) |
+| Token | Valor en Nea |
+|---|---|
+| Lienzo de la página / del campo | `canvas` / `field` #FAFAFA |
+| Fondo de la ventana (shell) | `chrome` #F5F5F5 |
+| Hover / fila | #F0F0F0 / #F3F3F3 |
+| Tinta | ink #171717, quiet #525252, muted #696969, subtle #929292 |
+| Línea | #E8E8E8, fuerte #D7D7D7 |
+| Marca (índigo) | #6468F0, hover #5756E4, texto encima #FCFCFC |
+| Tooltip | fondo tinta #171717, texto #FAFAFA, caption 11 px medium, padding 8×2, separación 8 px |
+| Tipo | caption 11, small 12, body 13, emphasis 14; peso máximo 500 |
+| Esquinas | mark 2, chip 4, control 6, field 8, panel 12 |
+| Sombras | `shadow-card`: anillo 1 px negro/0.08 + caída 0 2 6 −2 negro/0.12; halo de foco brand/0.18 |
+| Botón | alto 26 px, esquina field, primario de marca, secundario con contorno |
+| Casilla | esquina 4, borde `line-strong`, hover brand/40, marcada en brand con tilde blanco |
+| Grupos de pestañas | nueve tonos: gris, azul, rojo, amarillo, verde, rosa, violeta, cian y naranja; en claro el paso `ink` del tono, en oscuro el `solid` (el relleno, ≥ 3:1 sobre la tira). El nombre se escribe en el color del grupo, llevado hacia la tinta un 20 % (25 % en oscuro), sobre un tinte del tono al 10 % (14 % en oscuro): ≥ 4.5:1 sobre la tira, sobre el tinte y con hover (lo comprueba un test). Arriba: etiqueta de alto 22, esquina control, texto small (12) medium, como el título de una pestaña; sin nombre, un punto de 6 px; línea de 1.5 px. Al costado: fila de 26, punto de 6 px, nombre (o el sitio de la primera pestaña), guía de 1 px y pestañas corridas 12 px |
+| Botones de la ventana | los glifos de Windows (guion, cuadrado, cruz) de 8 px en trazo de 1 px sobre píxeles enteros, en una cápsula de tres segmentos de 28 × 28 a 6 px del borde izquierdo, radio 7, fondo `chrome` 5 % hacia `ink`; 12 px hasta Atrás; al pasar el puntero el segmento baja otro 6 % (11 % apretado), rojo #C42B1C con tinta blanca bajo cerrar, y los extremos conservan la curva de la cápsula; `ink_muted` en reposo, `ink_asleep` con la ventana inactiva |
+| Atrás, adelante, recargar | botones de 28×28, fondo fantasma con hover; apagados en `subtle` sin hover; trazo de 1.5 px |
 
-El tema oscuro es nuestro, porque celagem no tiene. Mantiene los mismos
+El tema oscuro es nuestro, porque el sistema de diseño no tiene. Mantiene los mismos
 pasos y roles, invertidos. El índigo sube a #818CF9 para leerse sobre
 fondo oscuro.
 
-Algunas cosas de Search no chocan con celagem y quedaron igual:
+Algunas cosas de Search no chocan con ese lenguaje y quedaron igual:
 
 - las pestañas como fondos suaves sobre la tira;
 - el violeta de la pestaña privada.
 
 ## Movimiento
 
-| Qué se mueve | Duración y curva | Fuente |
-|---|---|---|
-| Hover y press de botones, pestañas y filas | 150 ms, `ease-out` (0, 0, 0.2, 1) | celagem `button/recipe.ts` (`transition-colors duration-150`) |
-| Campo único y su lista | Entra como un panel de macOS (Spotlight): crece desde 0,96 con el resorte en 320 ms (casi todo en los primeros 100 ms) y el fundido llega en 140 ms, `ease-out`. Sale en 150 ms, `ease`: se encoge a 0,96 y se desvanece. Al medio crece desde su centro; arriba y abajo, desde el borde del que cuelga, con 4 px de viaje | resorte de celagem `toast/styles.css`; `zoom-in-95`/`zoom-out-95` de `dialog/` y `popover/motion.ts` (origen del lado del disparador) |
-| Menú | 120 ms entrada, 100 ms salida, `ease` | celagem `src/lib/components/menu/recipe.ts` |
-| Ajustes (diálogo) | 100 ms, `ease` | celagem `src/lib/components/dialog/recipe.ts` |
-| Tooltip | demora 600 ms, entrada 100 ms, salida 80 ms; cierre tras 100 ms; si otro tooltip cerró hace menos de 300 ms, abre sin demora | HKUI `src/lib/tooltip/root/tooltip-root.svelte`, `tooltip-group.ts`, `provider/tooltip-provider.svelte` |
-| Toast y barra de contraseñas | entrada 396 ms con resorte `linear()` (pasa a 1.038 y asienta), sube 6 px; salida 400 ms | celagem `src/lib/components/toast/styles.css` (`--toast-spring-easing`), `src/lib/motion/spring.ts` |
-| Línea de foco de la vista dividida | 200 ms, `ease-out` | celagem `src/lib/components/tabs/indicator.svelte` |
-| Fondo de la pestaña activa al cambiar de pestaña | 140 ms, `--ease-out-strong` | más corto que el indicador de celagem: a 200 ms, cruzar toda la tira se sentía lento |
-| Vecinas que hacen lugar (reordenar, abrir, cerrar) | 160 ms y 200 ms, `--ease-out-strong` (0.23, 1, 0.32, 1) | celagem `brand.css` |
-| Columna de pestañas que vuelve | 250 ms, `--ease-move` (0.77, 0, 0.175, 1) | celagem `brand.css`; `app-sidebar/rail-module.svelte` |
-| Grupo que se contrae o se expande | 220 ms, `--ease-out-strong`: sus pestañas se pliegan hacia la etiqueta (o salen de ella) mientras se desvanecen, la flecha gira, la línea del grupo se apaga y todo lo de al lado acompaña con la misma curva. Si la pestaña activa queda adentro, su fondo no viaja: aparece con un fundido en la que la reemplaza | celagem `src/lib/components/collapsible/` (alto del panel); la curva fuerte hace casi todo el camino al principio |
-| Etiqueta de un grupo nuevo | 200 ms, `--ease-out-strong`, se despliega y aparece con un fundido, como una pestaña que se abre | celagem `brand.css` |
-| Tilde de la casilla | 75 ms | HKUI, receta del checkbox |
-| Anillo de carga | 1 vuelta/s, a 20 cuadros/s | `animate-spin` de Tailwind |
+| Qué se mueve | Duración y curva |
+|---|---|
+| Hover y press de botones, pestañas y filas | 150 ms, `ease-out` (0, 0, 0.2, 1) |
+| Campo único y su lista | Entra como un panel de macOS (Spotlight): crece desde 0,96 con el resorte en 320 ms (casi todo en los primeros 100 ms) y el fundido llega en 140 ms, `ease-out`. Sale en 150 ms, `ease`: se encoge a 0,96 y se desvanece. Al medio crece desde su centro; arriba y abajo, desde el borde del que cuelga, con 4 px de viaje |
+| Menú | 120 ms entrada, 100 ms salida, `ease` |
+| Ajustes (diálogo) | 100 ms, `ease` |
+| Tooltip | demora 600 ms, entrada 100 ms, salida 80 ms; cierre tras 100 ms; si otro tooltip cerró hace menos de 300 ms, abre sin demora |
+| Toast y barra de contraseñas | entrada 396 ms con resorte `linear()` (pasa a 1.038 y asienta), sube 6 px; salida 400 ms |
+| Línea de foco de la vista dividida | 200 ms, `ease-out` |
+| Fondo de la pestaña activa al cambiar de pestaña | 140 ms, `--ease-out-strong` (a 200 ms, cruzar toda la tira se sentía lento) |
+| Vecinas que hacen lugar (reordenar, abrir, cerrar) | 160 ms y 200 ms, `--ease-out-strong` (0.23, 1, 0.32, 1) |
+| Columna de pestañas que vuelve | 250 ms, `--ease-move` (0.77, 0, 0.175, 1) |
+| Grupo que se contrae o se expande | 220 ms, `--ease-out-strong`: sus pestañas se pliegan hacia la etiqueta (o salen de ella) mientras se desvanecen, la flecha gira, la línea del grupo se apaga y todo lo de al lado acompaña con la misma curva. Si la pestaña activa queda adentro, su fondo no viaja: aparece con un fundido en la que la reemplaza |
+| Etiqueta de un grupo nuevo | 200 ms, `--ease-out-strong`, se despliega y aparece con un fundido, como una pestaña que se abre |
+| Tilde de la casilla | 75 ms |
+| Anillo de carga | 1 vuelta/s, a 20 cuadros/s, como `animate-spin` de Tailwind |
 
 Las curvas CSS se resuelven como lo hace el navegador:
 
@@ -120,13 +119,13 @@ Si Windows tiene apagadas las animaciones de la interfaz
   corta no deja cuadros intermedios. Las tiras `campo2-abrir-*` y
   `campo2-cerrar-*` se grabaron con las duraciones del campo multiplicadas
   por 8, en un build sólo para eso.
-- `LIVIANO_BENCH=1` agrega al `state` del pipe la clave `anim`, con
+- `NEA_BENCH=1` agrega al `state` del pipe la clave `anim`, con
   cuadros, peor cuadro y cuadros de más de 16 ms.
 
 ## Logo
 
 Una pluma blanca sobre un cuadrado de esquinas redondeadas en grafito
-(de #51515C arriba a #27272F abajo). La pluma dice «liviano» sin palabras
+(de #51515C arriba a #27272F abajo). La pluma dice «liviandad» sin palabras
 y, inclinada hacia arriba, también dice que avanza. El grafito es neutro
 a propósito: el índigo queda para lo activo dentro de la ventana.
 
@@ -135,13 +134,13 @@ La pluma no está dibujada a mano. Sale de unos pocos números en
 él, el ángulo de las barbas y los lugares donde las barbas se separan.
 
 - `python -I tools/logo.py` es la fuente y escribe todo lo demás:
-  `assets/logo/liviano.svg` (claro), `liviano-dark.svg` (oscuro: pluma
-  blanca y plata sobre casi negro), `liviano-mono.svg` (la pluma sola en
-  `currentColor`), `liviano.ico` (16 a 64 en BMP, 256 en PNG) y las
+  `assets/logo/nea.svg` (claro), `nea-dark.svg` (oscuro: pluma
+  blanca y plata sobre casi negro), `nea-mono.svg` (la pluma sola en
+  `currentColor`), `nea.ico` (16 a 64 en BMP, 256 en PNG) y las
   vistas previas de `docs/logo/`. Los SVG no se editan.
 - Por debajo de 48 px las barbas y los cortes finos se empastan, así que
   los tamaños chicos salen de una pluma más simple (tabla `DETAIL`): más
   grande dentro del cuadrado, sin barbas, con un solo corte profundo y el
   raquis más grueso.
-- `build.rs` embebe el `.ico` como recurso 1 con `liviano.rc`. El exe
+- `build.rs` embebe el `.ico` como recurso 1 con `nea.rc`. El exe
   lleva sólo el claro: Windows no cambia el ícono de un exe con el tema.

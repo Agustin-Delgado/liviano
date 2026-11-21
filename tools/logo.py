@@ -1,4 +1,4 @@
-"""Builds Liviano's icon. This file is the source: nothing is drawn by hand.
+"""Builds Nea's icon. This file is the source: nothing is drawn by hand.
 
 The feather is made from a few numbers: a curved shaft, the width of each
 vane along it, the angle of the barbs and the places where the barbs part.
@@ -6,10 +6,10 @@ The same numbers give the SVG files and every size of the .ico, so the two
 can never differ.
 
 Outputs:
-  assets/logo/liviano.svg        the icon, light: a white feather on graphite
-  assets/logo/liviano-dark.svg   the icon, dark: a silver feather on near-black
-  assets/logo/liviano-mono.svg   the feather alone, in currentColor
-  assets/logo/liviano.ico        16, 20, 24, 32, 40, 48, 64 (BMP) and 256 (PNG)
+  assets/logo/nea.svg        the icon, light: a white feather on graphite
+  assets/logo/nea-dark.svg   the icon, dark: a silver feather on near-black
+  assets/logo/nea-mono.svg   the feather alone, in currentColor
+  assets/logo/nea.ico        16, 20, 24, 32, 40, 48, 64 (BMP) and 256 (PNG)
   docs/logo/*.png                previews
 
 Below 48 px the fine parts would turn to grey mud, so the small sizes are
@@ -298,7 +298,7 @@ def svg(look):
         return f'<stop offset="0" stop-color="{pair[0]}"/><stop offset="1" stop-color="{pair[1]}"/>'
 
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <title>Liviano</title>
+  <title>Nea</title>
   <!-- Written by tools/logo.py. Change the numbers there, not this file. -->
   <defs>
     <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">{stops(look["tile"])}</linearGradient>
@@ -324,7 +324,7 @@ def svg_mono():
     parts = feather({**FULL, "barbs": False})
     (cx, cy), r = parts["cap"]
     return f"""<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256">
-  <title>Liviano</title>
+  <title>Nea</title>
   <!-- The feather alone, in the colour of the text around it. Written by tools/logo.py. -->
   <g fill="currentColor">
     <path d="{path(parts["left"])}"/>
@@ -395,13 +395,13 @@ def stacked(sheets):
 
 
 def build():
-    (LOGO / "liviano.svg").write_text(svg(LIGHT), encoding="utf-8", newline="\n")
-    (LOGO / "liviano-dark.svg").write_text(svg(DARK), encoding="utf-8", newline="\n")
-    (LOGO / "liviano-mono.svg").write_text(svg_mono(), encoding="utf-8", newline="\n")
+    (LOGO / "nea.svg").write_text(svg(LIGHT), encoding="utf-8", newline="\n")
+    (LOGO / "nea-dark.svg").write_text(svg(DARK), encoding="utf-8", newline="\n")
+    (LOGO / "nea-mono.svg").write_text(svg_mono(), encoding="utf-8", newline="\n")
 
     light = {size: render(size, LIGHT) for size in ICO_SIZES}
     dark = {size: render(size, DARK) for size in ICO_SIZES}
-    write_ico([light[s] for s in ICO_SIZES], LOGO / "liviano.ico")
+    write_ico([light[s] for s in ICO_SIZES], LOGO / "nea.ico")
 
     DOCS.mkdir(parents=True, exist_ok=True)
     light[256].save(DOCS / "logo-256.png")

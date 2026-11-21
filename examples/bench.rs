@@ -1,4 +1,4 @@
-//! Client of the script control pipe (RF-23), and the memory meter the
+//! Client of the script control pipe, and the memory meter the
 //! measuring script uses for Edge. It shares the protocol and the meter with
 //! the app, file for file.
 //!
@@ -88,7 +88,9 @@ fn action(args: &Args) -> Result<Action, String> {
         "discard" => Action::Discard,
         "shield" => Action::Shield,
         "quit" => Action::Quit,
-        "open" => Action::Open { url: word(1).ok_or("open necesita una dirección")?, background: args.has("--background") },
+        "open" => {
+            Action::Open { url: word(1).ok_or("open necesita una dirección")?, background: args.has("--background") }
+        }
         "wait" => Action::Wait { tab, timeout_ms: args.number("--timeout")? },
         "text" => Action::Text { tab },
         "screenshot" => Action::Screenshot { tab, path: args.value("--path").map(str::to_string) },
@@ -105,7 +107,7 @@ fn action(args: &Args) -> Result<Action, String> {
 
 fn default_pipe() -> String {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
-    protocol::pipe_name(&user, std::env::var("LIVIANO_BENCH_PIPE").ok().as_deref())
+    protocol::pipe_name(&user, std::env::var("NEA_BENCH_PIPE").ok().as_deref())
 }
 
 /// The app may still be starting, or busy with another client: keep trying.
@@ -172,7 +174,9 @@ fn main() -> ExitCode {
     }
     let lines: Vec<String> = match args.positional.first().map(String::as_str) {
         Some("raw") => vec![args.positional.get(1).cloned().unwrap_or_default()],
-        Some("stdin") => std::io::stdin().lock().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect(),
+        Some("stdin") => {
+            std::io::stdin().lock().lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).collect()
+        }
         _ => match action(&args) {
             Ok(action) => vec![serde_json::to_string(&Request { id: json!(1), action }).unwrap_or_default()],
             Err(message) => {

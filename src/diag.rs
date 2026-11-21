@@ -5,7 +5,7 @@
 //!   failures (a renderer or the browser process that died).
 //! - `hang.log`: the UI thread stuck for more than `HANG_AFTER` — what it was
 //!   doing and for how long — and any single handler slower than `SLOW_AFTER`.
-//! - `trace.log`, only with `LIVIANO_TRACE=1`: timestamped marks and every
+//! - `trace.log`, only with `NEA_TRACE=1`: timestamped marks and every
 //!   handler slower than a few milliseconds, for measuring.
 //!
 //! The UI thread only stores atomics and pushes lines to a short queue; a
@@ -97,11 +97,11 @@ pub fn now_us() -> u64 {
 }
 
 /// Installs the panic hook and the unhandled-exception filter and starts
-/// the watchdog. `LIVIANO_TRACE=1` turns tracing on.
+/// the watchdog. `NEA_TRACE=1` turns tracing on.
 pub fn install(dir: &Path) {
     start();
     let _ = DIR.set(dir.to_path_buf());
-    TRACING.store(std::env::var("LIVIANO_TRACE").is_ok_and(|v| v.trim() == "1"), Ordering::Relaxed);
+    TRACING.store(std::env::var("NEA_TRACE").is_ok_and(|v| v.trim() == "1"), Ordering::Relaxed);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         write_now(Log::Crash, &panic_line(info));
@@ -122,10 +122,10 @@ pub fn tracing() -> bool {
 
 /// Queues a line for one of the logs (written by the watchdog within a second).
 pub fn log(log: Log, line: String) {
-    if let Ok(mut pending) = PENDING.lock() {
-        if pending.len() < MAX_PENDING {
-            pending.push((log, line));
-        }
+    if let Ok(mut pending) = PENDING.lock()
+        && pending.len() < MAX_PENDING
+    {
+        pending.push((log, line));
     }
 }
 
@@ -198,7 +198,10 @@ fn current() -> String {
 /// Local time with milliseconds, for every line.
 pub fn stamp() -> String {
     let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-    format!("{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds)
+    format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03}",
+        t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond, t.wMilliseconds
+    )
 }
 
 fn version() -> &'static str {
@@ -273,9 +276,13 @@ enum Verdict {
     /// Quiet for a while: ask the thread whether it still pumps.
     Ping,
     /// Stuck past the limit: write it down (once).
-    Hung { for_ms: u64 },
+    Hung {
+        for_ms: u64,
+    },
     /// Moving again after a reported hang, which lasted about this long.
-    Recovered { after_ms: u64 },
+    Recovered {
+        after_ms: u64,
+    },
 }
 
 impl Watch {
@@ -398,7 +405,7 @@ mod seh {
         let mut line = Line { bytes: [0; 256], len: 0 };
         let _ = write!(
             line,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} excepcion v{} codigo 0x{code:08X} en 0x{address:X} (liviano.exe+0x{:X})\r\n",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} excepcion v{} codigo 0x{code:08X} en 0x{address:X} (nea.exe+0x{:X})\r\n",
             t.wYear,
             t.wMonth,
             t.wDay,
@@ -426,4 +433,3 @@ mod seh {
         EXCEPTION_CONTINUE_SEARCH
     }
 }
-

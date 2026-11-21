@@ -19,7 +19,8 @@ const SQLITE_OPEN_READONLY: c_int = 0x1;
 
 type Open = unsafe extern "system" fn(*const c_char, *mut *mut c_void, c_int, *const c_char) -> c_int;
 type Close = unsafe extern "system" fn(*mut c_void) -> c_int;
-type Prepare = unsafe extern "system" fn(*mut c_void, *const c_char, c_int, *mut *mut c_void, *mut *const c_char) -> c_int;
+type Prepare =
+    unsafe extern "system" fn(*mut c_void, *const c_char, c_int, *mut *mut c_void, *mut *const c_char) -> c_int;
 type Step = unsafe extern "system" fn(*mut c_void) -> c_int;
 type Finalize = unsafe extern "system" fn(*mut c_void) -> c_int;
 type ColumnBlob = unsafe extern "system" fn(*mut c_void, c_int) -> *const c_void;
@@ -40,6 +41,7 @@ pub struct Sqlite {
 }
 
 impl Sqlite {
+    #[allow(clippy::missing_transmute_annotations, reason = "each target is the type of the field the macro fills")]
     pub fn load() -> Option<Self> {
         unsafe {
             let module = LoadLibraryExW(w!("winsqlite3.dll"), None, LOAD_LIBRARY_SEARCH_SYSTEM32).ok()?;
@@ -79,7 +81,6 @@ impl Sqlite {
     pub fn open_read_only(&self, path: &std::path::Path) -> Option<Db<'_>> {
         self.open_with(path, SQLITE_OPEN_READONLY)
     }
-
 }
 
 impl Drop for Sqlite {
@@ -106,7 +107,11 @@ impl Row<'_> {
         unsafe {
             let data = (self.lib.column_blob)(self.statement, column as c_int);
             let len = (self.lib.column_bytes)(self.statement, column as c_int).max(0) as usize;
-            if data.is_null() || len == 0 { Vec::new() } else { std::slice::from_raw_parts(data as *const u8, len).to_vec() }
+            if data.is_null() || len == 0 {
+                Vec::new()
+            } else {
+                std::slice::from_raw_parts(data as *const u8, len).to_vec()
+            }
         }
     }
 
@@ -138,7 +143,6 @@ impl Db<'_> {
         }
         Some(())
     }
-
 }
 
 impl Drop for Db<'_> {
@@ -148,4 +152,3 @@ impl Drop for Db<'_> {
         }
     }
 }
-

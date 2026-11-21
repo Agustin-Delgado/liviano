@@ -59,7 +59,14 @@ fn px(v: f32, scale: f32) -> i32 {
 
 impl VaultBar {
     /// `labels`: the question, then the three buttons' text.
-    pub fn create(owner: HWND, palette: &Palette, font: HFONT, scale: f32, texts: [&str; 4], handler: fn(Choice)) -> Option<Self> {
+    pub fn create(
+        owner: HWND,
+        palette: &Palette,
+        font: HFONT,
+        scale: f32,
+        texts: [&str; 4],
+        handler: fn(Choice),
+    ) -> Option<Self> {
         HANDLER.with(|h| h.set(Some(handler)));
         unsafe {
             let instance = GetModuleHandleW(None).ok()?.into();
@@ -67,15 +74,15 @@ impl VaultBar {
                 style: CS_DROPSHADOW,
                 lpfnWndProc: Some(bar_proc),
                 hInstance: instance,
-                lpszClassName: w!("LivianoVaultBar"),
+                lpszClassName: w!("NeaVaultBar"),
                 hCursor: LoadCursorW(None, IDC_ARROW).ok()?,
                 ..Default::default()
             };
             RegisterClassW(&class);
             let popup = CreateWindowExW(
                 WS_EX_TOOLWINDOW,
-                w!("LivianoVaultBar"),
-                w!("Contraseña — Liviano"),
+                w!("NeaVaultBar"),
+                w!("Contraseña — Nea"),
                 WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,
@@ -131,14 +138,16 @@ impl VaultBar {
         let pad = px(14.0, s);
         let button_h = px(30.0, s);
         unsafe {
-            let _ = SetWindowPos(self.label, None, pad, pad, width - 2 * pad, px(22.0, s), SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ =
+                SetWindowPos(self.label, None, pad, pad, width - 2 * pad, px(22.0, s), SWP_NOZORDER | SWP_NOACTIVATE);
             // Right-aligned, the main action first.
             let widths = [92.0, 150.0, 92.0].map(|w| px(w, s));
             let gap = px(8.0, s);
             let total: i32 = widths.iter().sum::<i32>() + gap * 2;
             let mut x = width - pad - total;
             for (button, w) in self.buttons.iter().zip(widths) {
-                let _ = SetWindowPos(*button, None, x, height - pad - button_h, w, button_h, SWP_NOZORDER | SWP_NOACTIVATE);
+                let _ =
+                    SetWindowPos(*button, None, x, height - pad - button_h, w, button_h, SWP_NOZORDER | SWP_NOACTIVATE);
                 x += w + gap;
             }
         }
@@ -224,10 +233,10 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     match msg {
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
-            if let Some((_, choice)) = BUTTONS.iter().find(|(button, _)| *button == id) {
-                if let Some(handler) = HANDLER.with(|h| h.get()) {
-                    handler(*choice);
-                }
+            if let Some((_, choice)) = BUTTONS.iter().find(|(button, _)| *button == id)
+                && let Some(handler) = HANDLER.with(|h| h.get())
+            {
+                handler(*choice);
             }
             LRESULT(0)
         }
@@ -236,7 +245,14 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
                 let kind = if item.CtlID == 1 { ButtonKind::Primary } else { ButtonKind::Secondary };
                 SURFACE.with(|s| {
-                    widgets::draw_button_item(&mut s.borrow_mut(), item, kind, Color::from(palette.field), &palette, scale)
+                    widgets::draw_button_item(
+                        &mut s.borrow_mut(),
+                        item,
+                        kind,
+                        Color::from(palette.field),
+                        &palette,
+                        scale,
+                    )
                 });
             }
             LRESULT(1)

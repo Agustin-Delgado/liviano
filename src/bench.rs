@@ -1,5 +1,5 @@
-//! RF-23, control by script: a local named pipe, off unless Ajustes or
-//! `LIVIANO_BENCH=1` turn it on. Its own thread reads one JSON request per
+//! Control by script: a local named pipe, off unless Ajustes or
+//! `NEA_BENCH=1` turn it on. Its own thread reads one JSON request per
 //! line; what needs the window is queued for the UI thread (one posted
 //! message, as engine events are), which answers through a channel. Memory
 //! is measured right on the pipe thread: it needs nothing from the window.
@@ -31,15 +31,17 @@ use windows::{
     Win32::{
         Foundation::{CloseHandle, ERROR_PIPE_CONNECTED, HANDLE, HLOCAL, HWND, LPARAM, LocalFree, WPARAM},
         Security::{
-            Authorization::{ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1},
+            Authorization::{
+                ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW, SDDL_REVISION_1,
+            },
             GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER, TokenUser,
         },
         Storage::FileSystem::{FILE_FLAG_FIRST_PIPE_INSTANCE, FlushFileBuffers, PIPE_ACCESS_DUPLEX},
         System::{
             IO::CancelSynchronousIo,
             Pipes::{
-                ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE, PIPE_REJECT_REMOTE_CLIENTS,
-                PIPE_TYPE_BYTE, PIPE_WAIT,
+                ConnectNamedPipe, CreateNamedPipeW, DisconnectNamedPipe, PIPE_READMODE_BYTE,
+                PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
             },
             Threading::{GetCurrentProcess, OpenProcessToken},
         },
@@ -79,9 +81,9 @@ static INBOX: Mutex<VecDeque<Job>> = Mutex::new(VecDeque::new());
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 static SERVER: Mutex<Option<Server>> = Mutex::new(None);
 
-/// `LIVIANO_BENCH=1`: a run driven by a script.
+/// `NEA_BENCH=1`: a run driven by a script.
 pub fn from_env() -> bool {
-    std::env::var("LIVIANO_BENCH").is_ok_and(|v| v.trim() == "1")
+    std::env::var("NEA_BENCH").is_ok_and(|v| v.trim() == "1")
 }
 
 /// The setting, or the environment for a test run.
@@ -89,11 +91,11 @@ pub fn wanted(setting: bool) -> bool {
     setting || from_env()
 }
 
-/// The pipe this process listens on. `LIVIANO_BENCH_PIPE` adds a suffix, so
+/// The pipe this process listens on. `NEA_BENCH_PIPE` adds a suffix, so
 /// a measuring run doesn't collide with the person's own browser.
 pub fn pipe_name() -> String {
     let user = std::env::var("USERNAME").unwrap_or_else(|_| "user".to_string());
-    let suffix = std::env::var("LIVIANO_BENCH_PIPE").ok();
+    let suffix = std::env::var("NEA_BENCH_PIPE").ok();
     protocol::pipe_name(&user, suffix.as_deref())
 }
 
@@ -268,7 +270,12 @@ fn serve_client(pipe: HANDLE, stop: &AtomicBool) {
             continue;
         }
         let answer = answer(&line);
-        if writer.write_all(answer.as_bytes()).and_then(|_| writer.write_all(b"\n")).and_then(|_| writer.flush()).is_err() {
+        if writer
+            .write_all(answer.as_bytes())
+            .and_then(|_| writer.write_all(b"\n"))
+            .and_then(|_| writer.flush())
+            .is_err()
+        {
             return;
         }
     }
@@ -294,13 +301,12 @@ fn answer(line: &str) -> String {
                 .unwrap_or_else(|e| e.into_inner())
                 .push_back(Job { action: request.action, reply: Reply { id: request.id, tx } });
             post();
-            rx.recv_timeout(timeout)
-                .unwrap_or_else(|_| protocol::error(&id, "la ventana no respondió a tiempo"))
+            rx.recv_timeout(timeout).unwrap_or_else(|_| protocol::error(&id, "la ventana no respondió a tiempo"))
         }
     }
 }
 
-/// The app (liviano.exe) and the engine (everything below it), apart and summed.
+/// The app (nea.exe) and the engine (everything below it), apart and summed.
 pub fn memory_report() -> Value {
     let tree = memory::measure_tree(std::process::id());
     let engine: u64 = tree.children.iter().map(|c| c.private_ws).sum();
@@ -313,4 +319,3 @@ pub fn memory_report() -> Value {
         "processes": std::iter::once(&tree.root).chain(tree.children.iter()).collect::<Vec<_>>(),
     })
 }
-

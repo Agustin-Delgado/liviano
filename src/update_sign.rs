@@ -5,6 +5,9 @@
 //! version is inside the signature, so an old signed package can't be served
 //! under a newer version number to downgrade an install.
 
+/// Kept from the browser's former name on purpose: installs that still run
+/// the old binary verify their first Nea update with it, so changing it would
+/// strand them on the old version.
 pub const DOMAIN: &[u8] = b"liviano-update-v1\n";
 
 /// The bytes signed before the package itself.
@@ -30,7 +33,7 @@ pub fn to_hex(bytes: &[u8]) -> String {
 /// Whitespace around it is ignored (a key file usually ends in a newline).
 pub fn from_hex(text: &str) -> Option<Vec<u8>> {
     let text = text.trim();
-    if text.len() % 2 != 0 {
+    if !text.len().is_multiple_of(2) {
         return None;
     }
     let nibble = |c: u8| match c {

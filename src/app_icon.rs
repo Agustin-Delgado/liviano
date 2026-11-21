@@ -1,4 +1,4 @@
-//! The application icon (resource 1, `assets/logo/liviano.ico`, embedded by
+//! The application icon (resource 1, `assets/logo/nea.ico`, embedded by
 //! `build.rs`).
 //!
 //! A class `hIcon` alone is loaded once at the system DPI and shrunk for the
@@ -21,7 +21,7 @@ use windows::{
     core::PCWSTR,
 };
 
-/// The resource id of the icon, as in `liviano.rc`.
+/// The resource id of the icon, as in `nea.rc`.
 pub const ICON_ID: u16 = 1;
 
 /// Gives `hwnd` the big (Alt+Tab, taskbar) and small (title bar) icons at

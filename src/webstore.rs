@@ -3,9 +3,10 @@
 
 use windows::{
     Win32::Networking::WinHttp::{
-        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPEN_REQUEST_FLAGS, WINHTTP_QUERY_FLAG_NUMBER,
-        WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen, WinHttpOpenRequest, WinHttpQueryHeaders,
-        WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest, WinHttpSetTimeouts,
+        WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_FLAG_SECURE, WINHTTP_OPEN_REQUEST_FLAGS,
+        WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_QUERY_STATUS_CODE, WinHttpCloseHandle, WinHttpConnect, WinHttpOpen,
+        WinHttpOpenRequest, WinHttpQueryHeaders, WinHttpReadData, WinHttpReceiveResponse, WinHttpSendRequest,
+        WinHttpSetTimeouts,
     },
     core::{HSTRING, PCWSTR, w},
 };
@@ -59,7 +60,11 @@ impl Drop for Handle {
 }
 
 fn handle(raw: *mut core::ffi::c_void) -> Result<Handle, String> {
-    if raw.is_null() { Err(format!("sin conexión ({})", windows::core::Error::from_thread())) } else { Ok(Handle(raw)) }
+    if raw.is_null() {
+        Err(format!("sin conexión ({})", windows::core::Error::from_thread()))
+    } else {
+        Ok(Handle(raw))
+    }
 }
 
 /// GET over https, following redirects (WinHTTP's default), into memory.
@@ -69,13 +74,8 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
     let (host, path) = rest.split_once('/').map_or((rest, "/".to_string()), |(h, p)| (h, format!("/{p}")));
     let network = |e: windows::core::Error| format!("falló la descarga ({e})");
     unsafe {
-        let session = handle(WinHttpOpen(
-            w!("Liviano"),
-            WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
-            PCWSTR::null(),
-            PCWSTR::null(),
-            0,
-        ))?;
+        let session =
+            handle(WinHttpOpen(w!("Nea"), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0))?;
         let _ = WinHttpSetTimeouts(session.0, 15_000, 15_000, 30_000, 60_000);
         let connection = handle(WinHttpConnect(session.0, &HSTRING::from(host), 443, 0))?;
         let request = handle(WinHttpOpenRequest(
@@ -102,7 +102,11 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
         .map_err(network)?;
         match status {
             200 => {}
-            204 | 404 => return Err("la Chrome Web Store no tiene esa extensión (o no está disponible para este navegador)".to_string()),
+            204 | 404 => {
+                return Err(
+                    "la Chrome Web Store no tiene esa extensión (o no está disponible para este navegador)".to_string()
+                );
+            }
             other => return Err(format!("la Chrome Web Store respondió {other}")),
         }
         let mut body = Vec::new();
@@ -121,4 +125,3 @@ pub fn download(url: &str) -> Result<Vec<u8>, String> {
         Ok(body)
     }
 }
-

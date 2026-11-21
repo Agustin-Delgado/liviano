@@ -1,11 +1,11 @@
-//! The executable is its own installer (section 9): `--install` copies it to
-//! %LOCALAPPDATA%\Programs\Liviano, adds a Start menu shortcut and an entry
+//! The executable is its own installer: `--install` copies it to
+//! %LOCALAPPDATA%\Programs\Nea, adds a Start menu shortcut and an entry
 //! in Apps (HKCU, so no administrator rights), and `--uninstall` takes all of
 //! that back out. A copy whose file name contains "setup" installs itself
 //! when opened, which is what the downloadable installer is.
 //!
 //! For tests every place can be moved with an environment variable:
-//! LIVIANO_INSTALL_DIR, LIVIANO_START_MENU_DIR and LIVIANO_UNINSTALL_KEY
+//! NEA_INSTALL_DIR, NEA_START_MENU_DIR and NEA_UNINSTALL_KEY
 //! (a path under HKCU\Software).
 
 use std::{
@@ -27,18 +27,18 @@ use windows::{
         UI::{
             Shell::{IShellLinkW, ShellExecuteW, ShellLink},
             WindowsAndMessaging::{
-                IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE, MessageBoxW,
-                SW_SHOWNORMAL,
+                IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE,
+                MessageBoxW, SW_SHOWNORMAL,
             },
         },
     },
     core::{HSTRING, Interface, PCWSTR, PWSTR},
 };
 
-use crate::{storage, updater};
+use crate::{legacy, storage, updater};
 
-const EXE_NAME: &str = "liviano.exe";
-const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Liviano";
+const EXE_NAME: &str = "nea.exe";
+const UNINSTALL_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Uninstall\Nea";
 const WEBVIEW2_CLIENT: &str = r"Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
 /// Microsoft's Evergreen bootstrapper: a small download that installs the runtime.
 pub const WEBVIEW2_BOOTSTRAPPER: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
@@ -95,13 +95,13 @@ fn env_path(name: &str) -> Option<PathBuf> {
 }
 
 fn places() -> Result<Places, String> {
-    let dir = env_path("LIVIANO_INSTALL_DIR")
+    let dir = env_path("NEA_INSTALL_DIR")
         .or_else(|| env_path("LOCALAPPDATA").map(|p| p.join("Programs").join(storage::APP_NAME)))
         .ok_or("No se encontró %LOCALAPPDATA%.")?;
-    let menu = env_path("LIVIANO_START_MENU_DIR")
+    let menu = env_path("NEA_START_MENU_DIR")
         .or_else(|| env_path("APPDATA").map(|p| p.join(r"Microsoft\Windows\Start Menu\Programs")))
         .ok_or("No se encontró %APPDATA%.")?;
-    let key = std::env::var("LIVIANO_UNINSTALL_KEY")
+    let key = std::env::var("NEA_UNINSTALL_KEY")
         .ok()
         .filter(|k| k.len() > 9 && k[..9].eq_ignore_ascii_case(r"Software\"))
         .unwrap_or_else(|| UNINSTALL_KEY.to_string());
@@ -234,7 +234,7 @@ fn create_shortcut(path: &Path, target: &Path, dir: &Path) -> windows::core::Res
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(target))?;
         link.SetWorkingDirectory(&HSTRING::from(dir))?;
-        link.SetDescription(&HSTRING::from("Navegador liviano"))?;
+        link.SetDescription(&HSTRING::from("Navegador web"))?;
         link.SetIconLocation(&HSTRING::from(target), 0)?;
         link.cast::<IPersistFile>()?.Save(&HSTRING::from(path), true)
     }
@@ -247,21 +247,12 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
-fn install(exe: &Path, quiet: bool) -> Result<(), String> {
-    let places = places()?;
-    if webview2_version().is_none()
-        && !quiet
-        && message(
-            "Liviano usa el motor WebView2 de Microsoft, que no está instalado en este equipo. \
-             Sin él no puede mostrar páginas.\n\n¿Abrir la descarga oficial de WebView2?",
-            MB_YESNO | MB_ICONWARNING,
-        )
-    {
-        open_url(WEBVIEW2_BOOTSTRAPPER);
-    }
+/// The copy, the license, the shortcut and the entry in Apps. Returns the
+/// installed executable.
+fn install_files(exe: &Path, places: &Places) -> Result<PathBuf, String> {
     fs::create_dir_all(&places.dir).map_err(|e| format!("No se pudo crear {}: {e}", places.dir.display()))?;
     let target = places.dir.join(EXE_NAME);
-    // Installing over an open Liviano works: the running file steps aside.
+    // Installing over an open Nea works: the running file steps aside.
     if !same_file(exe, &target) {
         updater::replace_exe(&target, exe).map_err(|e| format!("No se pudo copiar el programa: {e}"))?;
     }
@@ -269,13 +260,27 @@ fn install(exe: &Path, quiet: bool) -> Result<(), String> {
     if let Some(menu) = places.shortcut.parent() {
         let _ = fs::create_dir_all(menu);
     }
-    create_shortcut(&places.shortcut, &target, &places.dir).map_err(|e| format!("No se pudo crear el acceso directo: {e}"))?;
+    create_shortcut(&places.shortcut, &target, &places.dir)
+        .map_err(|e| format!("No se pudo crear el acceso directo: {e}"))?;
     write_uninstall_entry(&places.key, &target, &places.dir)?;
-    if !quiet
+    Ok(target)
+}
+
+fn install(exe: &Path, quiet: bool) -> Result<(), String> {
+    let places = places()?;
+    if webview2_version().is_none()
+        && !quiet
         && message(
-            "Liviano quedó instalado: está en el menú Inicio.\n\n¿Abrirlo ahora?",
-            MB_YESNO | MB_ICONINFORMATION,
+            "Nea usa el motor WebView2 de Microsoft, que no está instalado en este equipo. \
+             Sin él no puede mostrar páginas.\n\n¿Abrir la descarga oficial de WebView2?",
+            MB_YESNO | MB_ICONWARNING,
         )
+    {
+        open_url(WEBVIEW2_BOOTSTRAPPER);
+    }
+    let target = install_files(exe, &places)?;
+    if !quiet
+        && message("Nea quedó instalado: está en el menú Inicio.\n\n¿Abrirlo ahora?", MB_YESNO | MB_ICONINFORMATION)
     {
         let _ = std::process::Command::new(&target).spawn();
     }
@@ -301,7 +306,7 @@ fn run_after_exit(command: &str) {
 fn remove_install_dir(dir: &Path, exe: &Path) -> Result<(), String> {
     let inside = fs::canonicalize(dir).is_ok_and(|dir| fs::canonicalize(exe).is_ok_and(|e| e.starts_with(&dir)));
     if inside {
-        let parked = std::env::temp_dir().join(format!("liviano-uninstall-{}.exe", std::process::id()));
+        let parked = std::env::temp_dir().join(format!("nea-uninstall-{}.exe", std::process::id()));
         if fs::rename(exe, &parked).is_err() {
             run_after_exit(&format!("rmdir /s /q \"{}\"", dir.display()));
             return Ok(());
@@ -326,7 +331,7 @@ fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
         let data = storage::data_dir();
         message(
             &format!(
-                "Liviano se desinstaló.\n\nTus marcadores, historial y ajustes quedan en {}. Borrá esa carpeta si no los querés guardar.",
+                "Nea se desinstaló.\n\nTus marcadores, historial y ajustes quedan en {}. Borrá esa carpeta si no los querés guardar.",
                 data.display()
             ),
             MB_OK | MB_ICONINFORMATION,
@@ -335,3 +340,47 @@ fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
     Ok(())
 }
 
+/// Where the installer put the browser under its former name. The legacy
+/// variables are there for tests, like the current ones.
+fn legacy_places(new: &Places) -> Option<Places> {
+    let dir = env_path("LIVIANO_INSTALL_DIR")
+        .or_else(|| env_path("LOCALAPPDATA").map(|p| p.join("Programs").join(legacy::NAME)))?;
+    let shortcut = new.shortcut.with_file_name(format!("{}.lnk", legacy::NAME));
+    let key = std::env::var("LIVIANO_UNINSTALL_KEY")
+        .ok()
+        .filter(|k| k.len() > 9 && k[..9].eq_ignore_ascii_case(r"Software\"))
+        .unwrap_or_else(|| format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", legacy::NAME));
+    Some(Places { dir, shortcut, key })
+}
+
+/// Whether `exe` is the copy installed in `dir`.
+fn runs_from(exe: &Path, dir: &Path) -> bool {
+    match (exe.parent().and_then(|p| fs::canonicalize(p).ok()), fs::canonicalize(dir)) {
+        (Some(parent), Ok(dir)) => parent == dir,
+        _ => false,
+    }
+}
+
+/// An install of the former name updated itself to this version and still
+/// runs from its old folder under its old file name. It installs itself
+/// under the new name (nea.exe, the Nea shortcut and entry in Apps), takes
+/// the old shortcut and entry out, starts the new copy, and has the old
+/// folder removed once this process has exited. `Some(0)` means this process
+/// should exit now; any failure leaves it running from where it is, and the
+/// next launch tries again.
+pub fn move_legacy_install() -> Option<i32> {
+    let exe = std::env::current_exe().ok()?;
+    let places = places().ok()?;
+    let legacy = legacy_places(&places)?;
+    if !runs_from(&exe, &legacy.dir) || runs_from(&exe, &places.dir) {
+        return None;
+    }
+    let target = install_files(&exe, &places).ok()?;
+    let _ = fs::remove_file(&legacy.shortcut);
+    unsafe {
+        let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(legacy.key.as_str()));
+    }
+    std::process::Command::new(&target).args(std::env::args_os().skip(1)).spawn().ok()?;
+    run_after_exit(&format!("rmdir /s /q \"{}\"", legacy.dir.display()));
+    Some(0)
+}

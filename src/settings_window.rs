@@ -18,8 +18,8 @@ use windows::{
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Controls::{
-                BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, ODS_SELECTED, ODT_BUTTON,
-                SetWindowTheme,
+                BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, ODS_SELECTED,
+                ODT_BUTTON, SetWindowTheme,
             },
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
             Input::KeyboardAndMouse::{
@@ -35,10 +35,10 @@ use windows::{
 use crate::{
     design::{Palette, dwm, size},
     gfx::{Align, Color, Font, RectF, Surface},
-    widgets::{self, ButtonKind},
     settings::{self, FieldPosition, Settings, Theme},
     shortcuts::{self, Command},
     updater,
+    widgets::{self, ButtonKind},
 };
 
 const ID_THEME: i32 = 101;
@@ -161,13 +161,21 @@ struct Colors {
     ink: u32,
 }
 
+/// Creates one child control: class, text, style, extended style, rect,
+/// id, kind and whether it takes the heading font.
+type AddChild<'a> = dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32, i32), i32, Kind, bool) -> HWND + 'a;
+/// Who handles an extension command chosen in Ajustes.
+type ExtensionHandler = fn(ExtensionCommand, Option<usize>);
+/// Who applies the tab layout (vertical, collapsed).
+type LayoutHandler = fn(bool, bool);
+
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static HANDLER: Cell<Option<fn(Settings)>> = const { Cell::new(None) };
-    static EXTENSION_HANDLER: Cell<Option<fn(ExtensionCommand, Option<usize>)>> = const { Cell::new(None) };
+    static EXTENSION_HANDLER: Cell<Option<ExtensionHandler>> = const { Cell::new(None) };
     /// Who applies the tab layout (vertical, collapsed): the app, which keeps
     /// it in the session rather than in the settings.
-    static LAYOUT_HANDLER: Cell<Option<fn(bool, bool)>> = const { Cell::new(None) };
+    static LAYOUT_HANDLER: Cell<Option<LayoutHandler>> = const { Cell::new(None) };
     /// The layout in force, for the controls (also before the window opens).
     static TAB_LAYOUT: Cell<(bool, bool)> = const { Cell::new((false, false)) };
     static COLORS: Cell<Colors> = Cell::new(Colors::default());
@@ -251,7 +259,7 @@ pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Se
     let first = state.theme;
     STATE.with(|s| *s.borrow_mut() = Some(state));
     set_palette(palette);
-    with_state(|st| fill_all(st));
+    with_state(fill_all);
     // A dialog appearing: 100 ms of fade.
     crate::fade::fade_in_window(hwnd, crate::anim::specs::DIALOG);
     unsafe {
@@ -362,8 +370,7 @@ pub fn pre_translate(msg: &MSG) -> bool {
 pub fn set_palette(palette: &Palette) {
     let Some((hwnd, children, _font, scale)) = STATE.with(|s| {
         s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.font, st.scale)))
-    })
-    else {
+    }) else {
         return;
     };
     let old = COLORS.with(|c| c.get());
@@ -412,7 +419,7 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let class = WNDCLASSW {
             lpfnWndProc: Some(window_proc),
             hInstance: instance,
-            lpszClassName: w!("LivianoSettings"),
+            lpszClassName: w!("NeaSettings"),
             hCursor: LoadCursorW(None, IDC_ARROW)?,
             hIcon: LoadIconW(Some(instance), PCWSTR(crate::app_icon::ICON_ID as usize as _)).unwrap_or_default(),
             ..Default::default()
@@ -432,8 +439,8 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let y = owner_rect.top + ((owner_rect.bottom - owner_rect.top) - height) / 3;
         let hwnd = CreateWindowExW(
             ex_style,
-            w!("LivianoSettings"),
-            w!("Ajustes — Liviano"),
+            w!("NeaSettings"),
+            w!("Ajustes — Nea"),
             style,
             x.max(0),
             y.max(0),
@@ -450,7 +457,14 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let heading_font = make_font(scale, 500);
         let mut children: Vec<(HWND, Kind)> = Vec::new();
         let mut wells: Vec<RECT> = Vec::new();
-        let mut add = |class: PCWSTR, text: &str, style: u32, ex: WINDOW_EX_STYLE, rect: (i32, i32, i32, i32), id: i32, kind: Kind, heading: bool| {
+        let mut add = |class: PCWSTR,
+                       text: &str,
+                       style: u32,
+                       ex: WINDOW_EX_STYLE,
+                       rect: (i32, i32, i32, i32),
+                       id: i32,
+                       kind: Kind,
+                       heading: bool| {
             let (mut x, mut y, mut w, mut h) = rect;
             let mut ex = ex;
             if ex == WS_EX_CLIENTEDGE {
@@ -476,21 +490,22 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
                 None,
             )
             .unwrap_or_default();
-            SendMessageW(child, WM_SETFONT, Some(WPARAM(if heading { heading_font.0 } else { font.0 } as usize)), Some(LPARAM(1)));
+            SendMessageW(
+                child,
+                WM_SETFONT,
+                Some(WPARAM(if heading { heading_font.0 } else { font.0 } as usize)),
+                Some(LPARAM(1)),
+            );
             children.push((child, kind));
             child
         };
         let edge = WS_EX_CLIENTEDGE;
         let none = WINDOW_EX_STYLE::default();
         let tab = WS_TABSTOP.0;
-        let label = |add: &mut dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32, i32), i32, Kind, bool) -> HWND,
-                     text: &str,
-                     rect: (i32, i32, i32, i32)| {
+        let label = |add: &mut AddChild<'_>, text: &str, rect: (i32, i32, i32, i32)| {
             add(w!("STATIC"), text, 0, none, rect, -1, Kind::Label, false)
         };
-        let heading = |add: &mut dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32, i32), i32, Kind, bool) -> HWND,
-                       text: &str,
-                       rect: (i32, i32, i32, i32)| {
+        let heading = |add: &mut AddChild<'_>, text: &str, rect: (i32, i32, i32, i32)| {
             add(w!("STATIC"), text, 0, none, rect, -1, Kind::Label, true)
         };
         let edit_style = tab | ES_AUTOHSCROLL as u32;
@@ -502,20 +517,92 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         let l = 24;
         heading(&mut add, "Pestañas", (l, 18, 340, 22));
         label(&mut add, "Ubicación", (l, 52, 140, 22));
-        let tab_layout = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 48, 190, 200), ID_TAB_LAYOUT, Kind::Combo, false);
+        let tab_layout = add(
+            w!("COMBOBOX"),
+            "",
+            tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0,
+            none,
+            (l + 150, 48, 190, 200),
+            ID_TAB_LAYOUT,
+            Kind::Combo,
+            false,
+        );
         // The checkboxes have no text of their own: a themed checkbox ignores
         // the dark palette's ink, a label doesn't.
-        let collapsed = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 86, 18, 18), ID_COLLAPSED, Kind::Button, false);
-        add(w!("STATIC"), "Ocultar las pestañas", SS_NOTIFY, none, (l + 22, 84, 150, 22), ID_COLLAPSED_LABEL, Kind::Label, false);
-        let split = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l + 180, 86, 18, 18), ID_SPLIT, Kind::Button, false);
-        add(w!("STATIC"), "Vista dividida", SS_NOTIFY, none, (l + 202, 84, 138, 22), ID_SPLIT_LABEL, Kind::Label, false);
+        let collapsed = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (l, 86, 18, 18),
+            ID_COLLAPSED,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Ocultar las pestañas",
+            SS_NOTIFY,
+            none,
+            (l + 22, 84, 150, 22),
+            ID_COLLAPSED_LABEL,
+            Kind::Label,
+            false,
+        );
+        let split = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (l + 180, 86, 18, 18),
+            ID_SPLIT,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Vista dividida",
+            SS_NOTIFY,
+            none,
+            (l + 202, 84, 138, 22),
+            ID_SPLIT_LABEL,
+            Kind::Label,
+            false,
+        );
 
-        let preview = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 112, 18, 18), ID_PREVIEW, Kind::Button, false);
-        add(w!("STATIC"), "Vista previa de la página al pasar el mouse", SS_NOTIFY, none, (l + 22, 110, 318, 22), ID_PREVIEW_LABEL, Kind::Label, false);
+        let preview = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (l, 112, 18, 18),
+            ID_PREVIEW,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Vista previa de la página al pasar el mouse",
+            SS_NOTIFY,
+            none,
+            (l + 22, 110, 318, 22),
+            ID_PREVIEW_LABEL,
+            Kind::Label,
+            false,
+        );
 
         heading(&mut add, "General", (l, 146, 340, 22));
         label(&mut add, "Tema", (l, 180, 140, 22));
-        let theme = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 176, 190, 200), ID_THEME, Kind::Combo, false);
+        let theme = add(
+            w!("COMBOBOX"),
+            "",
+            tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0,
+            none,
+            (l + 150, 176, 190, 200),
+            ID_THEME,
+            Kind::Combo,
+            false,
+        );
         label(&mut add, "Buscador por defecto (dirección con {q})", (l, 216, 340, 22));
         let search = add(w!("EDIT"), "", edit_style, edge, (l, 238, 340, 26), ID_SEARCH, Kind::Edit, false);
 
@@ -534,17 +621,62 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
 
         heading(&mut add, "Contraseñas", (l, 566, 340, 22));
         label(&mut add, "Ofrecer guardarlas", (l, 600, 140, 22));
-        let passwords_offer = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (l + 150, 596, 190, 200), ID_PASSWORDS_OFFER, Kind::Combo, false);
+        let passwords_offer = add(
+            w!("COMBOBOX"),
+            "",
+            tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0,
+            none,
+            (l + 150, 596, 190, 200),
+            ID_PASSWORDS_OFFER,
+            Kind::Combo,
+            false,
+        );
         add(w!("BUTTON"), "Importar…", button_style, none, (l, 632, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
-        add(w!("BUTTON"), "Ver las guardadas…", button_style, none, (l + 118, 632, 150, 26), ID_PASSWORDS_LIST, Kind::Button, false);
+        add(
+            w!("BUTTON"),
+            "Ver las guardadas…",
+            button_style,
+            none,
+            (l + 118, 632, 150, 26),
+            ID_PASSWORDS_LIST,
+            Kind::Button,
+            false,
+        );
         heading(&mut add, "Extensiones", (l, 688, 140, 22));
         let ext_note = label(&mut add, "", (l + 150, 688, 582, 22));
         let ext_list = add(w!("LISTBOX"), "", list_style, edge, (l, 714, 732, 88), ID_EXT_LIST, Kind::List, false);
-        add(w!("BUTTON"), "Habilitar / deshabilitar", button_style, none, (l, 810, 170, 26), ID_EXT_TOGGLE, Kind::Button, false);
-        add(w!("BUTTON"), "Fijar / desfijar", button_style, none, (l + 176, 810, 120, 26), ID_EXT_PIN, Kind::Button, false);
+        add(
+            w!("BUTTON"),
+            "Habilitar / deshabilitar",
+            button_style,
+            none,
+            (l, 810, 170, 26),
+            ID_EXT_TOGGLE,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("BUTTON"),
+            "Fijar / desfijar",
+            button_style,
+            none,
+            (l + 176, 810, 120, 26),
+            ID_EXT_PIN,
+            Kind::Button,
+            false,
+        );
         add(w!("BUTTON"), "Recargar", button_style, none, (l + 302, 810, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
         add(w!("BUTTON"), "Quitar…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
-        add(w!("BUTTON"), "Cargar sin empaquetar…", button_style, none, (l + 478, 810, 170, 26), ID_EXT_LOAD, Kind::Button, false);
+        add(
+            w!("BUTTON"),
+            "Cargar sin empaquetar…",
+            button_style,
+            none,
+            (l + 478, 810, 170, 26),
+            ID_EXT_LOAD,
+            Kind::Button,
+            false,
+        );
 
         // Right column: Atajos.
         let r = 400;
@@ -560,22 +692,94 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         // The field: where it floats, laid out as Pestañas' Ubicación.
         heading(&mut add, "Campo", (r, 452, 140, 22));
         label(&mut add, "Ubicación", (r, 486, 140, 22));
-        let field_position = add(w!("COMBOBOX"), "", tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0, none, (r + 150, 482, 190, 200), ID_FIELD_POSITION, Kind::Combo, false);
+        let field_position = add(
+            w!("COMBOBOX"),
+            "",
+            tab | CBS_DROPDOWNLIST as u32 | WS_VSCROLL.0,
+            none,
+            (r + 150, 482, 190, 200),
+            ID_FIELD_POSITION,
+            Kind::Combo,
+            false,
+        );
 
         // The box carries no text of its own: a themed checkbox ignores the
         // text colour, so in dark mode its label would vanish. The label
         // beside it toggles it too.
         heading(&mut add, "Actualizaciones", (r, 520, 140, 22));
-        let updates = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 521, 20, 20), ID_UPDATES, Kind::Button, false);
-        add(w!("STATIC"), "Buscar una vez por día", SS_NOTIFY, none, (r + 174, 520, 182, 22), ID_UPDATES_LABEL, Kind::Label, false);
+        let updates = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (r + 150, 521, 20, 20),
+            ID_UPDATES,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Buscar una vez por día",
+            SS_NOTIFY,
+            none,
+            (r + 174, 520, 182, 22),
+            ID_UPDATES_LABEL,
+            Kind::Label,
+            false,
+        );
         heading(&mut add, "Privacidad", (r, 552, 140, 22));
-        let trackers = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r, 579, 20, 20), ID_TRACKERS, Kind::Button, false);
-        add(w!("STATIC"), "Bloquear cookies de terceros y rastreadores", SS_NOTIFY, none, (r + 24, 578, 332, 22), ID_TRACKERS_LABEL, Kind::Label, false);
+        let trackers = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (r, 579, 20, 20),
+            ID_TRACKERS,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Bloquear cookies de terceros y rastreadores",
+            SS_NOTIFY,
+            none,
+            (r + 24, 578, 332, 22),
+            ID_TRACKERS_LABEL,
+            Kind::Label,
+            false,
+        );
         heading(&mut add, "Pruebas", (r, 610, 140, 22));
-        let bench = add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 611, 20, 20), ID_BENCH, Kind::Button, false);
-        add(w!("STATIC"), "Control por script (canal local)", SS_NOTIFY, none, (r + 174, 610, 182, 22), ID_BENCH_LABEL, Kind::Label, false);
+        let bench = add(
+            w!("BUTTON"),
+            "",
+            tab | BS_AUTOCHECKBOX as u32,
+            none,
+            (r + 150, 611, 20, 20),
+            ID_BENCH,
+            Kind::Button,
+            false,
+        );
+        add(
+            w!("STATIC"),
+            "Control por script (canal local)",
+            SS_NOTIFY,
+            none,
+            (r + 174, 610, 182, 22),
+            ID_BENCH_LABEL,
+            Kind::Label,
+            false,
+        );
         let version = add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 638, 356, 22), -1, Kind::Label, false);
-        add(w!("BUTTON"), "Cerrar", button_style, none, (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28), ID_CLOSE, Kind::Button, false);
+        add(
+            w!("BUTTON"),
+            "Cerrar",
+            button_style,
+            none,
+            (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28),
+            ID_CLOSE,
+            Kind::Button,
+            false,
+        );
 
         for (theme_value, name) in THEMES {
             let _ = theme_value;
@@ -597,7 +801,9 @@ fn create(owner: HWND, current: &Settings) -> windows::core::Result<State> {
         SendMessageW(keys_list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(px(28) as isize)));
         WELLS.with(|w| *w.borrow_mut() = wells);
         for (child, kind) in &children {
-            if matches!(kind, Kind::Button) && (GetWindowLongW(*child, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_OWNERDRAW as u32 {
+            if matches!(kind, Kind::Button)
+                && (GetWindowLongW(*child, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_OWNERDRAW as u32
+            {
                 widgets::track_hover(*child);
             }
         }
@@ -697,7 +903,14 @@ fn toggle_updates(st: &mut State, flip: bool) -> Outcome {
         }
         st.settings.check_updates = SendMessageW(st.updates, BM_GETCHECK, None, None).0 == BST_CHECKED.0 as isize;
     }
-    status(st, if st.settings.check_updates { "Busca una versión nueva una vez por día." } else { "No busca versiones nuevas." });
+    status(
+        st,
+        if st.settings.check_updates {
+            "Busca una versión nueva una vez por día."
+        } else {
+            "No busca versiones nuevas."
+        },
+    );
     Outcome::Changed
 }
 
@@ -739,7 +952,11 @@ fn toggle_trackers(st: &mut State, flip: bool) -> Outcome {
     let on = st.settings.block_trackers;
     status(
         st,
-        if on { "Rastreadores y carteles de cookies bloqueados." } else { "Rastreadores y carteles de cookies permitidos." },
+        if on {
+            "Rastreadores y carteles de cookies bloqueados."
+        } else {
+            "Rastreadores y carteles de cookies permitidos."
+        },
     );
     Outcome::Changed
 }
@@ -912,7 +1129,8 @@ fn show_command(st: &State) {
     if let Some(command) = selected_command(st) {
         let chords = shortcuts::chords_of(&st.settings.shortcuts, command);
         set_text(st.key_edit, &shortcuts::format_chords(&chords));
-        let taken: Vec<_> = chords.iter().filter(|c| st.taken.contains(c)).map(|c| shortcuts::format_chord(*c)).collect();
+        let taken: Vec<_> =
+            chords.iter().filter(|c| st.taken.contains(c)).map(|c| shortcuts::format_chord(*c)).collect();
         if !taken.is_empty() {
             status(st, &format!("{} lo usa otro programa: asignale otro.", taken.join(", ")));
         }
@@ -978,7 +1196,14 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
             match OFFER_CHOICES.get(index.max(0) as usize) {
                 Some((on, _)) if *on != st.settings.passwords_offer => {
                     st.settings.passwords_offer = *on;
-                    status(st, if *on { "Se ofrece guardar la contraseña tras iniciar sesión." } else { "No se ofrece guardar contraseñas nuevas." });
+                    status(
+                        st,
+                        if *on {
+                            "Se ofrece guardar la contraseña tras iniciar sesión."
+                        } else {
+                            "No se ofrece guardar contraseñas nuevas."
+                        },
+                    );
                     Outcome::Changed
                 }
                 _ => Outcome::Nothing,
@@ -1018,7 +1243,14 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
                 }
             }
             let now = unsafe { SendMessageW(st.collapsed, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0 };
-            status(st, if now { "Pestañas ocultas: Ctrl+K para ir a una, o volvé a mostrarlas acá." } else { "Pestañas a la vista." });
+            status(
+                st,
+                if now {
+                    "Pestañas ocultas: Ctrl+K para ir a una, o volvé a mostrarlas acá."
+                } else {
+                    "Pestañas a la vista."
+                },
+            );
             Outcome::Layout(vertical, now)
         }
         (ID_SPLIT, BN_CLICKED_CODE) => toggle_split(st, false),
@@ -1127,7 +1359,12 @@ fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
             return;
         }
         let mut buffer = vec![0u16; len as usize + 1];
-        SendMessageW(item.hwndItem, LB_GETTEXT, Some(WPARAM(item.itemID as usize)), Some(LPARAM(buffer.as_mut_ptr() as isize)));
+        SendMessageW(
+            item.hwndItem,
+            LB_GETTEXT,
+            Some(WPARAM(item.itemID as usize)),
+            Some(LPARAM(buffer.as_mut_ptr() as isize)),
+        );
         String::from_utf16_lossy(&buffer[..len as usize])
     };
     let (label, chords) = text.split_once('\t').unwrap_or((&text, ""));
@@ -1210,10 +1447,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_NOTIFY => {
-            // The check boxes stay native and are drawn as HKUI's.
+            // The check boxes stay native and are drawn as the design system's.
             let header = unsafe { &*(lparam.0 as *const NMHDR) };
             let is_check = header.code == NM_CUSTOMDRAW
-                && unsafe { (GetWindowLongW(header.hwndFrom, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_AUTOCHECKBOX as u32 };
+                && unsafe {
+                    (GetWindowLongW(header.hwndFrom, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_AUTOCHECKBOX as u32
+                };
             match LOOK.with(|l| l.get()) {
                 Some((palette, scale)) if is_check => {
                     let nm = unsafe { &*(lparam.0 as *const NMCUSTOMDRAW) };
@@ -1228,7 +1467,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             if item.CtlType == ODT_BUTTON {
                 let kind = if item.CtlID == ID_CLOSE as u32 { ButtonKind::Primary } else { ButtonKind::Secondary };
                 SURFACES.with(|s| {
-                    widgets::draw_button_item(&mut s.borrow_mut().1, item, kind, Color::from(palette.field), &palette, scale)
+                    widgets::draw_button_item(
+                        &mut s.borrow_mut().1,
+                        item,
+                        kind,
+                        Color::from(palette.field),
+                        &palette,
+                        scale,
+                    )
                 });
             } else {
                 draw_key_row(item, &palette, scale);
@@ -1273,4 +1519,3 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         _ => default(),
     }
 }
-

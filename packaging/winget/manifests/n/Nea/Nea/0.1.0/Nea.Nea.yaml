@@ -2,7 +2,7 @@
 # y poner el SHA256 real
 # (dist\SHA256SUMS.txt). Validar con: winget validate --manifest <carpeta>
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.version.1.6.0.schema.json
-PackageIdentifier: Liviano.Liviano
+PackageIdentifier: Nea.Nea
 PackageVersion: 0.1.0
 DefaultLocale: es-AR
 ManifestType: version

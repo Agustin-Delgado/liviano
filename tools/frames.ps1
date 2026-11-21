@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Graba los cuadros intermedios de una animación de Liviano en una tira PNG.
+  Graba los cuadros intermedios de una animación de Nea en una tira PNG.
 
 .DESCRIPTION
   Corre -Trigger (lo que arranca la animación: un comando del pipe de bench,
@@ -12,12 +12,12 @@
   principal) y se pegan de izquierda a derecha, con el tiempo de cada uno
   debajo. No manda teclas ni clics y no trae nada al frente.
 
-  Si -Trigger usa Invoke-Liviano, quien llama tiene que soltar antes su
-  conexión al pipe (Disconnect-Liviano): el pipe atiende a uno por vez, y
+  Si -Trigger usa Invoke-Nea, quien llama tiene que soltar antes su
+  conexión al pipe (Disconnect-Nea): el pipe atiende a uno por vez, y
   este script suelta la suya al terminar.
 
 .EXAMPLE
-  tools\frames.ps1 -ProcessId 1234 -Out docs\capturas\tira-campo.png -Crop 0,0,900,320 -Trigger { Invoke-Liviano run @{ name = 'focus_address' } }
+  tools\frames.ps1 -ProcessId 1234 -Out docs\capturas\tira-campo.png -Crop 0,0,900,320 -Trigger { Invoke-Nea run @{ name = 'focus_address' } }
 #>
 [CmdletBinding()]
 param(
@@ -34,7 +34,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-if (-not ('LivianoFrames' -as [type])) {
+if (-not ('NeaFrames' -as [type])) {
     Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -42,7 +42,7 @@ using System.Drawing;
 using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
 
-public static class LivianoFrames {
+public static class NeaFrames {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
@@ -166,7 +166,7 @@ public static class LivianoFrames {
         }
         var name = new System.Text.StringBuilder(256);
         GetClassName(w.Hwnd, name, 256);
-        if (name.ToString() == "LivianoTooltip") KeyOutBlack(bitmap);
+        if (name.ToString() == "NeaTooltip") KeyOutBlack(bitmap);
         return bitmap;
     }
 
@@ -225,12 +225,12 @@ for ($i = 0; $i -lt $Frames; $i++) {
     $due = $i * $IntervalMs
     while ($clock.ElapsedMilliseconds -lt $due) { Start-Sleep -Milliseconds 1 }
     $at = $clock.ElapsedMilliseconds
-    $frame = [LivianoFrames]::Frame([uint32]$ProcessId, $box)
+    $frame = [NeaFrames]::Frame([uint32]$ProcessId, $box)
     if ($frame) { $shots.Add([pscustomobject]@{ At = $at; Image = $frame }) }
 }
 # A trigger that spoke over the bench pipe (toolsench.ps1) opened its own
 # connection in this script's scope: let go of it, the caller needs the pipe.
-if (Get-Command Disconnect-Liviano -ErrorAction SilentlyContinue) { Disconnect-Liviano }
+if (Get-Command Disconnect-Nea -ErrorAction SilentlyContinue) { Disconnect-Nea }
 if ($shots.Count -eq 0) { throw "El proceso $ProcessId no tiene ventanas visibles" }
 
 $w = [int]($shots[0].Image.Width * $Scale); $h = [int]($shots[0].Image.Height * $Scale)

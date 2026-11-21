@@ -1,4 +1,4 @@
-//! RF-22: the daily update. A thread of its own looks at a manifest once a
+//! The daily update. A thread of its own looks at a manifest once a
 //! day, downloads a newer package next to the app's data, and keeps it only
 //! if its Ed25519 signature verifies against the key built into this binary.
 //! Nothing is ever installed while the app runs and nothing restarts it: the
@@ -26,7 +26,7 @@ use crate::{http, settings::Settings, storage, update_sign};
 
 pub const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// GitHub account that publishes the releases (github.com/<owner>/liviano).
+/// GitHub account that publishes the releases (github.com/<owner>/nea).
 /// Empty means no updates: with no owner and no address in settings.json the
 /// updater never goes out.
 pub const RELEASES_OWNER: &str = "Agustin-Delgado";
@@ -92,15 +92,12 @@ fn state_path() -> PathBuf {
 
 /// Downloads are machine-local, beside the engine profile.
 pub fn update_dir() -> PathBuf {
-    std::env::var_os("LIVIANO_DATA_DIR")
-        .map(|p| PathBuf::from(p).join("update"))
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(storage::APP_NAME).join("update")))
-        .unwrap_or_else(|| storage::data_dir().join("update"))
+    storage::local_root().join("update")
 }
 
 pub fn default_manifest_url() -> Option<String> {
     (!RELEASES_OWNER.is_empty())
-        .then(|| format!("https://github.com/{RELEASES_OWNER}/liviano/releases/latest/download/latest.json"))
+        .then(|| format!("https://github.com/{RELEASES_OWNER}/nea/releases/latest/download/latest.json"))
 }
 
 /// The address a check goes to, if any. A development build only checks
@@ -247,7 +244,7 @@ fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> R
         return Ok(None);
     }
     let package_url = http::resolve(url, &manifest.url);
-    let name = format!("liviano-{}.exe", manifest.version.trim());
+    let name = format!("nea-{}.exe", manifest.version.trim());
     if !safe_file_name(&name) {
         return Err("nombre de paquete inválido".into());
     }
@@ -267,7 +264,9 @@ fn check(url: &str, waiting: Option<&Pending>, dir: &Path, key: &PublicKey) -> R
             return Err(error);
         }
     };
-    if manifest.size.is_some_and(|size| size != written) || !verify_file(&partial, &manifest.version, &manifest.signature, key) {
+    if manifest.size.is_some_and(|size| size != written)
+        || !verify_file(&partial, &manifest.version, &manifest.signature, key)
+    {
         let _ = fs::remove_file(&partial);
         return Err(format!("{}: la firma no verifica, descartada", manifest.version));
     }
@@ -340,4 +339,3 @@ pub fn apply_pending() -> bool {
     let _ = fs::remove_file(&file);
     applied && std::process::Command::new(&exe).args(std::env::args_os().skip(1)).spawn().is_ok()
 }
-

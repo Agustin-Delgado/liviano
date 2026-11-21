@@ -1,4 +1,4 @@
-//! Private tabs (RF-19): InPrivate views on a profile of their own, created
+//! Private tabs: InPrivate views on a profile of their own, created
 //! from the one shared environment. Nothing about them reaches the history,
 //! the session, the reopen list or the suggestions; their cookies and cache
 //! live in memory and go away with the last private tab.
@@ -62,10 +62,10 @@ fn close_last(mut web: WebTab) {
         }
         Ok(())
     }));
-    if unsafe { profile.ClearBrowsingDataAll(&handler) }.is_err() {
-        if let Some(web) = slot.take() {
-            web.close();
-        }
+    if unsafe { profile.ClearBrowsingDataAll(&handler) }.is_err()
+        && let Some(web) = slot.take()
+    {
+        web.close();
     }
 }
 
@@ -131,4 +131,3 @@ impl App {
         if self.tabs.has_private() { web.close() } else { close_last(web) }
     }
 }
-

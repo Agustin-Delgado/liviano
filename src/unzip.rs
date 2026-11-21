@@ -123,7 +123,8 @@ pub fn extract(archive: &[u8], dest: &Path) -> Result<usize, String> {
     fs::create_dir_all(dest).map_err(io)?;
     let mut files = 0;
     for entry in entries(archive)? {
-        let relative = safe_path(&entry.name).ok_or_else(|| format!("ruta no permitida en el paquete: {}", entry.name))?;
+        let relative =
+            safe_path(&entry.name).ok_or_else(|| format!("ruta no permitida en el paquete: {}", entry.name))?;
         let target = dest.join(relative);
         if entry.is_dir() {
             fs::create_dir_all(&target).map_err(io)?;
@@ -137,4 +138,3 @@ pub fn extract(archive: &[u8], dest: &Path) -> Result<usize, String> {
     }
     Ok(files)
 }
-

@@ -8,7 +8,10 @@ use std::cell::Cell;
 use windows::{
     Win32::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Graphics::Gdi::{BeginPaint, ClientToScreen, CreateSolidBrush, DeleteObject, EndPaint, FillRect, HDC, PAINTSTRUCT, ScreenToClient},
+        Graphics::Gdi::{
+            BeginPaint, ClientToScreen, CreateSolidBrush, DeleteObject, EndPaint, FillRect, HDC, PAINTSTRUCT,
+            ScreenToClient,
+        },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
             Input::KeyboardAndMouse::{GetFocus, ReleaseCapture, SetCapture},
@@ -242,7 +245,8 @@ impl App {
     /// partner had (the active tab stays where it is), or the right.
     pub(super) fn split_with(&mut self, other: u64) {
         let Some(anchor) = self.tabs.active else { return };
-        let side = self.split.splits.pair_of(anchor).and_then(|p| p.side_of(anchor)).map_or(Side::Right, Side::opposite);
+        let side =
+            self.split.splits.pair_of(anchor).and_then(|p| p.side_of(anchor)).map_or(Side::Right, Side::opposite);
         if !self.split.splits.join(other, side, anchor) {
             return;
         }
@@ -319,7 +323,8 @@ impl App {
             let _ = GetWindowRect(focus, &mut rect);
             let mut center = POINT { x: (rect.left + rect.right) / 2, y: (rect.top + rect.bottom) / 2 };
             let _ = ScreenToClient(self.hwnd, &mut center);
-            let inside = |r: &RECT| center.x >= r.left && center.x < r.right && center.y >= r.top && center.y < r.bottom;
+            let inside =
+                |r: &RECT| center.x >= r.left && center.x < r.right && center.y >= r.top && center.y < r.bottom;
             match self.shown_panes().into_iter().find(|(_, r)| inside(r)) {
                 Some((id, _)) => Holder::Page(id),
                 None => Holder::Elsewhere,
@@ -541,13 +546,13 @@ fn create_hint(owner: HWND) -> Option<HWND> {
         let class = WNDCLASSW {
             lpfnWndProc: Some(hint_proc),
             hInstance: instance,
-            lpszClassName: w!("LivianoSplitHint"),
+            lpszClassName: w!("NeaSplitHint"),
             ..Default::default()
         };
         RegisterClassW(&class);
         let hwnd = CreateWindowExW(
             WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-            w!("LivianoSplitHint"),
+            w!("NeaSplitHint"),
             w!(""),
             WS_POPUP,
             0,

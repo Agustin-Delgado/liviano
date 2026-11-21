@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::tabs::{Tab, TabList};
 
-/// The closed palette a group's colour comes from (celagem's tones; the
+/// The closed palette a group's colour comes from (the design system's tones; the
 /// values for each theme are in `design::group_tone`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GroupColor {
@@ -306,10 +306,8 @@ impl<W> TabList<W> {
             Drop::End => (self.tabs.len().saturating_sub(1), None),
         };
         self.move_to(tab, to);
-        if !pinned {
-            if let Some(t) = self.get_mut(tab) {
-                t.group = group;
-            }
+        if !pinned && let Some(t) = self.get_mut(tab) {
+            t.group = group;
         }
         self.normalize_groups();
     }
@@ -329,7 +327,13 @@ impl<W> TabList<W> {
             taken
         };
         let at = match self.group_of(anchor).and_then(|g| self.span(g)) {
-            Some((first, last)) => if after { last + 1 } else { first },
+            Some((first, last)) => {
+                if after {
+                    last + 1
+                } else {
+                    first
+                }
+            }
             None => self.index_of(anchor).map_or(self.tabs.len(), |i| if after { i + 1 } else { i }),
         };
         // Never among the pinned tabs.
@@ -383,4 +387,3 @@ impl<W> TabList<W> {
         self.normalize_groups();
     }
 }
-

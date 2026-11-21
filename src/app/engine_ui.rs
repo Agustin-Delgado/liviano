@@ -17,8 +17,8 @@ use std::time::{Duration, Instant};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED, COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE,
-    ICoreWebView2Controller,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, ICoreWebView2Controller,
 };
 use windows::Win32::{
     Foundation::{HWND, RECT},
@@ -73,9 +73,8 @@ pub(super) enum Response {
 pub(super) fn response(kind: COREWEBVIEW2_PROCESS_FAILED_KIND) -> Response {
     match kind {
         COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED => Response::Restart,
-        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => {
-            Response::Reload
-        }
+        COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED
+        | COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE => Response::Reload,
         _ => Response::Nothing,
     }
 }
@@ -109,12 +108,13 @@ impl App {
     /// again.
     fn make_spare(&mut self) {
         let mut next = WARM_CHECK_EVERY;
-        if let Some(env) = self.env.clone() {
-            if self.engine.spare.is_none() && !self.engine.making {
-                match self.engine.hold_until.and_then(|until| until.checked_duration_since(Instant::now())) {
-                    Some(wait) => next = wait.max(Duration::from_millis(50)),
-                    None => self.engine.making = web::create_controller(&env, self.hwnd, SPARE).is_ok(),
-                }
+        if let Some(env) = self.env.clone()
+            && self.engine.spare.is_none()
+            && !self.engine.making
+        {
+            match self.engine.hold_until.and_then(|until| until.checked_duration_since(Instant::now())) {
+                Some(wait) => next = wait.max(Duration::from_millis(50)),
+                None => self.engine.making = web::create_controller(&env, self.hwnd, SPARE).is_ok(),
             }
         }
         unsafe {
@@ -163,7 +163,8 @@ impl App {
 
     pub(super) fn spare_ready(&mut self, result: windows::core::Result<ICoreWebView2Controller>) {
         self.engine.making = false;
-        let waiting = self.engine.claim.take().filter(|id| self.tabs.get(*id).is_some_and(|t| matches!(t.live, Live::Creating)));
+        let waiting =
+            self.engine.claim.take().filter(|id| self.tabs.get(*id).is_some_and(|t| matches!(t.live, Live::Creating)));
         match (result, waiting) {
             (Ok(controller), Some(id)) => self.controller_ready(id, Ok(controller)),
             (Ok(controller), None) => unsafe {
@@ -248,8 +249,7 @@ impl App {
             self.env_error = None;
             self.show_active();
         } else {
-            self.env_error = Some("El motor de páginas se cerró varias veces seguidas. Cerrá y abrí Liviano.".to_string());
+            self.env_error = Some("El motor de páginas se cerró varias veces seguidas. Cerrá y abrí Nea.".to_string());
         }
     }
 }
-

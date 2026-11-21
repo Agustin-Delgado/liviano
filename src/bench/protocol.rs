@@ -19,11 +19,19 @@ pub enum Action {
         background: bool,
     },
     /// Waits until the tab's page has finished loading.
-    Wait { tab: Option<u64>, timeout_ms: Option<u64> },
+    Wait {
+        tab: Option<u64>,
+        timeout_ms: Option<u64>,
+    },
     /// `document.body.innerText`.
-    Text { tab: Option<u64> },
+    Text {
+        tab: Option<u64>,
+    },
     /// A PNG of the tab's view, written to `path` (or a temporary file).
-    Screenshot { tab: Option<u64>, path: Option<String> },
+    Screenshot {
+        tab: Option<u64>,
+        path: Option<String>,
+    },
     /// Clicks the first element that matches a CSS selector. With
     /// `gesture`, as a person's click (the page gets user activation, so a
     /// `window.open` in it counts as asked for).
@@ -35,7 +43,10 @@ pub enum Action {
     },
     /// Runs an app command by its settings name ("new_tab") or by the chord
     /// bound to it ("Ctrl+T"), without any keyboard input.
-    Run { name: Option<String>, keys: Option<String> },
+    Run {
+        name: Option<String>,
+        keys: Option<String>,
+    },
     /// Replaces the text of the single field (it has to be open) and,
     /// with `submit`, presses Enter on it.
     Type {
@@ -54,13 +65,18 @@ pub enum Action {
     /// sleep timer would; the person's own tabs are left alone.
     Discard,
     /// Closes one test tab, or all of them when `tab` is left out.
-    Close { tab: Option<u64> },
+    Close {
+        tab: Option<u64>,
+    },
     /// Closes the window as the person would (the session is saved).
     Quit,
     /// Rests the pointer's hover on what is at (x, y) of the strip, in
     /// client pixels, without moving the mouse: for captures of hover
     /// states. A point outside the strip clears it.
-    Hover { x: i32, y: i32 },
+    Hover {
+        x: i32,
+        y: i32,
+    },
     /// Puts tabs in a tab group: a new one made from `tabs`, or `group`
     /// when given; then sets its name, colour (`blue`, `red`…) and whether
     /// it is folded, as the menus would.
@@ -118,8 +134,8 @@ pub fn pipe_name(user: &str, suffix: Option<&str>) -> String {
         text.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect()
     };
     match suffix.filter(|s| !s.trim().is_empty()) {
-        Some(suffix) => format!(r"\\.\pipe\liviano-bench-{}-{}", clean(user), clean(suffix)),
-        None => format!(r"\\.\pipe\liviano-bench-{}", clean(user)),
+        Some(suffix) => format!(r"\\.\pipe\nea-bench-{}-{}", clean(user), clean(suffix)),
+        None => format!(r"\\.\pipe\nea-bench-{}", clean(user)),
     }
 }
 
@@ -136,4 +152,3 @@ pub fn click_script(selector: &str) -> String {
          catch (e) {{ return {{ error: String(e && e.message || e) }}; }} }})()"
     )
 }
-

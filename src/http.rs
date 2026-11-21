@@ -98,13 +98,14 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
         return Err(format!("solo https: {url}"));
     }
     unsafe {
-        let agent = HSTRING::from(format!("Liviano/{}", env!("CARGO_PKG_VERSION")));
+        let agent = HSTRING::from(format!("Nea/{}", env!("CARGO_PKG_VERSION")));
         let session = open(
             WinHttpOpen(&agent, WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, PCWSTR::null(), PCWSTR::null(), 0),
             "WinHttpOpen",
         )?;
         let _ = WinHttpSetTimeouts(session.0, 10_000, 10_000, 15_000, 30_000);
-        let connect = open(WinHttpConnect(session.0, &HSTRING::from(parsed.host.as_str()), parsed.port, 0), "WinHttpConnect")?;
+        let connect =
+            open(WinHttpConnect(session.0, &HSTRING::from(parsed.host.as_str()), parsed.port, 0), "WinHttpConnect")?;
         let flags = if parsed.secure { WINHTTP_FLAG_SECURE } else { WINHTTP_OPEN_REQUEST_FLAGS(0) };
         let request = open(
             WinHttpOpenRequest(
@@ -151,4 +152,3 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
         }
     }
 }
-

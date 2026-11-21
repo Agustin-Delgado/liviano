@@ -3,16 +3,16 @@
 ## Cómo reportar una vulnerabilidad
 
 **No abras un issue público.** Un fallo de seguridad se reporta en privado, así
-quien usa Liviano tiene la corrección antes de que el problema se conozca.
+quien usa Nea tiene la corrección antes de que el problema se conozca.
 
-- **Preferido:** en el repositorio de GitHub, pestaña *Security* → *Report a
-  vulnerability* (aviso de seguridad privado).
-- **Alternativa:** un correo a `<correo-de-seguridad>` (a definir por quien
-  mantiene el proyecto antes de la primera versión pública).
+En el repositorio de GitHub, pestaña *Security* → *Report a vulnerability*
+([enlace directo](https://github.com/Agustin-Delgado/nea/security/advisories/new)).
+Es un aviso de seguridad privado y el único canal: lo ve sólo quien mantiene
+el proyecto.
 
 Incluí, si podés:
 
-- la versión de Liviano (Ajustes → Actualizaciones) y de Windows;
+- la versión de Nea (Ajustes → Actualizaciones) y de Windows;
 - qué pasa y qué esperabas que pasara;
 - los pasos para reproducirlo, o una prueba de concepto;
 - el impacto que le ves (qué podría hacer quien lo aproveche).
@@ -36,10 +36,10 @@ Interesan especialmente:
 - el instalador por usuario (`src/installer.rs`);
 - la inyección de scripts en las páginas (modo lectura, ocultar elementos,
   video flotante);
-- cualquier forma de que una página lea o cambie datos locales de Liviano.
+- cualquier forma de que una página lea o cambie datos locales de Nea.
 
 Los fallos del motor WebView2 en sí se reportan a Microsoft
-(<https://msrc.microsoft.com>); si afectan a Liviano de una forma particular,
+(<https://msrc.microsoft.com>); si afectan a Nea de una forma particular,
 avisanos también.
 
 ## Versiones con soporte

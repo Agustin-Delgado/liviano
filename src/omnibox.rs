@@ -89,4 +89,3 @@ pub fn strip_for_match(url: &str) -> &str {
     let rest = url.split_once("://").map_or(url, |(_, rest)| rest);
     rest.strip_prefix("www.").unwrap_or(rest)
 }
-

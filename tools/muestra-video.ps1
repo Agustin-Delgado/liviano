@@ -1,7 +1,7 @@
 ﻿<#
 .SYNOPSIS
   Graba el recorrido de docs/muestra: cuadros con PrintWindow mientras un
-  Liviano propio (tools/muestra.ps1) hace cada cosa, y arma el MP4 y el GIF
+  Nea propio (tools/muestra.ps1) hace cada cosa, y arma el MP4 y el GIF
   con examples/encode_mp4.rs.
 
 .DESCRIPTION
@@ -11,7 +11,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$Video = (Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\muestra\liviano.mp4'),
+    [string]$Video = (Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\muestra\nea.mp4'),
     [string]$Gif = (Join-Path (Split-Path -Parent $PSScriptRoot) 'docs\muestra\animaciones.gif'),
     [int]$Quality = 70
 )
@@ -24,14 +24,14 @@ New-Item -ItemType Directory -Force -Path $dir | Out-Null
 $scenes = Join-Path $dir 'escenas.txt'
 
 function Pause-For([int]$Ms) { Start-Sleep -Milliseconds $Ms }
-function Scene([string]$Name) { Add-Content -Path $scenes -Value "$([LivianoMuestra]::Elapsed)`t$Name" -Encoding UTF8 }
+function Scene([string]$Name) { Add-Content -Path $scenes -Value "$([NeaMuestra]::Elapsed)`t$Name" -Encoding UTF8 }
 
 # Loads off the record: the network's time is not the browser's.
 function Wait-Load([int64]$Tab = 0) {
     Suspend-Recording
     $args_ = @{ timeout_ms = 25000 }
     if ($Tab) { $args_.tab = $Tab }
-    try { Lv wait $args_ | Out-Null } catch { }
+    try { Nea wait $args_ | Out-Null } catch { }
     Start-Sleep -Milliseconds 700
     Resume-Recording
 }
@@ -52,7 +52,7 @@ function Hover-Tab($Map, [string]$Key, [int]$Ms) {
     Pause-For $Ms
 }
 
-Disconnect-Liviano
+Disconnect-Nea
 Start-Muestra -Theme light | Out-Null
 # Two tabs already there when the video starts, each seen once.
 $wiki = Open-Page 'https://es.wikipedia.org/wiki/Buenos_Aires' -Wait 25000
@@ -74,7 +74,7 @@ Pause-For 600
 Scene 'Pestañas nuevas en segundo plano'
 $opened = @()
 foreach ($u in 'https://developer.mozilla.org/es/docs/Web/JavaScript', 'https://example.com/', 'https://news.ycombinator.com/') {
-    $opened += (Lv open @{ url = $u; background = $true }).tab
+    $opened += (Nea open @{ url = $u; background = $true }).tab
     Pause-For 700
 }
 foreach ($t in $opened) { Wait-Load $t }
@@ -181,7 +181,8 @@ Stop-Muestra
 # The encoder reports progress on stderr, which PowerShell 5.1 would take
 # for a failure under 'Stop'.
 $ErrorActionPreference = 'Continue'
-$encoder = Join-Path $script:Root 'target\release\examples\encode_mp4.exe'
+# Beside MUESTRA_EXE when the build lives elsewhere.
+$encoder = if ($env:MUESTRA_EXE) { Join-Path (Split-Path -Parent $env:MUESTRA_EXE) 'examples\encode_mp4.exe' } else { Join-Path $script:Root 'target\release\examples\encode_mp4.exe' }
 & $encoder (Join-Path $dir 'timeline.txt') $Video --fps 30 --quality $Quality
 # The GIF: hover cards, switching and reordering, smaller (under 5 MB).
 $marks = Get-Content $scenes -Encoding UTF8 | ForEach-Object { $p = $_ -split "`t"; [pscustomobject]@{ At = [int64]$p[0]; Name = $p[1] } }

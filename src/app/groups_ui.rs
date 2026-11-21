@@ -217,13 +217,13 @@ impl App {
                 .filter(|(_, g)| Some(*g) != own)
                 .filter_map(|(i, g)| self.tabs.group(g).map(|g| (i, g.title())))
                 .collect();
-            if !others.is_empty() {
-                if let Ok(sub) = CreatePopupMenu() {
-                    for (i, title) in others {
-                        let _ = AppendMenuW(sub, MF_STRING, MENU_JOIN_GROUP + i, &wide(&title));
-                    }
-                    let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Agregar al grupo"));
+            if !others.is_empty()
+                && let Ok(sub) = CreatePopupMenu()
+            {
+                for (i, title) in others {
+                    let _ = AppendMenuW(sub, MF_STRING, MENU_JOIN_GROUP + i, &wide(&title));
                 }
+                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Agregar al grupo"));
             }
             if own.is_some() {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_LEAVE_GROUP, w!("Quitar del grupo"));
@@ -282,8 +282,8 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_GROUP, w!("Cerrar el grupo"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            let chosen =
-                TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None).0 as usize;
+            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
+                .0 as usize;
             let _ = DestroyMenu(menu);
             chosen
         };

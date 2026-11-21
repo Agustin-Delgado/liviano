@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-  Captura las ventanas de un proceso de Liviano en un PNG, sin activarlas.
+  Captura las ventanas de un proceso de Nea en un PNG, sin activarlas.
 
 .DESCRIPTION
   Usa PrintWindow con PW_RENDERFULLCONTENT sobre cada ventana visible de
@@ -16,7 +16,7 @@
 .EXAMPLE
   tools\capture.ps1 -ProcessId 1234 -Out docs\capturas\claro-horizontal.png
 .EXAMPLE
-  tools\capture.ps1 -ProcessId 1234 -Out ajustes.png -Class LivianoSettings
+  tools\capture.ps1 -ProcessId 1234 -Out ajustes.png -Class NeaSettings
 #>
 [CmdletBinding()]
 param(
@@ -32,7 +32,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
-if (-not ('LivianoCapture' -as [type])) {
+if (-not ('NeaCapture' -as [type])) {
     Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
 using System;
 using System.Collections.Generic;
@@ -40,7 +40,7 @@ using System.Drawing;
 using System.Runtime.InteropServices;
 using System.Text;
 
-public static class LivianoCapture {
+public static class NeaCapture {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
@@ -153,7 +153,7 @@ public static class LivianoCapture {
             shot.Frame.Right - shot.Frame.Left, shot.Frame.Bottom - shot.Frame.Top);
         var cut = bitmap.Clone(crop, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         bitmap.Dispose();
-        if (shot.Class == "LivianoTooltip") KeyOutBlack(cut);
+        if (shot.Class == "NeaTooltip") KeyOutBlack(cut);
         return cut;
     }
 
@@ -171,7 +171,7 @@ public static class LivianoCapture {
 '@
 }
 
-$shots = [LivianoCapture]::Windows([uint32]$ProcessId)
+$shots = [NeaCapture]::Windows([uint32]$ProcessId)
 if ($Class) { $shots = @($shots | Where-Object { $_.Class -eq $Class }) }
 if (-not $shots -or $shots.Count -eq 0) { throw "El proceso $ProcessId no tiene ventanas visibles" }
 # The base is the biggest window (the browser, or the one asked for).
@@ -190,12 +190,12 @@ $started = $false
 foreach ($shot in $ordered) {
     if ($shot.Hwnd -eq $base.Hwnd) { $started = $true }
     if (-not $started) { continue }
-    $image = [LivianoCapture]::Grab($shot)
+    $image = [NeaCapture]::Grab($shot)
     $x = $shot.Frame.Left - $base.Frame.Left
     $y = $shot.Frame.Top - $base.Frame.Top
     $r = $Corner * $dpi
     # A window that shapes itself (a region, per-pixel alpha) gets no DWM corner.
-    if ([LivianoCapture]::PerPixel($shot.Hwnd) -or [LivianoCapture]::HasRegion($shot.Hwnd)) { $r = 0 }
+    if ([NeaCapture]::PerPixel($shot.Hwnd) -or [NeaCapture]::HasRegion($shot.Hwnd)) { $r = 0 }
     if ($r -gt 0) {
         $path = New-Object System.Drawing.Drawing2D.GraphicsPath
         $d = 2 * $r

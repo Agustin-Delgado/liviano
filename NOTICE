@@ -1,8 +1,8 @@
-Liviano
-Copyright (c) 2026 Los autores de Liviano. Licencia MIT (ver LICENSE).
+Nea
+Copyright (c) 2026 Los autores de Nea. Licencia MIT (ver LICENSE).
 
 Referencia funcional: Search, de driceroland (https://github.com/driceroland/Search),
-licencia MIT. Liviano reproduce sus ideas en Windows; no incluye su código, su
+licencia MIT. Nea reproduce sus ideas en Windows; no incluye su código, su
 nombre ni su ícono.
 
 Componentes de terceros incluidos en el ejecutable
@@ -29,4 +29,4 @@ serde, serde_json
   Copyright (c) David Tolnay y colaboradores. Licencia MIT o Apache 2.0.
 
 El runtime de WebView2 (el motor de Microsoft Edge) no se distribuye con
-Liviano: se usa el que está instalado en Windows.
+Nea: se usa el que está instalado en Windows.

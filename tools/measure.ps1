@@ -1,17 +1,17 @@
 ﻿<#
 .SYNOPSIS
-  Medición de memoria de la sección 10.1: escenarios fijos, reporte y umbral de regresión.
+  Medición de memoria: escenarios fijos, reporte y umbral de regresión.
 
 .DESCRIPTION
-  Cada escenario arranca Liviano de cero con un LIVIANO_DATA_DIR temporal y el
-  control por script (LIVIANO_BENCH=1, en un pipe propio), lo lleva al estado
+  Cada escenario arranca Nea de cero con un NEA_DATA_DIR temporal y el
+  control por script (NEA_BENCH=1, en un pipe propio), lo lleva al estado
   del escenario, espera a que se asiente y toma la memoria de trabajo privada
-  de liviano.exe más todo el árbol de procesos del motor (mediana de varias
+  de nea.exe más todo el árbol de procesos del motor (mediana de varias
   muestras). Con -Edge y -Chrome abre las mismas páginas en Edge y en Chrome
   (cada uno con un perfil temporal propio) y suma su árbol del mismo modo.
 
-  Bloqueo (RF-13): antes de los escenarios una corrida de preparación deja
-  que Liviano baje EasyList y EasyPrivacy una vez; esa caché se copia a cada
+  Bloqueo: antes de los escenarios una corrida de preparación deja
+  que Nea baje EasyList y EasyPrivacy una vez; esa caché se copia a cada
   escenario, así todos compilan las mismas reglas y ninguno descarga listas
   mientras se mide. Los escenarios con vistas esperan a que el motor de
   filtros esté compilado antes de abrir la página, y la página pesada anota
@@ -42,7 +42,7 @@ param(
     [switch]$Build,
     [string]$LightUrl = 'https://example.com/',
     [string]$HeavyUrl = 'https://www.infobae.com/',
-    # Variant name -> settings merged into settings.json. Blocking (RF-13) is
+    # Variant name -> settings merged into settings.json. Blocking is
     # on everywhere unless a host is in shield_disabled; without that module
     # both variants are the same build and measure the same.
     [System.Collections.IDictionary]$HeavyVariants = $null,
@@ -55,7 +55,7 @@ param(
     [string]$EdgeExe = '',
     [switch]$Chrome,
     [string]$ChromeExe = '',
-    # Extra engine switches for every Liviano run (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS),
+    # Extra engine switches for every Nea run (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS),
     # to try a memory flag before building it in.
     [string]$EngineArgs = '',
     [string]$Report = '',
@@ -73,12 +73,12 @@ $ManyUrls = @($ManyUrls | ForEach-Object { $_ -split ',' } | Where-Object { $_ }
 . (Join-Path $PSScriptRoot 'bench.ps1')
 
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
-if (-not $Exe) { $Exe = Join-Path $root 'target\release\liviano.exe' }
+if (-not $Exe) { $Exe = Join-Path $root 'target\release\nea.exe' }
 if (-not $BenchExe) { $BenchExe = Join-Path $root 'target\release\examples\bench.exe' }
 if ($Build) {
     Push-Location $root
     try {
-        cargo build --release --bin liviano --example bench
+        cargo build --release --bin nea --example bench
         if ($LASTEXITCODE -ne 0) { throw 'cargo build falló' }
     } finally { Pop-Location }
 }
@@ -156,10 +156,10 @@ function Add-Row($scenario, $browser, $m, [string]$note = '') {
     Write-Host ("  {0,-24} {1,-8} {2,8:N1} MB  ({3} procesos){4}" -f $scenario, $browser, $row.total_mb, $row.processes, $(if ($note) { "  - $note" } else { '' }))
 }
 
-# ---------- Liviano ----------
+# ---------- Nea ----------
 
-function Start-Liviano([hashtable]$settings, $session) {
-    $dir = New-TempDir 'liviano-measure'
+function Start-Nea([hashtable]$settings, $session) {
+    $dir = New-TempDir 'nea-measure'
     $all = @{ bench_enabled = $true }
     foreach ($k in $settings.Keys) { $all[$k] = $settings[$k] }
     [IO.File]::WriteAllText((Join-Path $dir 'settings.json'), ($all | ConvertTo-Json -Compress -Depth 5))
@@ -170,32 +170,32 @@ function Start-Liviano([hashtable]$settings, $session) {
         # Copy-Item keeps the files' dates, so the lists look fresh and nothing is downloaded.
         Copy-Item -Recurse -LiteralPath $script:ShieldCache -Destination (Join-Path $dir 'shield')
     }
-    $env:LIVIANO_DATA_DIR = $dir
-    $env:LIVIANO_BENCH = '1'
-    $env:LIVIANO_BENCH_PIPE = 'measure-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
+    $env:NEA_DATA_DIR = $dir
+    $env:NEA_BENCH = '1'
+    $env:NEA_BENCH_PIPE = 'measure-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
     if ($EngineArgs) { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $EngineArgs }
     $process = Start-Process -FilePath $Exe -PassThru
-    Connect-Liviano -TimeoutSec 20
-    $ping = Invoke-Liviano ping
+    Connect-Nea -TimeoutSec 20
+    $ping = Invoke-Nea ping
     if ($ping.pid -ne $process.Id) { throw "El pipe lo atiende otro proceso ($($ping.pid))" }
     [pscustomobject]@{ Process = $process; Dir = $dir }
 }
 
-function Stop-Liviano($run) {
-    try { Invoke-Liviano quit | Out-Null } catch { }
-    Disconnect-Liviano
+function Stop-Nea($run) {
+    try { Invoke-Nea quit | Out-Null } catch { }
+    Disconnect-Nea
     if (-not $run.Process.WaitForExit(15000)) { Stop-Process -Id $run.Process.Id -Force -ErrorAction SilentlyContinue }
     Start-Sleep -Milliseconds 500
     # The engine normally leaves with the app; anything still holding the profile goes.
     foreach ($p in (Get-ProcessesMentioning 'msedgewebview2.exe' $run.Dir)) {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
-    Remove-Item Env:LIVIANO_DATA_DIR, Env:LIVIANO_BENCH, Env:LIVIANO_BENCH_PIPE, Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
+    Remove-Item Env:NEA_DATA_DIR, Env:NEA_BENCH, Env:NEA_BENCH_PIPE, Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue
     Remove-TempDir $run.Dir
 }
 
-function Get-LivianoMemory {
-    $m = Invoke-Liviano memory
+function Get-NeaMemory {
+    $m = Invoke-Nea memory
     if (-not $script:EngineVersion) {
         $engine = $m.processes | Where-Object { $_.exe -eq 'msedgewebview2.exe' } | Select-Object -First 1
         if ($engine) {
@@ -211,7 +211,7 @@ function Get-LivianoMemory {
 function Wait-Shield {
     $deadline = (Get-Date).AddSeconds(20)
     while ((Get-Date) -lt $deadline) {
-        $s = Invoke-Liviano shield
+        $s = Invoke-Nea shield
         if ($null -ne $s.rules) { return $s }
         Start-Sleep -Milliseconds 200
     }
@@ -221,16 +221,16 @@ function Wait-Shield {
 # Opens about:blank first so the engine (and with it the filters) start,
 # then the page itself in a new tab, and closes the blank one.
 function Open-Filtered([string]$url) {
-    $blank = (Invoke-Liviano open @{ url = 'about:blank' }).tab
+    $blank = (Invoke-Nea open @{ url = 'about:blank' }).tab
     Wait-Tab $blank | Out-Null
     $script:ShieldStats = Wait-Shield
-    $tab = (Invoke-Liviano open @{ url = $url }).tab
-    Invoke-Liviano close @{ tab = $blank } | Out-Null
+    $tab = (Invoke-Nea open @{ url = $url }).tab
+    Invoke-Nea close @{ tab = $blank } | Out-Null
     $tab
 }
 
 function Get-ShieldNote {
-    $now = Invoke-Liviano shield
+    $now = Invoke-Nea shield
     $requests = $now.requests - $script:ShieldStats.requests
     $blocked = $now.blocked - $script:ShieldStats.blocked
     $script:LastShield = [pscustomobject]@{ requests = $requests; blocked = $blocked; rules = $now.rules; heap_bytes = $now.heap_bytes }
@@ -240,27 +240,27 @@ function Get-ShieldNote {
 function Wait-Tab($tab) {
     $arguments = @{ timeout_ms = $LoadTimeoutSec * 1000 }
     if ($null -ne $tab) { $arguments.tab = $tab }
-    $reply = Invoke-Liviano wait $arguments -NoThrow
+    $reply = Invoke-Nea wait $arguments -NoThrow
     if ($reply.ok) { return '' }
     "no terminó de cargar en $LoadTimeoutSec s"
 }
 
-function Invoke-LivianoScenario([string]$name, [hashtable]$settings, $session, [scriptblock]$steps) {
+function Invoke-NeaScenario([string]$name, [hashtable]$settings, $session, [scriptblock]$steps) {
     if (-not (Test-Wanted $name)) { return }
-    $run = Start-Liviano $settings $session
+    $run = Start-Nea $settings $session
     $script:ShieldStats = $null
     try {
         $note = [string](& $steps)
-        $m = Measure-Samples { Get-LivianoMemory }
+        $m = Measure-Samples { Get-NeaMemory }
         # Counted after the samples: ads keep arriving while the page settles.
         if ($script:ShieldStats) {
             $shieldNote = Get-ShieldNote
             $script:Shield[$name] = $script:LastShield
             $note = (@($note, $shieldNote) | Where-Object { $_ }) -join ', '
         }
-        Add-Row $name 'Liviano' $m $note
+        Add-Row $name 'Nea' $m $note
     } finally {
-        Stop-Liviano $run
+        Stop-Nea $run
     }
 }
 
@@ -301,7 +301,7 @@ function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls
         return
     }
     $b.Version = (Get-Item $exe).VersionInfo.ProductVersion
-    $profileDir = New-TempDir "liviano-measure-$($browser.ToLower())"
+    $profileDir = New-TempDir "nea-measure-$($browser.ToLower())"
     $browserArgs = @("--user-data-dir=`"$profileDir`"", '--no-first-run', '--no-default-browser-check', '--disable-sync', '--new-window') + $urls
     Start-Process -FilePath $exe -ArgumentList $browserArgs | Out-Null
     try {
@@ -324,12 +324,12 @@ function Invoke-OthersScenario([string]$name, [string[]]$urls) {
 
 # ---------- filter lists ----------
 
-# One run lets Liviano fetch EasyList and EasyPrivacy the way it always does;
+# One run lets Nea fetch EasyList and EasyPrivacy the way it always does;
 # every scenario then starts from a copy of that cache.
 function Initialize-ShieldCache {
-    $run = Start-Liviano @{} $null
+    $run = Start-Nea @{} $null
     try {
-        $tab = (Invoke-Liviano open @{ url = 'about:blank' }).tab
+        $tab = (Invoke-Nea open @{ url = 'about:blank' }).tab
         Wait-Tab $tab | Out-Null
         $stamp = Join-Path $run.Dir 'shield\updated'
         $deadline = (Get-Date).AddSeconds(90)
@@ -338,13 +338,13 @@ function Initialize-ShieldCache {
             $script:Notes.Add('No se pudieron bajar EasyList/EasyPrivacy: el bloqueo usó sólo la lista mínima incorporada.')
             return
         }
-        $cache = New-TempDir 'liviano-measure-shield'
+        $cache = New-TempDir 'nea-measure-shield'
         Get-ChildItem -LiteralPath (Join-Path $run.Dir 'shield') -File | Where-Object { $_.Extension -ne '.tmp' } |
             Copy-Item -Destination $cache
         $script:ShieldCache = $cache
         $script:ShieldFiles = @(Get-ChildItem -LiteralPath $cache -Filter '*.txt' | ForEach-Object { "$($_.Name) ($([Math]::Round($_.Length / 1KB)) KB)" })
     } finally {
-        Stop-Liviano $run
+        Stop-Nea $run
     }
 }
 
@@ -357,50 +357,50 @@ $restoreSession = @{
     active = 0
 }
 
-Write-Host "Liviano: $Exe"
+Write-Host "Nea: $Exe"
 Write-Host "Asentamiento $SettleSec s, $Samples muestras por escenario (mediana)."
 if ($Only.Count -eq 0 -or @($Only | Where-Object { $_ -ne 'solo-programa' }).Count -gt 0) {
     Write-Host 'Preparando la caché de listas de bloqueo...'
     Initialize-ShieldCache
 }
 
-Invoke-LivianoScenario 'solo-programa' @{} $null { '' }
+Invoke-NeaScenario 'solo-programa' @{} $null { '' }
 
-Invoke-LivianoScenario 'about-blank' @{} $null {
-    $tab = (Invoke-Liviano open @{ url = 'about:blank' }).tab
+Invoke-NeaScenario 'about-blank' @{} $null {
+    $tab = (Invoke-Nea open @{ url = 'about:blank' }).tab
     Wait-Tab $tab
 }
 Invoke-OthersScenario 'about-blank' @('about:blank')
 
-Invoke-LivianoScenario 'liviana' @{} $null {
-    $tab = (Invoke-Liviano open @{ url = $LightUrl }).tab
+Invoke-NeaScenario 'liviana' @{} $null {
+    $tab = (Invoke-Nea open @{ url = $LightUrl }).tab
     Wait-Tab $tab
 }
 Invoke-OthersScenario 'liviana' @($LightUrl)
 
 foreach ($variant in $HeavyVariants.Keys) {
-    Invoke-LivianoScenario "pesada-$variant" $HeavyVariants[$variant] $null {
+    Invoke-NeaScenario "pesada-$variant" $HeavyVariants[$variant] $null {
         $tab = Open-Filtered $HeavyUrl
         Wait-Tab $tab
     }
 }
 Invoke-OthersScenario 'pesada' @($HeavyUrl)
 
-Invoke-LivianoScenario '20-pestanas' @{} $null {
+Invoke-NeaScenario '20-pestanas' @{} $null {
     $late = 0
     foreach ($url in $manyUrls) {
-        $tab = (Invoke-Liviano open @{ url = $url }).tab
+        $tab = (Invoke-Nea open @{ url = $url }).tab
         if (Wait-Tab $tab) { $late++ }
     }
-    $slept = (Invoke-Liviano discard).discarded
+    $slept = (Invoke-Nea discard).discarded
     $note = "$slept dormidas"
     if ($late) { $note += ", $late sin terminar de cargar" }
     $note
 }
 Invoke-OthersScenario '20-pestanas' $manyUrls
 
-Invoke-LivianoScenario 'restaurar-50' @{} $restoreSession {
-    $state = Invoke-Liviano state
+Invoke-NeaScenario 'restaurar-50' @{} $restoreSession {
+    $state = Invoke-Nea state
     $note = "$(@($state.tabs).Count) pestañas restauradas"
     $late = Wait-Tab $null
     if ($late) { $note += ", la activa $late" }
@@ -416,24 +416,24 @@ $os = Get-CimInstance Win32_OperatingSystem
 $ramGb = [Math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
 $others = @($script:Foreign.Keys | Where-Object { $script:Foreign[$_].Version })
 
-function Get-Row([string]$scenario, [string]$browser = 'Liviano') {
+function Get-Row([string]$scenario, [string]$browser = 'Nea') {
     $script:Rows | Where-Object { $_.browser -eq $browser -and $_.scenario -eq $scenario } | Select-Object -First 1
 }
 
 function Format-Mb([double]$mb) { ('{0:N1}' -f $mb) }
 
-# Section 5.2 budgets and the memory criteria of section 13, from this run.
+# The memory budgets, checked against this run.
 function Get-BudgetLines {
     $out = New-Object System.Collections.Generic.List[string]
     $yes = { param($ok) if ($ok) { 'Sí' } else { '**No**' } }
     $out.Add('| Presupuesto o criterio | Objetivo | Medido | ¿Se cumple? |')
     $out.Add('|---|---|---|---|')
-    $livianoRows = @($script:Rows | Where-Object { $_.browser -eq 'Liviano' })
+    $neaRows = @($script:Rows | Where-Object { $_.browser -eq 'Nea' })
     $solo = Get-Row 'solo-programa'
-    if ($livianoRows.Count -gt 0) {
-        $maxApp = ($livianoRows | Measure-Object -Property app_mb -Maximum).Maximum
+    if ($neaRows.Count -gt 0) {
+        $maxApp = ($neaRows | Measure-Object -Property app_mb -Maximum).Maximum
         $soloText = if ($solo) { "$(Format-Mb $solo.app_mb) MB sin vistas; " } else { '' }
-        $out.Add("| 5.2 / 13: proceso propio (interfaz + lógica) | < 20 MB en reposo (máx. unas pocas decenas) | $($soloText)máximo $(Format-Mb $maxApp) MB en todos los escenarios | $(& $yes ($maxApp -lt 20)) |")
+        $out.Add("| Proceso propio (interfaz + lógica) | < 20 MB en reposo (máx. unas pocas decenas) | $($soloText)máximo $(Format-Mb $maxApp) MB en todos los escenarios | $(& $yes ($maxApp -lt 20)) |")
     }
     $restore = Get-Row 'restaurar-50'
     $light = Get-Row 'liviana'
@@ -442,15 +442,15 @@ function Get-BudgetLines {
         $perTotal = ($restore.total_mb - $light.total_mb) / 49
         # Rows are rounded to 0.1 MB: spread over 49 tabs that is ~0.002 MB.
         $perText = if ($perApp -le 0.002) { 'Menos de 0.002 MB (bajo la resolución)' } else { "$('{0:N3}' -f $perApp) MB" }
-        $out.Add("| 5.2: pestaña dormida (sólo metadatos) | < 0,5 MB cada una | $perText del programa por pestaña (restaurar-50 contra liviana, 49 dormidas); contando el motor, $('{0:N2}' -f $perTotal) MB | $(& $yes ($perApp -lt 0.5)) |")
+        $out.Add("| Pestaña dormida (sólo metadatos) | < 0,5 MB cada una | $perText del programa por pestaña (restaurar-50 contra liviana, 49 dormidas); contando el motor, $('{0:N2}' -f $perTotal) MB | $(& $yes ($perApp -lt 0.5)) |")
     }
     $heavy = @($script:Shield.Values | Where-Object { $_.heap_bytes }) | Select-Object -First 1
     if ($heavy) {
         $engineMb = $heavy.heap_bytes / 1MB
-        $out.Add("| 5.2: motor de filtros | Pocos MB | $('{0:N1}' -f $engineMb) MB de reglas compiladas ($('{0:N0}' -f $heavy.rules) reglas de red) | $(& $yes ($engineMb -lt 10)) |")
+        $out.Add("| Motor de filtros | Pocos MB | $('{0:N1}' -f $engineMb) MB de reglas compiladas ($('{0:N0}' -f $heavy.rules) reglas de red) | $(& $yes ($engineMb -lt 10)) |")
     }
     if ($light) {
-        $out.Add("| 5.1: pestaña activa con página liviana | 80 a 150 MB entre todos los procesos del motor | $(Format-Mb $light.engine_mb) MB de motor, $(Format-Mb $light.total_mb) MB en total | $(& $yes ($light.engine_mb -le 150)) |")
+        $out.Add("| Pestaña activa con página liviana | 80 a 150 MB entre todos los procesos del motor | $(Format-Mb $light.engine_mb) MB de motor, $(Format-Mb $light.total_mb) MB en total | $(& $yes ($light.engine_mb -le 150)) |")
     }
     $twenty = Get-Row '20-pestanas'
     if ($twenty) {
@@ -458,11 +458,11 @@ function Get-BudgetLines {
             $other = Get-Row '20-pestanas' $browser
             if (-not $other -or $other.total_mb -le 0) { continue }
             $less = 100 * (1 - $twenty.total_mb / $other.total_mb)
-            $out.Add("| 13: 20 pestañas con 19 dormidas, claramente menos que $browser | Al menos 40 % menos | $(Format-Mb $twenty.total_mb) MB contra $(Format-Mb $other.total_mb) MB: $('{0:N0}' -f $less) % menos | $(& $yes ($less -ge 40)) |")
+            $out.Add("| 20 pestañas con 19 dormidas, claramente menos que $browser | Al menos 40 % menos | $(Format-Mb $twenty.total_mb) MB contra $(Format-Mb $other.total_mb) MB: $('{0:N0}' -f $less) % menos | $(& $yes ($less -ge 40)) |")
         }
     }
-    $out.Add('| 5.2: pestaña suspendida | Reducción fuerte respecto de la activa | Sin escenario propio: "20-pestanas" duerme con descarte (vista destruida), el estado de menor costo | Sin medir |')
-    $out.Add('| 5.2: índice de historial | Pocos MB con decenas de miles de entradas | Los escenarios arrancan con historial vacío | Sin medir |')
+    $out.Add('| Pestaña suspendida | Reducción fuerte respecto de la activa | Sin escenario propio: "20-pestanas" duerme con descarte (vista destruida), el estado de menor costo | Sin medir |')
+    $out.Add('| Índice de historial | Pocos MB con decenas de miles de entradas | Los escenarios arrancan con historial vacío | Sin medir |')
     $out
 }
 
@@ -476,7 +476,7 @@ if ($Report) {
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add('# Medición de memoria')
     $lines.Add('')
-    $lines.Add('Generado por `tools/measure.ps1` (sección 10.1 de la especificación). Memoria de trabajo privada: `liviano.exe` más todo el árbol de procesos del motor (WebView2), mediana de ' + $Samples + ' muestras tras ' + $SettleSec + ' s de asentamiento. Cada escenario arranca de cero con datos temporales.')
+    $lines.Add('Generado por `tools/measure.ps1`. Memoria de trabajo privada: `nea.exe` más todo el árbol de procesos del motor (WebView2), mediana de ' + $Samples + ' muestras tras ' + $SettleSec + ' s de asentamiento. Cada escenario arranca de cero con datos temporales.')
     $lines.Add('')
     $lines.Add("- Fecha: $(Get-Date -Format 'yyyy-MM-dd HH:mm')")
     $lines.Add("- Commit: $commit")
@@ -487,12 +487,12 @@ if ($Report) {
     if ($script:ShieldFiles.Count -gt 0) { $lines.Add("- Listas de bloqueo: $($script:ShieldFiles -join ', ') más la mínima incorporada") }
     $lines.Add("- Página liviana: $LightUrl · página pesada: $HeavyUrl")
     $lines.Add('')
-    $header = '| Escenario | Liviano (MB) | programa | motor | procesos |'
+    $header = '| Escenario | Nea (MB) | programa | motor | procesos |'
     $rule = '|---|---:|---:|---:|---:|'
     foreach ($browser in $others) { $header += " $browser (MB) | Ahorro |"; $rule += '---:|---:|' }
     $lines.Add($header + ' Nota |')
     $lines.Add($rule + '---|')
-    foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Liviano' })) {
+    foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Nea' })) {
         $key = $row.scenario -replace '^pesada-.*$', 'pesada'
         $line = '| {0} | {1:N1} | {2:N1} | {3:N1} | {4} |' -f $row.scenario, $row.total_mb, $row.app_mb, $row.engine_mb, $row.processes
         foreach ($browser in $others) {
@@ -506,15 +506,15 @@ if ($Report) {
         $lines.Add($line + " $($row.note) |")
     }
     $lines.Add('')
-    $lines.Add('## Presupuestos (sección 5) y criterios de memoria (sección 13)')
+    $lines.Add('## Presupuestos de memoria')
     $lines.Add('')
     foreach ($l in (Get-BudgetLines)) { $lines.Add($l) }
     $lines.Add('')
     $lines.Add('Notas:')
     $lines.Add('')
-    $lines.Add('- "programa" es `liviano.exe`; "motor" suma todos sus procesos hijos (navegador, GPU, red, almacenamiento, renderizadores, crashpad de WebView2).')
+    $lines.Add('- "programa" es `nea.exe`; "motor" suma todos sus procesos hijos (navegador, GPU, red, almacenamiento, renderizadores, crashpad de WebView2).')
     $lines.Add('- Las variantes de la página pesada difieren sólo en settings.json (`' + (($HeavyVariants.Keys | ForEach-Object { "$($_): " + ($HeavyVariants[$_] | ConvertTo-Json -Compress) }) -join '`, `') + '`); la clave de `shield_disabled` es la de `shield::site_key` (el host sin "www."). La nota cuenta las solicitudes que vio y bloqueó el motor de filtros desde que se abrió la página hasta la última muestra.')
-    $lines.Add('- En Edge y Chrome no se puede forzar el sueño de pestañas: en "20-pestanas" las 20 están vivas, que es lo que cuesta abrirlas ahí. Tampoco avisan cuándo terminó de cargar: se les da una espera fija antes del asentamiento. Su número incluye su propia interfaz (proceso del navegador), que en Liviano es "programa".')
+    $lines.Add('- En Edge y Chrome no se puede forzar el sueño de pestañas: en "20-pestanas" las 20 están vivas, que es lo que cuesta abrirlas ahí. Tampoco avisan cuándo terminó de cargar: se les da una espera fija antes del asentamiento. Su número incluye su propia interfaz (proceso del navegador), que en Nea es "programa".')
     $lines.Add('- "restaurar-50" arranca con una sesión de 50 pestañas: sólo la activa crea su vista.')
     $lines.Add('- Umbral de regresión: `tools/measure.ps1 -Baseline docs/medicion-baseline.json` sale con código 1 si un escenario supera su cifra base más la tolerancia del archivo; `-UpdateBaseline` la reescribe.')
     foreach ($note in $script:Notes) { $lines.Add(''); $lines.Add("_$($note)_") }
@@ -526,7 +526,7 @@ if ($script:ShieldCache) { Remove-TempDir $script:ShieldCache }
 # ---------- regression gate ----------
 
 $current = [ordered]@{}
-foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Liviano' })) { $current[$row.scenario] = $row.total_mb }
+foreach ($row in ($script:Rows | Where-Object { $_.browser -eq 'Nea' })) { $current[$row.scenario] = $row.total_mb }
 
 $failed = @()
 if ($Baseline -and (Test-Path $Baseline) -and -not $UpdateBaseline) {

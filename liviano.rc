@@ -1,6 +1,0 @@
-// Resources compiled into liviano.exe by build.rs (embed-resource).
-// The manifest is not here: the linker embeds liviano.manifest itself.
-
-// Resource 1: the application icon. LoadIconW/LoadImageW ask for it by id,
-// and Explorer, the taskbar and the shortcuts take the first icon group.
-1 ICON "assets/logo/liviano.ico"

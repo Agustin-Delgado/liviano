@@ -1,4 +1,4 @@
-//! Importing passwords (RF-15) from the Chromium browsers installed for this
+//! Importing passwords from the Chromium browsers installed for this
 //! Windows user, or from a CSV exported by one. Everything happens on this
 //! machine: the profile's `Login Data` is copied to a temp file (the browser
 //! keeps it locked), read, decrypted with the profile key and deleted, and
@@ -12,8 +12,8 @@ use windows::{
         UI::{
             Controls::Dialogs::{OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW},
             WindowsAndMessaging::{
-                AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MB_ICONINFORMATION, MB_OK, MF_GRAYED, MF_SEPARATOR,
-                MF_STRING, MessageBoxW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+                AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MB_ICONINFORMATION, MB_OK, MF_GRAYED,
+                MF_SEPARATOR, MF_STRING, MessageBoxW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
             },
         },
     },
@@ -61,7 +61,8 @@ const LOCAL_BROWSERS: &[(&str, &str)] = &[
     ("Vivaldi", r"Vivaldi\User Data"),
     ("Chromium", r"Chromium\User Data"),
 ];
-const ROAMING_BROWSERS: &[(&str, &str)] = &[("Opera", r"Opera Software\Opera Stable"), ("Opera GX", r"Opera Software\Opera GX Stable")];
+const ROAMING_BROWSERS: &[(&str, &str)] =
+    &[("Opera", r"Opera Software\Opera Stable"), ("Opera GX", r"Opera Software\Opera GX Stable")];
 /// Arc for Windows is a Store package: its folder carries a publisher hash.
 const ARC_PACKAGE: &str = "TheBrowserCompany.Arc_";
 const ARC_USER_DATA: &str = r"LocalCache\Local\Arc\User Data";
@@ -154,11 +155,17 @@ fn temp_copy_path() -> PathBuf {
     use std::sync::atomic::{AtomicU32, Ordering};
     static NEXT: AtomicU32 = AtomicU32::new(0);
     let n = NEXT.fetch_add(1, Ordering::Relaxed);
-    std::env::temp_dir().join(format!("liviano-import-{}-{n}.db", std::process::id()))
+    std::env::temp_dir().join(format!("nea-import-{}-{n}.db", std::process::id()))
 }
 
 /// Reads one `Login Data` through a temp copy. False when it can't be read.
-fn read_login_file(sqlite: &Sqlite, crypto: &Crypto, file: &Path, key: Option<&SecretBytes>, outcome: &mut Outcome) -> bool {
+fn read_login_file(
+    sqlite: &Sqlite,
+    crypto: &Crypto,
+    file: &Path,
+    key: Option<&SecretBytes>,
+    outcome: &mut Outcome,
+) -> bool {
     let copy = temp_copy_path();
     if std::fs::copy(file, &copy).is_err() {
         return false;
@@ -193,7 +200,9 @@ fn read_login_file(sqlite: &Sqlite, crypto: &Crypto, file: &Path, key: Option<&S
             Scheme::Dpapi => crypto.dpapi_unprotect(&value.0),
         };
         match plain.and_then(|p| String::from_utf8(p.0.clone()).ok()) {
-            Some(text) if !text.is_empty() => outcome.logins.push(Login { origin, username, password: Secret::new(text) }),
+            Some(text) if !text.is_empty() => {
+                outcome.logins.push(Login { origin, username, password: Secret::new(text) })
+            }
             Some(_) => {}
             None => outcome.failed += 1,
         }
@@ -366,7 +375,8 @@ pub fn run(owner: HWND, at: Option<POINT>) {
             let _ = GetCursorPos(&mut point);
             point
         });
-        let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, owner, None).0 as usize;
+        let chosen =
+            TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, owner, None).0 as usize;
         let _ = DestroyMenu(menu);
         chosen
     };
@@ -385,7 +395,7 @@ pub fn run(owner: HWND, at: Option<POINT>) {
         }
     };
     unsafe {
-        MessageBoxW(Some(owner), &wide(&text), w!("Importar contraseñas — Liviano"), MB_OK | MB_ICONINFORMATION);
+        MessageBoxW(Some(owner), &wide(&text), w!("Importar contraseñas — Nea"), MB_OK | MB_ICONINFORMATION);
     }
 }
 
@@ -398,12 +408,16 @@ fn import_csv(store: &Store, path: &Path) -> String {
         lossy
     }));
     let Some((logins, skipped)) = logins_from_csv(text.expose()) else {
-        return "El archivo no parece una exportación de contraseñas: le faltan las columnas url y password.".to_string();
+        return "El archivo no parece una exportación de contraseñas: le faltan las columnas url y password."
+            .to_string();
     };
     let (added, existing, failed) = import(store, &logins);
     let mut message = report(&[], added, existing, failed);
     if skipped > 0 {
-        message.push_str(&format!("\n\n{} sin dirección web o sin contraseña.", count(skipped, "fila quedó afuera", "filas quedaron afuera")));
+        message.push_str(&format!(
+            "\n\n{} sin dirección web o sin contraseña.",
+            count(skipped, "fila quedó afuera", "filas quedaron afuera")
+        ));
     }
     message.push_str("\n\nConviene borrar el archivo CSV: guarda las contraseñas sin cifrar.");
     message
@@ -415,7 +429,8 @@ fn pick_csv(owner: HWND) -> Option<PathBuf> {
     let comdlg32 = Library::load(w!("comdlg32.dll"))?;
     let open: OpenFn = unsafe { comdlg32.function(c"GetOpenFileNameW") }?;
     let mut buffer = vec![0u16; 1024];
-    let filter: Vec<u16> = "Contraseñas exportadas (*.csv)\0*.csv\0Todos los archivos\0*.*\0\0".encode_utf16().collect();
+    let filter: Vec<u16> =
+        "Contraseñas exportadas (*.csv)\0*.csv\0Todos los archivos\0*.*\0\0".encode_utf16().collect();
     let mut dialog = OPENFILENAMEW {
         lStructSize: std::mem::size_of::<OPENFILENAMEW>() as u32,
         hwndOwner: owner,
@@ -431,4 +446,3 @@ fn pick_csv(owner: HWND) -> Option<PathBuf> {
         PathBuf::from(String::from_utf16_lossy(&buffer[..len]))
     })
 }
-

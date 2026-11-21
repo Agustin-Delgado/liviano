@@ -1,8 +1,8 @@
 //! The window's own frame: no title bar, the tab strip in its place and the
-//! three window buttons drawn here: Windows' own glyphs, smaller, at the
-//! strip's left end. This is the geometry (where the buttons and the
-//! caption are, and what the pointer is over: tested) and how the buttons
-//! are drawn.
+//! three window buttons drawn here: Windows' own glyphs, smaller, in one
+//! faint capsule at the strip's left end. This is the geometry (where the
+//! buttons and the caption are, and what the pointer is over: tested) and
+//! how the buttons are drawn.
 
 use crate::{
     design::{Palette, Rgb},
@@ -22,17 +22,27 @@ impl WindowButton {
     pub const ALL: [WindowButton; 3] = [WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close];
 }
 
-/// Width each button answers to: Windows 11's are 46, these 30.
-pub const BUTTON_W: i32 = 30;
-/// The ground a button wears under the pointer, centred in its area.
-const GROUND_W: f32 = 26.0;
-const GROUND_H: f32 = 24.0;
-/// The glyphs' box: Windows draws 10 px, these 9.
-const GLYPH: f32 = 9.0;
-/// From the window's left edge to the first button's area.
-pub const LEAD: i32 = 4;
+/// Width of each segment, which is also what each button answers to:
+/// Windows 11's are 46, these 28.
+pub const BUTTON_W: i32 = 28;
+/// From the window's left edge to the capsule.
+pub const LEAD: i32 = 6;
+/// From the capsule to back: more than between the segments, so the window's
+/// buttons and the page's read as two groups.
+pub const NAV_LEAD: i32 = 12;
+/// The capsule's height (a tab's) and its corner.
+const CAPSULE_H: f32 = 28.0;
+const CAPSULE_RADIUS: f32 = 7.0;
+/// The glyphs' outer box: Windows draws 10 px, these 8.
+const GLYPH: f32 = 8.0;
+/// How far the capsule's ground goes from the strip towards the ink, and
+/// how much further a segment goes under the pointer and held down.
+const CAPSULE_TINT: f32 = 0.05;
+const SEGMENT_HOVER: f32 = 0.06;
+const SEGMENT_PRESSED: f32 = 0.11;
 /// Height of the caption row when the tabs are hidden (collapsed column).
 pub const ROW: i32 = 32;
+
 /// The band along the top edge that resizes the window while it is not
 /// maximized: the frame Windows had there is gone with the title bar.
 pub const RESIZE_BAND: i32 = 5;
@@ -134,10 +144,11 @@ const CLOSE_HOVER: Rgb = Rgb(0xC4, 0x2B, 0x1C);
 const CLOSE_PRESSED: Rgb = Rgb(0xC8, 0x40, 0x31);
 const CLOSE_INK: Rgb = Rgb(0xFF, 0xFF, 0xFF);
 
-/// Draws the three buttons: thin glyphs on nothing, a soft rounded ground
-/// under the pointer (red under close, as Windows does). `hover` gives each
-/// one's fade (0..1). In a window that is not the active one the glyphs go
-/// quieter.
+/// Draws the three buttons: one faint capsule under them, split in three
+/// segments that darken under the pointer (red under close, as Windows
+/// does, the capsule's rounded end kept), and Windows' glyphs on whole
+/// pixels. `hover` gives each one's fade (0..1). In a window that is not
+/// the active one the glyphs go quieter.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
     g: &Painter,
@@ -149,61 +160,103 @@ pub fn paint(
     pressed: Option<WindowButton>,
     hover: impl Fn(WindowButton) -> f32,
 ) {
+    if frame.buttons[0].width() <= 0 {
+        return;
+    }
     let rest = if active { pal.ink_muted } else { pal.ink_asleep };
-    let radius = crate::design::size::RADIUS_CONTROL * scale;
-    for button in WindowButton::ALL {
+    let s = |v: f32| (v * scale).round();
+    let stroke = s(1.0).max(1.0);
+    let radius = s(CAPSULE_RADIUS);
+    let capsule = capsule(frame, scale);
+    g.round(capsule, radius, tint(pal, CAPSULE_TINT));
+    for (i, button) in WindowButton::ALL.into_iter().enumerate() {
         let area: RectF = frame.rect_of(button).into();
-        if area.width() <= 0.0 {
-            continue;
-        }
+        let segment = RectF::new(area.left, capsule.top, area.right, capsule.bottom);
         let over = hover(button);
-        let down = pressed == Some(button) && over > 0.0;
-        let (cx, cy) = area.center();
-        let (hw, hh) = (GROUND_W * scale / 2.0, GROUND_H * scale / 2.0);
-        let ground = RectF::new(cx - hw, cy - hh, cx + hw, cy + hh);
-        let (fill, lit) = match (button, down) {
-            (WindowButton::Close, false) => (CLOSE_HOVER, CLOSE_INK),
-            (WindowButton::Close, true) => (CLOSE_PRESSED, CLOSE_INK),
-            (_, false) => (pal.tab_hover, pal.ink),
-            (_, true) => (pal.pin_live, pal.ink),
-        };
         if over > 0.0 {
-            g.round(ground, radius, Color::from(fill).with_alpha(over));
+            let down = pressed == Some(button);
+            let fill = match (button, down) {
+                (WindowButton::Close, false) => CLOSE_HOVER,
+                (WindowButton::Close, true) => CLOSE_PRESSED,
+                (_, false) => tint(pal, CAPSULE_TINT + SEGMENT_HOVER),
+                (_, true) => tint(pal, CAPSULE_TINT + SEGMENT_PRESSED),
+            };
+            // The end segments keep the capsule's rounded end: a rounded
+            // shape running past the inner edge, cut there.
+            let shape = match i {
+                0 => RectF::new(segment.left, segment.top, segment.right + radius, segment.bottom),
+                2 => RectF::new(segment.left - radius, segment.top, segment.right, segment.bottom),
+                _ => segment,
+            };
+            let corner = if i == 1 { 0.0 } else { radius };
+            g.clip(segment, |g| g.round(shape, corner, Color::from(fill).with_alpha(over)));
         }
-        draw_glyph(g, (cx, cy), button, maximized, Color::from(rest.mix(lit, over)), scale);
+        let lit = if button == WindowButton::Close { CLOSE_INK } else { pal.ink };
+        let ink = Color::from(rest.mix(lit, over));
+        draw_glyph(g, area.center(), s(GLYPH), stroke, button, maximized, ink, scale);
     }
 }
 
-/// Windows' glyphs, hairline: a dash, a square (two offset ones once
-/// maximized) and a cross.
-fn draw_glyph(g: &Painter, (cx, cy): (f32, f32), button: WindowButton, maximized: bool, ink: Color, scale: f32) {
-    let w = scale.max(1.0);
-    let h = (GLYPH * scale / 2.0).round();
-    // Hairlines on pixel centres stay crisp.
-    let (cx, cy) = (cx.floor() + 0.5, cy.floor() + 0.5);
+/// The capsule: the three buttons' width, a tab's height, centred in the
+/// caption on whole pixels.
+fn capsule(frame: &Frame, scale: f32) -> RectF {
+    let first: RectF = frame.buttons[0].into();
+    let h = (CAPSULE_H * scale).round().min(first.height() - (4.0 * scale).round());
+    let top = (first.center().1 - h / 2.0).round();
+    RectF::new(first.left, top, frame.right() as f32, top + h)
+}
+
+/// A step of the ink over the strip.
+fn tint(pal: &Palette, t: f32) -> Rgb {
+    pal.chrome.mix(pal.ink, t)
+}
+
+/// Windows' glyphs on whole pixels: every straight edge a filled run of
+/// pixels, the cross two bands cut square at the box's corners. `size` is
+/// the outer box and `stroke` the line, both in device pixels.
+#[allow(clippy::too_many_arguments)]
+fn draw_glyph(
+    g: &Painter,
+    (cx, cy): (f32, f32),
+    size: f32,
+    stroke: f32,
+    button: WindowButton,
+    maximized: bool,
+    ink: Color,
+    scale: f32,
+) {
+    // The box's outer edges on whole pixels, as close to the centre as they get.
+    let l = (cx - size / 2.0).round();
+    let t = (cy - size / 2.0).round();
+    let (r, b) = (l + size, t + size);
+    let w = stroke;
+    let frame_box = |l: f32, t: f32, r: f32, b: f32| {
+        g.fill(RectF::new(l, t, r, t + w), ink);
+        g.fill(RectF::new(l, b - w, r, b), ink);
+        g.fill(RectF::new(l, t + w, l + w, b - w), ink);
+        g.fill(RectF::new(r - w, t + w, r, b - w), ink);
+    };
     match button {
-        WindowButton::Minimize => g.line((cx - h, cy), (cx + h, cy), w, ink),
-        WindowButton::Maximize if maximized => {
-            let o = (2.0 * scale).round();
-            // The window behind: only its top and right edges show.
-            g.line((cx - h + o, cy - h + o), (cx - h + o, cy - h), w, ink);
-            g.line((cx - h + o, cy - h), (cx + h, cy - h), w, ink);
-            g.line((cx + h, cy - h), (cx + h, cy + h - o), w, ink);
-            g.line((cx + h, cy + h - o), (cx + h - o, cy + h - o), w, ink);
-            stroke_box(g, RectF::new(cx - h, cy - h + o, cx + h - o, cy + h), w, ink);
+        WindowButton::Minimize => {
+            let y = (t + (size - w) / 2.0).round();
+            g.fill(RectF::new(l, y, r, y + w), ink);
         }
-        WindowButton::Maximize => stroke_box(g, RectF::new(cx - h, cy - h, cx + h, cy + h), w, ink),
+        WindowButton::Maximize if maximized => {
+            let o = (2.0 * scale).round().max(2.0);
+            frame_box(l, t + o, r - o, b);
+            // The window behind: its top and right edges, and the stubs
+            // that reach down to the front one.
+            g.fill(RectF::new(l + o, t, r, t + w), ink);
+            g.fill(RectF::new(r - w, t + w, r, b - o), ink);
+            g.fill(RectF::new(l + o, t + w, l + o + w, t + o), ink);
+            g.fill(RectF::new(r - o, b - o - w, r - w, b - o), ink);
+        }
+        WindowButton::Maximize => frame_box(l, t, r, b),
         WindowButton::Close => {
-            g.line((cx - h, cy - h), (cx + h, cy + h), w, ink);
-            g.line((cx - h, cy + h), (cx + h, cy - h), w, ink);
+            // A band of width `w` along each diagonal, its ends cut by the box.
+            let a = w / std::f32::consts::SQRT_2;
+            g.polygon(&[(l, t), (l + a, t), (r, b - a), (r, b), (r - a, b), (l, t + a)], ink);
+            g.polygon(&[(r, t), (r, t + a), (l + a, b), (l, b), (l, b - a), (r - a, t)], ink);
         }
     }
 }
-
-fn stroke_box(g: &Painter, r: RectF, w: f32, ink: Color) {
-    g.line((r.left, r.top), (r.right, r.top), w, ink);
-    g.line((r.right, r.top), (r.right, r.bottom), w, ink);
-    g.line((r.right, r.bottom), (r.left, r.bottom), w, ink);
-    g.line((r.left, r.bottom), (r.left, r.top), w, ink);
-}
-

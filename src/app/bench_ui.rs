@@ -1,4 +1,4 @@
-//! The window's side of script control (RF-23): each request the pipe thread
+//! The window's side of script control: each request the pipe thread
 //! queued runs here, on the UI thread, against the real app — the same
 //! commands, the same field, the same tabs. Answers that need the engine
 //! (page text, a click, a capture) are sent from its completion callbacks.
@@ -24,8 +24,7 @@ use windows::{
             Input::KeyboardAndMouse::VK_RETURN,
             Shell::SHCreateStreamOnFileEx,
             WindowsAndMessaging::{
-                KillTimer, PostMessageW, SendMessageW, SetTimer, SetWindowTextW,
-                WM_CHAR, WM_CLOSE, WM_KEYDOWN,
+                KillTimer, PostMessageW, SendMessageW, SetTimer, SetWindowTextW, WM_CHAR, WM_CLOSE, WM_KEYDOWN,
             },
         },
     },
@@ -119,6 +118,10 @@ unsafe extern "system" fn on_wait_timer(_: HWND, _: u32, _: usize, _: u32) {
 /// Types `text` into the open field one character at a time, as WM_CHAR to
 /// our own edit control, so suggestions and inline completion react as they
 /// do to a person; `submit` then presses Enter on it the same way.
+#[allow(
+    clippy::result_large_err,
+    reason = "the job goes back to its queue as it came; boxing it buys nothing on this cold path"
+)]
 fn type_into_field(job: Job) -> Result<(), Job> {
     let Action::Type { text, submit } = &job.action else { return Ok(()) };
     let edit = match with_app(|app| app.mode.is_some().then_some(app.omnibar.edit)) {
@@ -173,7 +176,7 @@ fn screenshot_path(tab: u64, asked: Option<&str>) -> std::path::PathBuf {
         return std::path::PathBuf::from(path);
     }
     let millis = SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_millis());
-    std::env::temp_dir().join("liviano-bench").join(format!("tab-{tab}-{millis}.png"))
+    std::env::temp_dir().join("nea-bench").join(format!("tab-{tab}-{millis}.png"))
 }
 
 impl App {
@@ -342,10 +345,12 @@ impl App {
                     let _ = PostMessageW(Some(self.hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
                 }
             }
-            Action::Group { tabs, group, name, color, collapsed } => match self.bench_group(&tabs, group, name, color, collapsed) {
-                Ok(id) => reply.ok(json!({ "group": id, "groups": self.groups_state() })),
-                Err(message) => reply.error(&message),
-            },
+            Action::Group { tabs, group, name, color, collapsed } => {
+                match self.bench_group(&tabs, group, name, color, collapsed) {
+                    Ok(id) => reply.ok(json!({ "group": id, "groups": self.groups_state() })),
+                    Err(message) => reply.error(&message),
+                }
+            }
             // Answered on the pipe thread; never queued.
             Action::Ping | Action::Memory | Action::Type { .. } => reply.error("petición fuera de lugar"),
         }
@@ -486,7 +491,8 @@ impl App {
             self.tabs.rename_group(id, &name);
         }
         if let Some(color) = color {
-            let color = crate::tab_groups::GroupColor::from_name(&color).ok_or(format!("no hay ningún color «{color}»"))?;
+            let color =
+                crate::tab_groups::GroupColor::from_name(&color).ok_or(format!("no hay ningún color «{color}»"))?;
             self.tabs.set_group_color(id, color);
         }
         self.session_dirty = true;

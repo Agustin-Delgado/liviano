@@ -23,7 +23,7 @@ pub struct Tab<W> {
     pub loading: bool,
     pub live: Live<W>,
     pub last_active: Instant,
-    /// Opened by a script (RF-23): never recorded in history, session or
+    /// Opened by a script: never recorded in history, session or
     /// the reopen list.
     pub test: bool,
     /// The tab group it belongs to (`tab_groups`).
@@ -164,10 +164,10 @@ impl<W> TabList<W> {
     /// Makes `id` the live tab; a tab of a folded group unfolds it.
     pub fn select(&mut self, id: u64) -> bool {
         let Some(tab) = self.get(id) else { return false };
-        if let Some(group) = tab.group {
-            if let Some(g) = self.groups.iter_mut().find(|g| g.id == group) {
-                g.collapsed = false;
-            }
+        if let Some(group) = tab.group
+            && let Some(g) = self.groups.iter_mut().find(|g| g.id == group)
+        {
+            g.collapsed = false;
         }
         if let Some(previous) = self.active.and_then(|a| self.get_mut(a)) {
             previous.last_active = Instant::now();
@@ -273,4 +273,3 @@ impl<W> TabList<W> {
         self.tabs.insert(to, tab);
     }
 }
-

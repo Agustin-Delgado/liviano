@@ -19,5 +19,5 @@
   }
   if (!Array.isArray(selectors)) return;
   /*HIDE*/
-  livianoHideCookies(selectors, "/*PATH*/");
+  neaHideCookies(selectors, "/*PATH*/");
 })();

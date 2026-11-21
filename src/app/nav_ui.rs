@@ -186,7 +186,16 @@ impl App {
             for (i, (_, label)) in entries.iter().enumerate() {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_ENTRY + i, &wide(label));
             }
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN, anchor.left, anchor.bottom, None, self.hwnd, None).0 as usize;
+            let chosen = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
+                anchor.left,
+                anchor.bottom,
+                None,
+                self.hwnd,
+                None,
+            )
+            .0 as usize;
             let _ = DestroyMenu(menu);
             chosen
         };
@@ -206,4 +215,3 @@ impl App {
         }
     }
 }
-

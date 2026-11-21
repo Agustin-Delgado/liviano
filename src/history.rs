@@ -28,7 +28,7 @@ pub struct History {
 
 impl History {
     pub fn from_entries(mut entries: Vec<Entry>) -> Self {
-        entries.sort_by(|a, b| b.last.cmp(&a.last));
+        entries.sort_by_key(|e| std::cmp::Reverse(e.last));
         entries.truncate(MAX_ENTRIES);
         let by_url = entries.iter().enumerate().map(|(i, e)| (e.url.clone(), i)).collect();
         Self { entries, by_url, dirty: false }
@@ -60,11 +60,12 @@ impl History {
     }
 
     pub fn set_title(&mut self, url: &str, title: &str) {
-        if let Some(&i) = self.by_url.get(url) {
-            if self.entries[i].title != title && !title.is_empty() {
-                self.entries[i].title = title.to_string();
-                self.dirty = true;
-            }
+        if let Some(&i) = self.by_url.get(url)
+            && self.entries[i].title != title
+            && !title.is_empty()
+        {
+            self.entries[i].title = title.to_string();
+            self.dirty = true;
         }
     }
 
@@ -90,7 +91,7 @@ impl History {
     pub fn recent(&self, query: &str, limit: usize) -> Vec<&Entry> {
         let query = crate::panels::Query::new(query);
         let mut found: Vec<&Entry> = self.entries.iter().filter(|e| query.matches(&[&e.title, &e.url])).collect();
-        found.sort_by(|a, b| b.last.cmp(&a.last));
+        found.sort_by_key(|e| std::cmp::Reverse(e.last));
         found.truncate(limit);
         found
     }
@@ -188,4 +189,3 @@ fn contains_folded(text: &str, lower: &str) -> bool {
     }
     text.to_lowercase().contains(lower)
 }
-

@@ -27,7 +27,7 @@ pub enum Message {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Raw {
-    liviano: String,
+    nea: String,
     kind: String,
     #[serde(default)]
     username: String,
@@ -46,13 +46,15 @@ struct Raw {
 /// origin to save under.
 pub fn parse(json: &str, source: &str) -> Option<Message> {
     let raw: Raw = serde_json::from_str(json).ok()?;
-    if raw.liviano != "vault" {
+    if raw.nea != "vault" {
         return None;
     }
     let origin = vault::origin_of(source)?;
     let clamp = |v: f64| v.clamp(-100_000.0, 100_000.0) as i32;
     Some(match raw.kind.as_str() {
-        "submit" if !raw.password.is_empty() => Message::Submit { origin, username: raw.username, password: raw.password },
+        "submit" if !raw.password.is_empty() => {
+            Message::Submit { origin, username: raw.username, password: raw.password }
+        }
         "page" => Message::Page { origin, has_password: raw.has_password },
         "field" => Message::Field { origin, left: clamp(raw.left), bottom: clamp(raw.bottom) },
         _ => return None,
@@ -100,7 +102,7 @@ pub fn watch(webview: &ICoreWebView2, tab_id: u64) -> Result<()> {
 pub fn fill(webview: &ICoreWebView2, origin: &str, username: &str, password: &Secret) {
     let quote = |text: &str| serde_json::to_string(text).unwrap_or_default();
     let script = Secret::new(format!(
-        "window.__livianoVaultFill && window.__livianoVaultFill({}, {}, {})",
+        "window.__neaVaultFill && window.__neaVaultFill({}, {}, {})",
         quote(origin),
         quote(username),
         quote(password.expose())
@@ -112,4 +114,3 @@ pub fn fill(webview: &ICoreWebView2, origin: &str, username: &str, password: &Se
         );
     }
 }
-

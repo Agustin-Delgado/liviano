@@ -193,15 +193,8 @@ pub fn fade_out(hwnd: HWND, spec: Spec, sink: i32, then: Option<fn(HWND)>) {
         }
         SetWindowLongW(hwnd, GWL_EXSTYLE, ex_before | (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0) as i32);
     }
-    let fading = Fading {
-        level: Tween::new(level, 0.0, now, spec),
-        max,
-        closing: true,
-        ex_before,
-        slide,
-        unlayer: false,
-        then,
-    };
+    let fading =
+        Fading { level: Tween::new(level, 0.0, now, spec), max, closing: true, ex_before, slide, unlayer: false, then };
     apply(hwnd, &fading, now);
     FADING.with(|f| f.borrow_mut().insert(hwnd.0 as isize, fading));
     anim::drive(step);

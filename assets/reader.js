@@ -3,10 +3,10 @@
 // (scroll included) without reloading.
 (() => {
   /*TOAST*/
-  const saved = window.__livianoReader;
+  const saved = window.__neaReader;
   if (saved) {
     document.replaceChild(saved.original, document.documentElement);
-    window.__livianoReader = undefined;
+    window.__neaReader = undefined;
     window.scrollTo(0, saved.scroll);
     return "off";
   }
@@ -21,7 +21,7 @@
     article = null;
   }
   if (!article || !article.content) {
-    livianoToast("Esta página no tiene un artículo para leer");
+    neaToast("Esta página no tiene un artículo para leer");
     return "none";
   }
 
@@ -41,7 +41,7 @@
 
   const body = document.createElement("body");
   const main = document.createElement("main");
-  main.className = "liviano-reader";
+  main.className = "nea-reader";
   const header = document.createElement("header");
   if (article.siteName) {
     const site = document.createElement("p");
@@ -64,7 +64,7 @@
   body.append(main);
   html.append(head, body);
 
-  window.__livianoReader = { original, scroll: window.scrollY };
+  window.__neaReader = { original, scroll: window.scrollY };
   document.replaceChild(html, original);
   window.scrollTo(0, 0);
   return "on";

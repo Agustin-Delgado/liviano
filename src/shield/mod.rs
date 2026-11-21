@@ -1,4 +1,4 @@
-//! RF-13: ad and tracker blocking at the network level.
+//! Ad and tracker blocking at the network level.
 //!
 //! Every request of every view passes through `WebResourceRequested`, and the
 //! engine answers there and then, on the UI thread: a request waits for the
@@ -124,12 +124,11 @@ pub fn set_cosmetic(on: bool) {
 
 fn with_cosmetic<R>(f: impl FnOnce(&CookieList) -> R) -> Option<R> {
     COSMETIC.with(|cosmetic| {
-        if HAS_INCOMING_COSMETIC.swap(false, Ordering::Acquire) {
-            if let Some(new) = INCOMING_COSMETIC.lock().ok().and_then(|mut slot| slot.take()) {
-                if COSMETIC_WANTED.load(Ordering::Relaxed) {
-                    *cosmetic.borrow_mut() = Some(new);
-                }
-            }
+        if HAS_INCOMING_COSMETIC.swap(false, Ordering::Acquire)
+            && let Some(new) = INCOMING_COSMETIC.lock().ok().and_then(|mut slot| slot.take())
+            && COSMETIC_WANTED.load(Ordering::Relaxed)
+        {
+            *cosmetic.borrow_mut() = Some(new);
         }
         cosmetic.borrow().as_ref().map(f)
     })
@@ -160,7 +159,10 @@ pub fn cookie_selectors(url: &str) -> Option<String> {
 /// The same, as a script run on a page already created.
 fn cookie_script(url: &str) -> Option<String> {
     let selectors = cookie_selectors(url)?;
-    Some(format!("(() => {{ if (window.top !== window) return; {COOKIE_HIDE} livianoHideCookies({selectors}, {path:?}); }})();", path = cookie_path()))
+    Some(format!(
+        "(() => {{ if (window.top !== window) return; {COOKIE_HIDE} neaHideCookies({selectors}, {path:?}); }})();",
+        path = cookie_path()
+    ))
 }
 
 /// The path the boot script asks for the selectors at, on the page's own
@@ -171,8 +173,9 @@ fn cookie_path() -> &'static str {
     PATH.get_or_init(|| {
         use std::hash::{BuildHasher, Hasher};
         let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
-        hasher.write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
-        format!("/__liviano-{:016x}/cookies.json", hasher.finish())
+        hasher
+            .write_u128(std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos()));
+        format!("/__nea-{:016x}/cookies.json", hasher.finish())
     })
 }
 
@@ -241,13 +244,13 @@ pub fn stats() -> Stats {
 
 fn with_engine<R>(f: impl FnOnce(&Filters) -> R) -> Option<R> {
     ENGINE.with(|engine| {
-        if HAS_INCOMING.swap(false, Ordering::Acquire) {
-            if let Some(new) = INCOMING.lock().ok().and_then(|mut slot| slot.take()) {
-                // Freeing the old one (hundreds of thousands of rules) is
-                // left to another thread: this one is answering a request.
-                if let Some(old) = engine.borrow_mut().replace(new) {
-                    let _ = std::thread::Builder::new().name("shield-drop".into()).spawn(move || drop(old));
-                }
+        if HAS_INCOMING.swap(false, Ordering::Acquire)
+            && let Some(new) = INCOMING.lock().ok().and_then(|mut slot| slot.take())
+        {
+            // Freeing the old one (hundreds of thousands of rules) is
+            // left to another thread: this one is answering a request.
+            if let Some(old) = engine.borrow_mut().replace(new) {
+                let _ = std::thread::Builder::new().name("shield-drop".into()).spawn(move || drop(old));
             }
         }
         engine.borrow().as_ref().map(f)
@@ -352,7 +355,8 @@ pub fn attach(webview: &ICoreWebView2) -> Result<()> {
                     served.set(true);
                     let response = match cookie_selectors(&uri) {
                         Some(json) => env.CreateWebResourceResponse(
-                            &SHCreateMemStream(Some(json.as_bytes())).ok_or_else(|| windows::core::Error::from(E_POINTER))?,
+                            &SHCreateMemStream(Some(json.as_bytes()))
+                                .ok_or_else(|| windows::core::Error::from(E_POINTER))?,
                             200,
                             w!("OK"),
                             w!("Content-Type: application/json\r\nCache-Control: no-store"),
@@ -377,4 +381,3 @@ pub fn attach(webview: &ICoreWebView2) -> Result<()> {
     }
     Ok(())
 }
-

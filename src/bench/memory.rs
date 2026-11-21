@@ -1,4 +1,4 @@
-//! Memory as section 10.1 of the spec counts it: private working set of a
+//! Memory as Nea measures it: private working set of a
 //! process and of every process below it (WebView2's browser, renderers,
 //! GPU and utility processes are all children of the app). The same file is
 //! used by the example client to measure Edge the same way.
@@ -9,7 +9,9 @@ use serde::Serialize;
 use windows::Win32::{
     Foundation::{CloseHandle, HANDLE},
     System::{
-        Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS},
+        Diagnostics::ToolHelp::{
+            CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+        },
         ProcessStatus::{GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS, PROCESS_MEMORY_COUNTERS_EX2},
         Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
     },
@@ -87,7 +89,8 @@ pub fn snapshot() -> Vec<ProcessEntry> {
 /// or another user's).
 pub fn private_working_set(pid: u32) -> u64 {
     unsafe {
-        let Ok(process): windows::core::Result<HANDLE> = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+        let Ok(process): windows::core::Result<HANDLE> = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid)
+        else {
             return 0;
         };
         let mut counters = PROCESS_MEMORY_COUNTERS_EX2 {
@@ -117,4 +120,3 @@ pub fn measure_tree(root: u32) -> TreeMemory {
     let total = root.private_ws + children.iter().map(|c| c.private_ws).sum::<u64>();
     TreeMemory { root, children, total }
 }
-

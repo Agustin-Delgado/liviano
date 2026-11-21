@@ -35,7 +35,9 @@ fn main() -> ExitCode {
         }
     }
     let [package_path, key_path] = positional.as_slice() else {
-        return fail("uso: cargo run --example sign -- <paquete> <clave privada> [--version x.y.z] [--url dirección] [--out latest.json]");
+        return fail(
+            "uso: cargo run --example sign -- <paquete> <clave privada> [--version x.y.z] [--url dirección] [--out latest.json]",
+        );
     };
     let version = version.trim().trim_start_matches(['v', 'V']).to_string();
     if version.is_empty() || !version.split('.').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit())) {
@@ -75,9 +77,12 @@ fn main() -> ExitCode {
     }
     println!("{}", out.display());
 
-    let embedded = update_sign::from_hex(include_str!("../keys/update-public.hex")).and_then(|b| PublicKey::from_slice(&b).ok());
+    let embedded =
+        update_sign::from_hex(include_str!("../keys/update-public.hex")).and_then(|b| PublicKey::from_slice(&b).ok());
     if embedded.as_ref() != Some(&keys.pk) {
-        eprintln!("aviso: esta clave no es la de keys/update-public.hex; el programa compilado con ese archivo va a rechazar el paquete");
+        eprintln!(
+            "aviso: esta clave no es la de keys/update-public.hex; el programa compilado con ese archivo va a rechazar el paquete"
+        );
     }
     ExitCode::SUCCESS
 }

@@ -1,33 +1,33 @@
 ﻿<#
 .SYNOPSIS
-  Biblioteca para armar la muestra de Liviano (docs/muestra): arranca un
-  Liviano propio con datos sintéticos, lo maneja por el pipe de bench y por
+  Biblioteca para armar la muestra de Nea (docs/muestra): arranca un
+  Nea propio con datos sintéticos, lo maneja por el pipe de bench y por
   mensajes a sus propias ventanas, saca fotos y graba cuadros para el video.
 
 .DESCRIPTION
   Se usa con dot-source:
     . tools\muestra.ps1
     Start-Muestra -Theme light            # datos sembrados, exe de release
-    Invoke-Liviano open @{ url = 'https://example.com/' }
+    Invoke-Nea open @{ url = 'https://example.com/' }
     Save-Shot 01-pestanas-arriba-claro
     Start-Recording; ...; Stop-Recording   # cuadros + timeline para encode_mp4
     Stop-Muestra                           # cierra y borra los temporales
 
   Nada de esto manda entrada global: los clics y movimientos son
   PostMessage/SendMessage a ventanas del proceso que se lanzó acá, y lo
-  demás va por el pipe de bench (LIVIANO_BENCH=1). Los datos viven en una
-  carpeta temporal propia (LIVIANO_DATA_DIR) y las contraseñas en un prefijo
+  demás va por el pipe de bench (NEA_BENCH=1). Los datos viven en una
+  carpeta temporal propia (NEA_DATA_DIR) y las contraseñas en un prefijo
   propio de Credential Manager que no tiene ninguna entrada.
 #>
 
 $ErrorActionPreference = 'Stop'
 $script:Root = Split-Path -Parent $PSScriptRoot
-# A pipe of its own, so a Liviano in daily use is never the one driven.
-$env:LIVIANO_BENCH_PIPE = 'muestra'
+# A pipe of its own, so a Nea in daily use is never the one driven.
+$env:NEA_BENCH_PIPE = 'muestra'
 . (Join-Path $PSScriptRoot 'bench.ps1')
 Add-Type -AssemblyName System.Drawing
 
-if (-not ('LivianoMuestra' -as [type])) {
+if (-not ('NeaMuestra' -as [type])) {
     Add-Type -ReferencedAssemblies System.Drawing -TypeDefinition @'
 using System;
 using System.Collections.Concurrent;
@@ -40,7 +40,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
-public static class LivianoMuestra {
+public static class NeaMuestra {
     [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
     delegate bool EnumProc(IntPtr hwnd, IntPtr lparam);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc proc, IntPtr lparam);
@@ -118,7 +118,7 @@ public static class LivianoMuestra {
             PrintWindow(w.Hwnd, hdc, 2);
             g.ReleaseHdc(hdc);
         }
-        if (w.Class == "LivianoTooltip") KeyOutBlack(bitmap);
+        if (w.Class == "NeaTooltip") KeyOutBlack(bitmap);
         return bitmap;
     }
 
@@ -142,7 +142,7 @@ public static class LivianoMuestra {
         if (wins.Count == 0) return null;
         Win main = null;
         foreach (var w in wins)
-            if (w.Class == "LivianoWindow") main = w;
+            if (w.Class == "NeaWindow") main = w;
         if (main == null) return null;
         int fw = main.Frame.Right - main.Frame.Left, fh = main.Frame.Bottom - main.Frame.Top;
         var canvas = new Bitmap(fw, fh, PixelFormat.Format32bppArgb);
@@ -262,7 +262,7 @@ $script:WM_COMMAND = 0x0111
 $script:WM_CANCELMODE = 0x001F
 $script:MK_LBUTTON = 1
 
-$script:Scratch = if ($env:MUESTRA_TMP) { $env:MUESTRA_TMP } else { Join-Path ([IO.Path]::GetTempPath()) 'liviano-muestra' }
+$script:Scratch = if ($env:MUESTRA_TMP) { $env:MUESTRA_TMP } else { Join-Path ([IO.Path]::GetTempPath()) 'nea-muestra' }
 $script:Out = Join-Path $script:Root 'docs\muestra'
 $script:StateFile = Join-Path $script:Scratch 'estado.json'
 
@@ -272,7 +272,7 @@ function Get-MuestraState {
 
 function Get-MuestraPid { (Get-MuestraState).pid }
 
-function Get-MainWindow { [LivianoMuestra]::Find([uint32](Get-MuestraPid), 'LivianoWindow') }
+function Get-MainWindow { [NeaMuestra]::Find([uint32](Get-MuestraPid), 'NeaWindow') }
 
 function Write-JsonFile([string]$Path, $Value) {
     $json = $Value | ConvertTo-Json -Depth 8
@@ -359,10 +359,15 @@ function Initialize-MuestraData([string]$Data, [string]$Theme, [bool]$Vertical, 
         [ordered]@{ id = $id; url = "https://example.com/archivos/$($_[0])"; path = $path; state = $_[2]
             received = if ($_[2] -eq 'completed') { $_[1] } else { [int64]($_[1] * 0.4) }; total = $_[1]; started = $now - $id * 7200 }
     })
-    # The repo's own probe extension, disabled: the button shows and the
-    # engine starts without extension support.
+    # A minimal unpacked extension of its own, disabled: the button shows and
+    # the engine starts without extension support.
+    $extension = Join-Path $Data 'muestra-extension'
+    New-Item -ItemType Directory -Force -Path $extension | Out-Null
+    Write-JsonFile (Join-Path $extension 'manifest.json') ([ordered]@{
+        manifest_version = 3; name = 'Muestra'; version = '1.0'; action = [ordered]@{ default_popup = 'popup.html' } })
+    [IO.File]::WriteAllText((Join-Path $extension 'popup.html'), '<!doctype html><title>Muestra</title><p>Muestra</p>')
     Write-JsonFile (Join-Path $Data 'extensions.json') ([ordered]@{
-        extensions = @([ordered]@{ path = (Join-Path $script:Root 'tools\extension-probe'); name = 'Muestra'; version = '1.0'
+        extensions = @([ordered]@{ path = $extension; name = 'Muestra'; version = '1.0'
             store_id = $null; engine_id = $null; enabled = $false; pinned = $true; popup = 'popup.html'; options = $null; side_panel = $null })
         removed = @()
     })
@@ -372,7 +377,7 @@ function Initialize-MuestraData([string]$Data, [string]$Theme, [bool]$Vertical, 
 function Initialize-MuestraSite([string]$Dir) {
     New-Item -ItemType Directory -Force -Path $Dir | Out-Null
     $style = '<style>body{font:15px/1.6 "Segoe UI",sans-serif;max-width:760px;margin:40px auto;padding:0 24px;color:#222}h1{font-weight:500}.promo{position:relative;margin:24px 0;padding:20px 24px;border-radius:12px;background:#fff4d6;border:1px solid #f0d58a}.promo b{font-weight:500}.card{margin:16px 0;padding:16px 20px;border-radius:10px;background:#f3f4f6}</style>'
-    $lorem = '<p>Liviano es un navegador para Windows con una sola fila de pestañas, un campo y la página. Esta es una página de prueba servida desde la máquina local.</p><p>El motor es WebView2; la interfaz es nativa, dibujada con Direct2D, sin HTML.</p>'
+    $lorem = '<p>Nea es un navegador para Windows con una sola fila de pestañas, un campo y la página. Esta es una página de prueba servida desde la máquina local.</p><p>El motor es WebView2; la interfaz es nativa, dibujada con Direct2D, sin HTML.</p>'
     [IO.File]::WriteAllText((Join-Path $Dir 'emergente.html'), "<!doctype html><meta charset=utf-8><title>Ventana emergente</title>$style<h1>Ventana emergente</h1>$lorem<div class=card>Esta página intenta abrir una ventana nueva sin que nadie haga clic.</div><script>setTimeout(function(){window.open('ventana.html','_blank','width=400,height=300')},700)</script>")
     [IO.File]::WriteAllText((Join-Path $Dir 'ventana.html'), "<!doctype html><meta charset=utf-8><title>Publicidad</title><h1>¡Ganaste!</h1>")
     [IO.File]::WriteAllText((Join-Path $Dir 'ocultar.html'), "<!doctype html><meta charset=utf-8><title>Ocultar un elemento</title>$style<h1>Recetas de la semana</h1><div class=promo id=promo><b>¡Suscribite al boletín!</b><br>Recibí las recetas nuevas todos los lunes. Este recuadro es el que se oculta.</div>$lorem<div class=card>Lunes: guiso de lentejas. Martes: tarta de verduras. Miércoles: milanesas con puré.</div><script>setInterval(function(){var p=document.getElementById('promo');if(p)p.dispatchEvent(new MouseEvent('mouseover',{bubbles:true}))},150)</script>")
@@ -383,7 +388,7 @@ function Start-Muestra {
     # -Settings: more settings.json fields (block_trackers = $false…).
     param([ValidateSet('light', 'dark')][string]$Theme = 'light', [switch]$Vertical, [hashtable]$Settings = @{})
     if (Get-MuestraState) { Stop-Muestra }
-    Disconnect-Liviano
+    Disconnect-Nea
     New-Item -ItemType Directory -Force -Path $script:Scratch | Out-Null
     $data = Join-Path $script:Scratch ('datos-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
     $site = Join-Path $script:Scratch 'sitio'
@@ -391,25 +396,26 @@ function Start-Muestra {
     Initialize-MuestraData $data $Theme $Vertical.IsPresent $Settings
     Initialize-MuestraSite $site
     $server = Start-Process -FilePath 'python' -ArgumentList @('-I', '-m', 'http.server', $port, '--bind', '127.0.0.1', '--directory', $site) -WindowStyle Hidden -PassThru
-    $env:LIVIANO_DATA_DIR = $data
-    $env:LIVIANO_BENCH = '1'
-    $env:LIVIANO_BENCH_PIPE = 'muestra'
-    $env:LIVIANO_CREDENTIAL_PREFIX = 'LivianoMuestraVacio:'
-    $exe = Join-Path $script:Root 'target\release\liviano.exe'
+    $env:NEA_DATA_DIR = $data
+    $env:NEA_BENCH = '1'
+    $env:NEA_BENCH_PIPE = 'muestra'
+    $env:NEA_CREDENTIAL_PREFIX = 'NeaMuestraVacio:'
+    # MUESTRA_EXE: a build made elsewhere (another --target-dir).
+    $exe = if ($env:MUESTRA_EXE) { $env:MUESTRA_EXE } else { Join-Path $script:Root 'target\release\nea.exe' }
     $app = Start-Process -FilePath $exe -PassThru
     Write-JsonFile $script:StateFile ([ordered]@{ pid = $app.Id; server = $server.Id; port = $port; data = $data; theme = $Theme })
-    Connect-Liviano -TimeoutSec 30
-    Invoke-Liviano ping | Out-Null
+    Connect-Nea -TimeoutSec 30
+    Invoke-Nea ping | Out-Null
     $deadline = (Get-Date).AddSeconds(10)
     while (-not (Get-MainWindow) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 100 }
-    "Liviano $($app.Id) · servidor 127.0.0.1:$port"
+    "Nea $($app.Id) · servidor 127.0.0.1:$port"
 }
 
 function Stop-Muestra {
     $state = Get-MuestraState
     if (-not $state) { return }
-    try { Connect-Liviano -TimeoutSec 3; Invoke-Liviano quit -NoThrow | Out-Null } catch { }
-    Disconnect-Liviano
+    try { Connect-Nea -TimeoutSec 3; Invoke-Nea quit -NoThrow | Out-Null } catch { }
+    Disconnect-Nea
     foreach ($id in @($state.pid, $state.server)) {
         $p = Get-Process -Id $id -ErrorAction SilentlyContinue
         if ($p) { if (-not $p.WaitForExit(8000)) { Stop-Process -Id $id -Force } }
@@ -423,21 +429,21 @@ function Stop-Muestra {
 function Get-SiteUrl([string]$Page) { "http://127.0.0.1:$((Get-MuestraState).port)/$Page" }
 
 # The pipe serves one client at a time: every helper reconnects as needed.
-function Lv([string]$Cmd, [hashtable]$Arguments = @{}) {
-    if (-not $script:LivianoConnection) { Connect-Liviano }
-    Invoke-Liviano $Cmd $Arguments
+function Nea([string]$Cmd, [hashtable]$Arguments = @{}) {
+    if (-not $script:NeaConnection) { Connect-Nea }
+    Invoke-Nea $Cmd $Arguments
 }
 
 function Open-Page([string]$Url, [switch]$Background, [int]$Wait = 20000) {
-    $tab = (Lv open @{ url = $Url; background = $Background.IsPresent }).tab
-    if ($Wait -gt 0) { try { Lv wait @{ tab = $tab; timeout_ms = $Wait } | Out-Null } catch { Write-Warning $_ } }
+    $tab = (Nea open @{ url = $Url; background = $Background.IsPresent }).tab
+    if ($Wait -gt 0) { try { Nea wait @{ tab = $tab; timeout_ms = $Wait } | Out-Null } catch { Write-Warning $_ } }
     $tab
 }
 
-function Run([string]$Name) { Lv run @{ name = $Name } | Out-Null }
-function Type-Field([string]$Text, [switch]$Submit) { Lv type @{ text = $Text; submit = $Submit.IsPresent } | Out-Null }
-function Get-State { Lv state }
-function Set-Hover([int]$X, [int]$Y) { (Lv hover @{ x = $X; y = $Y }).hit }
+function Run([string]$Name) { Nea run @{ name = $Name } | Out-Null }
+function Type-Field([string]$Text, [switch]$Submit) { Nea type @{ text = $Text; submit = $Submit.IsPresent } | Out-Null }
+function Get-State { Nea state }
+function Set-Hover([int]$X, [int]$Y) { (Nea hover @{ x = $X; y = $Y }).hit }
 function Clear-Hover { Set-Hover -1 -1 | Out-Null }
 
 # Where each thing of the strip is: scans the strip through the hover
@@ -460,7 +466,7 @@ function Get-HitMap([int]$Y = 20, [int]$X = 20, [switch]$Column, [int]$Step = 4,
 
 function Send-Mouse([uint32]$Msg, [int]$X, [int]$Y, [int]$Keys = 0) {
     $l = [IntPtr](($Y -shl 16) -bor ($X -band 0xFFFF))
-    [LivianoMuestra]::PostMessage((Get-MainWindow), $Msg, [IntPtr]$Keys, $l) | Out-Null
+    [NeaMuestra]::PostMessage((Get-MainWindow), $Msg, [IntPtr]$Keys, $l) | Out-Null
 }
 
 # A drag in client pixels, as posted messages to our own window.
@@ -484,54 +490,54 @@ function Open-ContextMenu([int]$X, [int]$Y) {
 # window, posted, the way its own loop reads it.
 function Close-Menus {
     $pid_ = [uint32](Get-MuestraPid)
-    foreach ($w in [LivianoMuestra]::Windows($pid_)) {
-        if ($w.Class -eq '#32768') { [LivianoMuestra]::PostMessage($w.Hwnd, $script:WM_KEYDOWN, [IntPtr]0x1B, [IntPtr]1) | Out-Null }
+    foreach ($w in [NeaMuestra]::Windows($pid_)) {
+        if ($w.Class -eq '#32768') { [NeaMuestra]::PostMessage($w.Hwnd, $script:WM_KEYDOWN, [IntPtr]0x1B, [IntPtr]1) | Out-Null }
     }
     Start-Sleep -Milliseconds 150
-    foreach ($w in [LivianoMuestra]::Windows($pid_)) {
-        if ($w.Class -eq '#32768') { [LivianoMuestra]::PostMessage((Get-MainWindow), $script:WM_CANCELMODE, [IntPtr]0, [IntPtr]0) | Out-Null }
+    foreach ($w in [NeaMuestra]::Windows($pid_)) {
+        if ($w.Class -eq '#32768') { [NeaMuestra]::PostMessage((Get-MainWindow), $script:WM_CANCELMODE, [IntPtr]0, [IntPtr]0) | Out-Null }
     }
 }
 
 # Picks the Ajustes theme as a person would: the combo's selection, then the
 # notification its parent gets.
 function Set-ThemeInSettings([ValidateSet('system', 'light', 'dark')][string]$Theme) {
-    $settings = [LivianoMuestra]::Find([uint32](Get-MuestraPid), 'LivianoSettings')
+    $settings = [NeaMuestra]::Find([uint32](Get-MuestraPid), 'NeaSettings')
     if ($settings -eq [IntPtr]::Zero) { throw 'Ajustes no está abierto' }
-    $combo = [LivianoMuestra]::Control($settings, 101)
+    $combo = [NeaMuestra]::Control($settings, 101)
     $index = @{ system = 0; light = 1; dark = 2 }[$Theme]
-    [LivianoMuestra]::SendMessage($combo, 0x014E, [IntPtr]$index, [IntPtr]0) | Out-Null   # CB_SETCURSEL
-    $parent = [LivianoMuestra]::GetParent($combo)
+    [NeaMuestra]::SendMessage($combo, 0x014E, [IntPtr]$index, [IntPtr]0) | Out-Null   # CB_SETCURSEL
+    $parent = [NeaMuestra]::GetParent($combo)
     $w = [IntPtr]((1 -shl 16) -bor 101)                                                   # CBN_SELCHANGE
-    [LivianoMuestra]::SendMessage($parent, $script:WM_COMMAND, $w, $combo) | Out-Null
+    [NeaMuestra]::SendMessage($parent, $script:WM_COMMAND, $w, $combo) | Out-Null
 }
 
 function Close-Settings {
-    $settings = [LivianoMuestra]::Find([uint32](Get-MuestraPid), 'LivianoSettings')
-    if ($settings -ne [IntPtr]::Zero) { [LivianoMuestra]::PostMessage($settings, 0x0010, [IntPtr]0, [IntPtr]0) | Out-Null }
+    $settings = [NeaMuestra]::Find([uint32](Get-MuestraPid), 'NeaSettings')
+    if ($settings -ne [IntPtr]::Zero) { [NeaMuestra]::PostMessage($settings, 0x0010, [IntPtr]0, [IntPtr]0) | Out-Null }
 }
 
 # Escape on the field's own edit control: the field (or panel) closes.
 function Close-Field {
-    $field = [LivianoMuestra]::Find([uint32](Get-MuestraPid), 'LivianoOmnibar')
+    $field = [NeaMuestra]::Find([uint32](Get-MuestraPid), 'NeaOmnibar')
     if ($field -eq [IntPtr]::Zero) { return }
-    $edit = [LivianoMuestra]::ChildOfClass($field, 'Edit')
-    if ($edit -ne [IntPtr]::Zero) { [LivianoMuestra]::SendMessage($edit, $script:WM_KEYDOWN, [IntPtr]0x1B, [IntPtr]1) | Out-Null }
+    $edit = [NeaMuestra]::ChildOfClass($field, 'Edit')
+    if ($edit -ne [IntPtr]::Zero) { [NeaMuestra]::SendMessage($edit, $script:WM_KEYDOWN, [IntPtr]0x1B, [IntPtr]1) | Out-Null }
 }
 
 # A key on the field's edit control (Down, Enter…), as its own message.
 function Send-FieldKey([int]$VirtualKey) {
-    $field = [LivianoMuestra]::Find([uint32](Get-MuestraPid), 'LivianoOmnibar')
+    $field = [NeaMuestra]::Find([uint32](Get-MuestraPid), 'NeaOmnibar')
     if ($field -eq [IntPtr]::Zero) { return }
-    $edit = [LivianoMuestra]::ChildOfClass($field, 'Edit')
-    if ($edit -ne [IntPtr]::Zero) { [LivianoMuestra]::SendMessage($edit, $script:WM_KEYDOWN, [IntPtr]$VirtualKey, [IntPtr]1) | Out-Null }
+    $edit = [NeaMuestra]::ChildOfClass($field, 'Edit')
+    if ($edit -ne [IntPtr]::Zero) { [NeaMuestra]::SendMessage($edit, $script:WM_KEYDOWN, [IntPtr]$VirtualKey, [IntPtr]1) | Out-Null }
 }
 
 # Shows a tab: the bench screenshot command selects it first.
 function Select-Tab([int64]$Id) {
-    $reply = Invoke-Liviano screenshot @{ tab = $Id; path = (Join-Path $script:Scratch 'seleccion.png') } -NoThrow
+    $reply = Invoke-Nea screenshot @{ tab = $Id; path = (Join-Path $script:Scratch 'seleccion.png') } -NoThrow
     # A sleeping tab was selected all the same: it wakes and loads.
-    if (-not $reply.ok) { try { Lv wait @{ tab = $Id; timeout_ms = 20000 } | Out-Null } catch { } }
+    if (-not $reply.ok) { try { Nea wait @{ tab = $Id; timeout_ms = 20000 } | Out-Null } catch { } }
 }
 
 # Types like a person: the field gets one more character at a time.
@@ -592,11 +598,11 @@ function Get-FrameBackground {
 }
 
 function Start-Recording([string]$Dir, [int]$IntervalMs = 33) {
-    [LivianoMuestra]::Start([uint32](Get-MuestraPid), $Dir, $IntervalMs, (Get-FrameBackground))
+    [NeaMuestra]::Start([uint32](Get-MuestraPid), $Dir, $IntervalMs, (Get-FrameBackground))
 }
-function Suspend-Recording { [LivianoMuestra]::Pause() }
-function Resume-Recording { [LivianoMuestra]::Resume() }
+function Suspend-Recording { [NeaMuestra]::Pause() }
+function Resume-Recording { [NeaMuestra]::Resume() }
 function Stop-Recording {
-    [LivianoMuestra]::Stop()
-    "$([LivianoMuestra]::Count) cuadros, $([LivianoMuestra]::Elapsed) ms, $([LivianoMuestra]::Dropped) perdidos"
+    [NeaMuestra]::Stop()
+    "$([NeaMuestra]::Count) cuadros, $([NeaMuestra]::Elapsed) ms, $([NeaMuestra]::Dropped) perdidos"
 }

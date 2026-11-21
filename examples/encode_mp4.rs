@@ -24,29 +24,24 @@ use windows::{
     Win32::{
         Graphics::Imaging::{
             CLSID_WICImagingFactory, GUID_ContainerFormatGif, GUID_WICPixelFormat8bppIndexed,
-            GUID_WICPixelFormat32bppBGRA, IWICBitmapEncoder, IWICBitmapFrameEncode,
-            IWICBitmapSource, IWICImagingFactory, IWICMetadataQueryWriter, WICBitmapDitherTypeNone,
-            WICBitmapEncoderNoCache, WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom,
-            WICDecodeMetadataCacheOnDemand, WICRect,
+            GUID_WICPixelFormat32bppBGRA, IWICBitmapEncoder, IWICBitmapFrameEncode, IWICBitmapSource,
+            IWICImagingFactory, IWICMetadataQueryWriter, WICBitmapDitherTypeNone, WICBitmapEncoderNoCache,
+            WICBitmapInterpolationModeFant, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnDemand, WICRect,
         },
         Media::MediaFoundation::{
-            CODECAPI_AVEncCommonQuality, CODECAPI_AVEncCommonRateControlMode,
-            CODECAPI_AVEncMPVGOPSize, IMFAttributes, IMFSinkWriter, MF_MT_AVG_BITRATE,
-            MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE,
-            MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
-            MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_SINK_WRITER_DISABLE_THROTTLING,
-            MF_VERSION, MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer,
-            MFCreateSample, MFCreateSinkWriterFromURL, MFMediaType_Video, MFNominalRange_16_235,
-            MFSTARTUP_FULL, MFShutdown, MFStartup, MFVideoFormat_H264, MFVideoFormat_NV12,
-            MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT709,
+            CODECAPI_AVEncCommonQuality, CODECAPI_AVEncCommonRateControlMode, CODECAPI_AVEncMPVGOPSize, IMFAttributes,
+            IMFSinkWriter, MF_MT_AVG_BITRATE, MF_MT_DEFAULT_STRIDE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE,
+            MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE, MF_MT_MPEG2_PROFILE, MF_MT_PIXEL_ASPECT_RATIO, MF_MT_SUBTYPE,
+            MF_MT_VIDEO_NOMINAL_RANGE, MF_MT_YUV_MATRIX, MF_SINK_WRITER_DISABLE_THROTTLING, MF_VERSION,
+            MFCreateAttributes, MFCreateMediaType, MFCreateMemoryBuffer, MFCreateSample, MFCreateSinkWriterFromURL,
+            MFMediaType_Video, MFNominalRange_16_235, MFSTARTUP_FULL, MFShutdown, MFStartup, MFVideoFormat_H264,
+            MFVideoFormat_NV12, MFVideoInterlace_Progressive, MFVideoTransferMatrix_BT709,
             eAVEncCommonRateControlMode_Quality, eAVEncH264VProfile_High,
         },
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-                StructuredStorage::{
-                    CAUB, PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0,
-                },
+                StructuredStorage::{CAUB, PROPVARIANT, PROPVARIANT_0, PROPVARIANT_0_0, PROPVARIANT_0_0_0},
             },
             Variant::{VARENUM, VT_UI1, VT_VECTOR},
         },
@@ -68,13 +63,10 @@ struct Options {
 fn parse_args() -> std::result::Result<Options, String> {
     let mut args = std::env::args().skip(1);
     let mut positional = Vec::new();
-    let (mut gif, mut fps, mut quality, mut width, mut from, mut to) =
-        (false, None, 70, None, 0, None);
+    let (mut gif, mut fps, mut quality, mut width, mut from, mut to) = (false, None, 70, None, 0, None);
     while let Some(arg) = args.next() {
         let mut number = |name: &str| -> std::result::Result<u64, String> {
-            args.next()
-                .and_then(|v| v.parse().ok())
-                .ok_or_else(|| format!("{name} necesita un número"))
+            args.next().and_then(|v| v.parse().ok()).ok_or_else(|| format!("{name} necesita un número"))
         };
         match arg.as_str() {
             "--gif" => gif = true,
@@ -86,26 +78,15 @@ fn parse_args() -> std::result::Result<Options, String> {
             _ => positional.push(PathBuf::from(arg)),
         }
     }
-    let [timeline, out] = <[PathBuf; 2]>::try_from(positional).map_err(|_| {
-        "uso: encode_mp4 <timeline.txt> <salida.mp4|salida.gif> [--gif] [--fps N] ...".to_string()
-    })?;
+    let [timeline, out] = <[PathBuf; 2]>::try_from(positional)
+        .map_err(|_| "uso: encode_mp4 <timeline.txt> <salida.mp4|salida.gif> [--gif] [--fps N] ...".to_string())?;
     let fps = fps.unwrap_or(if gif { 12 } else { 30 }).clamp(1, 60);
-    Ok(Options {
-        timeline,
-        out,
-        gif,
-        fps,
-        quality: quality.min(100),
-        width,
-        from,
-        to,
-    })
+    Ok(Options { timeline, out, gif, fps, quality: quality.min(100), width, from, to })
 }
 
 /// (capture time in ms, PNG path), sorted by time.
 fn read_timeline(path: &Path) -> std::result::Result<Vec<(u64, PathBuf)>, String> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?;
+    let text = std::fs::read_to_string(path).map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new("."));
     let mut frames: Vec<(u64, PathBuf)> = text
         .lines()
@@ -125,9 +106,7 @@ fn read_timeline(path: &Path) -> std::result::Result<Vec<(u64, PathBuf)>, String
 /// For each output frame of a clip [from, to) at `fps`, the index of the
 /// capture it shows: the last one taken at or before its time.
 fn resample(times: &[u64], from: u64, to: u64, fps: u32) -> Vec<usize> {
-    let count = ((to.saturating_sub(from)) * fps as u64)
-        .div_ceil(1000)
-        .max(1);
+    let count = ((to.saturating_sub(from)) * fps as u64).div_ceil(1000).max(1);
     let mut picks = Vec::with_capacity(count as usize);
     let mut i = 0;
     for n in 0..count {
@@ -152,11 +131,7 @@ struct Wic {
 
 impl Wic {
     fn new() -> Result<Self> {
-        Ok(Self {
-            factory: unsafe {
-                CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)?
-            },
-        })
+        Ok(Self { factory: unsafe { CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)? } })
     }
 
     /// A PNG as straight BGRA, optionally scaled to `width` (aspect kept).
@@ -190,11 +165,7 @@ impl Wic {
             }
             let mut bgra = vec![0u8; (w * h * 4) as usize];
             source.CopyPixels(std::ptr::null(), w * 4, &mut bgra)?;
-            Ok(Image {
-                width: w,
-                height: h,
-                bgra,
-            })
+            Ok(Image { width: w, height: h, bgra })
         }
     }
 }
@@ -211,18 +182,12 @@ fn to_nv12(image: &Image, w: u32, h: u32) -> Vec<u8> {
         }
         let i = (y * image.width as usize + x) * 4;
         let a = image.bgra[i + 3] as f32 / 255.0;
-        (
-            image.bgra[i + 2] as f32 * a,
-            image.bgra[i + 1] as f32 * a,
-            image.bgra[i] as f32 * a,
-        )
+        (image.bgra[i + 2] as f32 * a, image.bgra[i + 1] as f32 * a, image.bgra[i] as f32 * a)
     };
     for y in 0..h {
         for x in 0..w {
             let (r, g, b) = pixel(x, y);
-            out[y * w + x] = (16.0 + 0.1826 * r + 0.6142 * g + 0.0620 * b)
-                .round()
-                .clamp(0.0, 255.0) as u8;
+            out[y * w + x] = (16.0 + 0.1826 * r + 0.6142 * g + 0.0620 * b).round().clamp(0.0, 255.0) as u8;
         }
     }
     let uv = w * h;
@@ -236,12 +201,8 @@ fn to_nv12(image: &Image, w: u32, h: u32) -> Vec<u8> {
                 b += p.2 / 4.0;
             }
             let i = uv + (y / 2) * w + x;
-            out[i] = (128.0 - 0.1006 * r - 0.3386 * g + 0.4392 * b)
-                .round()
-                .clamp(0.0, 255.0) as u8;
-            out[i + 1] = (128.0 + 0.4392 * r - 0.3989 * g - 0.0403 * b)
-                .round()
-                .clamp(0.0, 255.0) as u8;
+            out[i] = (128.0 - 0.1006 * r - 0.3386 * g + 0.4392 * b).round().clamp(0.0, 255.0) as u8;
+            out[i + 1] = (128.0 + 0.4392 * r - 0.3989 * g - 0.0403 * b).round().clamp(0.0, 255.0) as u8;
         }
     }
     out
@@ -297,10 +258,7 @@ fn encode_mp4(options: &Options, frames: &[(u64, PathBuf)], picks: &[usize]) -> 
         let mut params: Option<IMFAttributes> = None;
         MFCreateAttributes(&mut params, 3)?;
         let params = params.expect("MFCreateAttributes returned no attributes");
-        params.SetUINT32(
-            &CODECAPI_AVEncCommonRateControlMode,
-            eAVEncCommonRateControlMode_Quality.0 as u32,
-        )?;
+        params.SetUINT32(&CODECAPI_AVEncCommonRateControlMode, eAVEncCommonRateControlMode_Quality.0 as u32)?;
         params.SetUINT32(&CODECAPI_AVEncCommonQuality, options.quality)?;
         // A keyframe every two seconds: without it the encoder writes almost
         // none, and a player seeking into the clip shows a stale picture.
@@ -357,12 +315,7 @@ fn propvariant(vt: VARENUM, value: PROPVARIANT_0_0_0) -> PROPVARIANT {
 fn bytes_property(bytes: &mut [u8]) -> ManuallyDrop<PROPVARIANT> {
     ManuallyDrop::new(propvariant(
         VARENUM(VT_VECTOR.0 | VT_UI1.0),
-        PROPVARIANT_0_0_0 {
-            caub: CAUB {
-                cElems: bytes.len() as u32,
-                pElems: bytes.as_mut_ptr(),
-            },
-        },
+        PROPVARIANT_0_0_0 { caub: CAUB { cElems: bytes.len() as u32, pElems: bytes.as_mut_ptr() } },
     ))
 }
 
@@ -385,17 +338,12 @@ fn encode_gif(options: &Options, frames: &[(u64, PathBuf)], picks: &[usize]) -> 
             &HSTRING::from(options.out.as_os_str()),
             windows::Win32::Foundation::GENERIC_WRITE.0,
         )?;
-        let encoder: IWICBitmapEncoder = wic
-            .factory
-            .CreateEncoder(&GUID_ContainerFormatGif, std::ptr::null())?;
+        let encoder: IWICBitmapEncoder = wic.factory.CreateEncoder(&GUID_ContainerFormatGif, std::ptr::null())?;
         encoder.Initialize(&stream, WICBitmapEncoderNoCache)?;
         // Loop forever (the NETSCAPE2.0 application extension).
         let meta: IWICMetadataQueryWriter = encoder.GetMetadataQueryWriter()?;
         let mut app = *b"NETSCAPE2.0";
-        meta.SetMetadataByName(
-            &HSTRING::from("/appext/application"),
-            &*bytes_property(&mut app),
-        )?;
+        meta.SetMetadataByName(&HSTRING::from("/appext/application"), &*bytes_property(&mut app))?;
         let mut data = [3u8, 1, 0, 0, 0];
         meta.SetMetadataByName(&HSTRING::from("/appext/data"), &*bytes_property(&mut data))?;
 
@@ -435,16 +383,8 @@ fn encode_gif(options: &Options, frames: &[(u64, PathBuf)], picks: &[usize]) -> 
             let delay = exact.round().max(2.0);
             owed = exact - delay;
             let frame_meta = frame.GetMetadataQueryWriter()?;
-            frame_meta.SetMetadataByName(
-                &HSTRING::from("/grctlext/Delay"),
-                &PROPVARIANT::from(delay as u16),
-            )?;
-            let rect = WICRect {
-                X: 0,
-                Y: 0,
-                Width: image.width as i32,
-                Height: image.height as i32,
-            };
+            frame_meta.SetMetadataByName(&HSTRING::from("/grctlext/Delay"), &PROPVARIANT::from(delay as u16))?;
+            let rect = WICRect { X: 0, Y: 0, Width: image.width as i32, Height: image.height as i32 };
             frame.WriteSource(&indexed, &rect)?;
             frame.Commit()?;
             if i % 50 == 0 {
@@ -474,10 +414,7 @@ fn main() {
     };
     // The clip, clamped to what was captured; the last frame holds for one
     // frame's time.
-    let start = frames
-        .iter()
-        .rposition(|(ms, _)| *ms <= options.from)
-        .unwrap_or(0);
+    let start = frames.iter().rposition(|(ms, _)| *ms <= options.from).unwrap_or(0);
     let last_ms = frames.last().map_or(0, |(ms, _)| *ms) + 1000 / options.fps as u64;
     let to = options.to.unwrap_or(last_ms).min(last_ms);
     let clip = &frames[start..];
@@ -493,19 +430,11 @@ fn main() {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
     }
-    let result = if options.gif {
-        encode_gif(&options, clip, &picks)
-    } else {
-        encode_mp4(&options, clip, &picks)
-    };
+    let result = if options.gif { encode_gif(&options, clip, &picks) } else { encode_mp4(&options, clip, &picks) };
     match result {
         Ok(()) => {
             let bytes = std::fs::metadata(&options.out).map_or(0, |m| m.len());
-            println!(
-                "{} ({:.1} MB)",
-                options.out.display(),
-                bytes as f64 / 1_048_576.0
-            );
+            println!("{} ({:.1} MB)", options.out.display(), bytes as f64 / 1_048_576.0);
         }
         Err(e) => {
             eprintln!("no se pudo codificar: {e}");
@@ -513,4 +442,3 @@ fn main() {
         }
     }
 }
-

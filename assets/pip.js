@@ -9,7 +9,7 @@
     return "exit";
   }
   if (!document.pictureInPictureEnabled) {
-    livianoToast("Este motor no permite sacar videos a una ventana flotante");
+    neaToast("Este motor no permite sacar videos a una ventana flotante");
     return "unsupported";
   }
 
@@ -35,7 +35,7 @@
   };
   const candidates = videos.filter((v) => v.readyState > 0 && score(v) > 0);
   if (!candidates.length) {
-    livianoToast("No hay ningún video a la vista en esta página");
+    neaToast("No hay ningún video a la vista en esta página");
     return "none";
   }
   candidates.sort((a, b) => score(b) - score(a));
@@ -46,7 +46,7 @@
     await video.requestPictureInPicture();
     return "enter";
   } catch (error) {
-    livianoToast("No se pudo sacar el video a una ventana flotante");
+    neaToast("No se pudo sacar el video a una ventana flotante");
     return "error: " + error.name + ": " + error.message;
   }
 })()

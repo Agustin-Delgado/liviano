@@ -1,45 +1,72 @@
-//! Plain JSON files under %APPDATA%\Liviano, read on demand and written
+//! Plain JSON files under %APPDATA%\Nea, read on demand and written
 //! atomically (temp file + rename) so a crash never leaves half a file.
 
 use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Condvar, Mutex},
+    sync::{Condvar, Mutex, OnceLock},
     time::{Duration, Instant},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
 
-pub const APP_NAME: &str = "Liviano";
+pub const APP_NAME: &str = "Nea";
 /// What the window, the shortcut and the installed entry are called. A debug
 /// build says so, so it is never mistaken for the published one.
-pub const DISPLAY_NAME: &str = if cfg!(debug_assertions) { "Liviano (desarrollo)" } else { "Liviano" };
+pub const DISPLAY_NAME: &str = if cfg!(debug_assertions) { "Nea (desarrollo)" } else { "Nea" };
 
-pub fn data_dir() -> PathBuf {
-    let base = std::env::var_os("LIVIANO_DATA_DIR")
+/// Set when the folders of the former name could not be moved this launch
+/// (`legacy`): the session reads and writes them where they are.
+static ROAMING_INSTEAD: OnceLock<PathBuf> = OnceLock::new();
+static LOCAL_INSTEAD: OnceLock<PathBuf> = OnceLock::new();
+
+/// Where the roaming files live (settings, history, bookmarks, extensions)
+/// when nothing else was chosen. NEA_DATA_DIR puts everything in one folder.
+pub fn default_roaming_root() -> PathBuf {
+    std::env::var_os("NEA_DATA_DIR")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("APPDATA").map(|p| PathBuf::from(p).join(APP_NAME)))
-        .unwrap_or_else(|| PathBuf::from(".").join(APP_NAME));
+        .unwrap_or_else(|| PathBuf::from(".").join(APP_NAME))
+}
+
+/// Where the machine-local files live (engine profile, downloaded updates).
+pub fn default_local_root() -> PathBuf {
+    std::env::var_os("NEA_DATA_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(APP_NAME)))
+        .unwrap_or_else(default_roaming_root)
+}
+
+/// Makes this session use other folders. Only the first call counts.
+pub fn use_instead(roaming: Option<PathBuf>, local: Option<PathBuf>) {
+    if let Some(dir) = roaming {
+        let _ = ROAMING_INSTEAD.set(dir);
+    }
+    if let Some(dir) = local {
+        let _ = LOCAL_INSTEAD.set(dir);
+    }
+}
+
+pub fn local_root() -> PathBuf {
+    LOCAL_INSTEAD.get().cloned().unwrap_or_else(default_local_root)
+}
+
+pub fn data_dir() -> PathBuf {
+    let base = ROAMING_INSTEAD.get().cloned().unwrap_or_else(default_roaming_root);
     let _ = fs::create_dir_all(&base);
     base
 }
 
 /// Engine profile data (cookies, cache) is machine-local, not roaming.
 pub fn engine_dir() -> PathBuf {
-    let base = std::env::var_os("LIVIANO_DATA_DIR")
-        .map(|p| PathBuf::from(p).join("engine"))
-        .or_else(|| std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join(APP_NAME).join("engine")))
-        .unwrap_or_else(|| data_dir().join("engine"));
+    let base = local_root().join("engine");
     let _ = fs::create_dir_all(&base);
     base
 }
 
 pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
-    fs::read(path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        .unwrap_or_default()
+    fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
 }
 
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
@@ -133,4 +160,3 @@ fn write_loop() {
         CHANGED.notify_all();
     }
 }
-

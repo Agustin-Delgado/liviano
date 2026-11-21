@@ -106,4 +106,3 @@ pub fn update_file(change: impl FnOnce(&mut Vec<Download>)) {
     change(&mut list);
     save(&list);
 }
-

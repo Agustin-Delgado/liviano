@@ -1,6 +1,6 @@
 # Muestra
 
-Todo lo que hace Liviano, en fotos y en video. Las fotos son la ventana
+Todo lo que hace Nea, en fotos y en video. Las fotos son la ventana
 entera (1280×800), capturada con PrintWindow sin traerla al frente; la
 sombra y el borde que dibuja Windows no salen. Los datos (historial,
 marcadores, descargas) son sintéticos y el panel de contraseñas está vacío
@@ -8,7 +8,7 @@ a propósito.
 
 ![Animaciones: tarjeta al pasar el mouse, cambio de pestaña y reordenar](animaciones.gif)
 
-Video completo: [liviano.mp4](liviano.mp4) (H.264, 30 cuadros/s). Las
+Video completo: [nea.mp4](nea.mp4) (H.264, 30 cuadros/s). Las
 escenas y el segundo en que empieza cada una están en
 [escenas-video.txt](escenas-video.txt).
 
@@ -41,12 +41,12 @@ escenas y el segundo en que empieza cada una están en
 | [23](23-emergente-bloqueada-claro.png) | Aviso de ventana emergente bloqueada |
 | [24](24-menu-de-pestana-claro.png) | Menú contextual de una pestaña |
 | [25](25-boton-de-extensiones-claro.png) | Botón de extensiones y su menú (con una extensión local de prueba, deshabilitada) |
-| [26](26-bloqueo-de-anuncios-infobae.png) | infobae.com como viene Liviano y con el bloqueo de anuncios y de rastreadores apagado |
+| [26](26-bloqueo-de-anuncios-infobae.png) | infobae.com como viene Nea y con el bloqueo de anuncios y de rastreadores apagado |
 | [27](27-pestana-dormida-claro.png) | Tarjeta de una pestaña dormida: «se vuelve a cargar al abrirla» |
 
 ## Cómo se hizo
 
-- `tools/muestra.ps1`: arranca un Liviano propio (`LIVIANO_BENCH=1`, datos
+- `tools/muestra.ps1`: arranca un Nea propio (`NEA_BENCH=1`, datos
   en una carpeta temporal) y lo maneja por el pipe de control y con
   mensajes a sus propias ventanas. Nada de entrada global.
 - `tools/muestra-fotos.ps1`: las fotos.

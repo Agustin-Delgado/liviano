@@ -31,4 +31,3 @@ pub struct Session {
     /// them by position (see `tab_groups`).
     pub groups: Vec<crate::tab_groups::SavedGroup>,
 }
-

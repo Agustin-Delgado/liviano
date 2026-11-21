@@ -259,4 +259,3 @@ pub fn half(content: Rect, side: Side) -> Rect {
         Side::Right => Rect::new(middle, content.top, content.right, content.bottom),
     }
 }
-

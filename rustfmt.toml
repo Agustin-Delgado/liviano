@@ -1,0 +1,4 @@
+# The code was written to this width before rustfmt ran on it; these two
+# settings keep the formatter close to that shape.
+max_width = 120
+use_small_heuristics = "Max"

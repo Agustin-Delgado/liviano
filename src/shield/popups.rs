@@ -43,4 +43,3 @@ fn is_web(url: &str) -> bool {
     let lower = url.trim_start().get(..8).unwrap_or(url).to_ascii_lowercase();
     lower.starts_with("http://") || lower.starts_with("https://")
 }
-

@@ -7,15 +7,13 @@
 //! Web Store's publisher key. Hashing and signatures go through Windows CNG,
 //! so no crypto crate ships in the executable.
 
-use windows::{
-    Win32::{
-        Foundation::NTSTATUS,
-        Security::Cryptography::{
-            BCRYPT_FLAGS, BCRYPT_HASH_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_PAD_PKCS1, BCRYPT_PKCS1_PADDING_INFO,
-            BCRYPT_SHA256_ALG_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCreateHash, BCryptDestroyHash, BCryptDestroyKey,
-            BCryptFinishHash, BCryptHashData, BCryptVerifySignature, CERT_PUBLIC_KEY_INFO, CRYPT_IMPORT_PUBLIC_KEY_FLAGS,
-            CryptDecodeObjectEx, CryptImportPublicKeyInfoEx2, X509_ASN_ENCODING, X509_PUBLIC_KEY_INFO,
-        },
+use windows::Win32::{
+    Foundation::NTSTATUS,
+    Security::Cryptography::{
+        BCRYPT_FLAGS, BCRYPT_HASH_HANDLE, BCRYPT_KEY_HANDLE, BCRYPT_PAD_PKCS1, BCRYPT_PKCS1_PADDING_INFO,
+        BCRYPT_SHA256_ALG_HANDLE, BCRYPT_SHA256_ALGORITHM, BCryptCreateHash, BCryptDestroyHash, BCryptDestroyKey,
+        BCryptFinishHash, BCryptHashData, BCryptVerifySignature, CERT_PUBLIC_KEY_INFO, CRYPT_IMPORT_PUBLIC_KEY_FLAGS,
+        CryptDecodeObjectEx, CryptImportPublicKeyInfoEx2, X509_ASN_ENCODING, X509_PUBLIC_KEY_INFO,
     },
 };
 
@@ -78,7 +76,9 @@ impl Error {
             Error::NoDeveloperProof => "el paquete no trae la firma del desarrollador".to_string(),
             Error::NotFromWebStore => "el paquete no está firmado por la Chrome Web Store".to_string(),
             Error::BadSignature => "la firma del paquete no es válida".to_string(),
-            Error::WrongId { expected, found } => format!("el paquete es de otra extensión ({found}, se esperaba {expected})"),
+            Error::WrongId { expected, found } => {
+                format!("el paquete es de otra extensión ({found}, se esperaba {expected})")
+            }
             Error::Crypto => "no se pudo verificar la firma en este equipo".to_string(),
         }
     }
@@ -356,10 +356,10 @@ pub fn verify<'a>(file: &'a [u8], expected_id: Option<&str>, from_store: bool) -
         return Err(Error::NotFromWebStore);
     }
     let id = id_from_hash(&package.crx_id);
-    if let Some(expected) = expected_id {
-        if expected != id {
-            return Err(Error::WrongId { expected: expected.to_string(), found: id });
-        }
+    if let Some(expected) = expected_id
+        && expected != id
+    {
+        return Err(Error::WrongId { expected: expected.to_string(), found: id });
     }
     Ok(Verified { public_key, archive: package.archive })
 }
@@ -380,4 +380,3 @@ pub fn base64(data: &[u8]) -> String {
     }
     out
 }
-

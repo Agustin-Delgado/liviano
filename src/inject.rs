@@ -76,6 +76,5 @@ pub fn execute_with_gesture(webview: &ICoreWebView2, script: &str) {
 
 /// A short note at the bottom of the page.
 pub fn toast_script(text: &str) -> String {
-    format!("(() => {{ {TOAST} livianoToast({}); }})();", js_string(text))
+    format!("(() => {{ {TOAST} neaToast({}); }})();", js_string(text))
 }
-

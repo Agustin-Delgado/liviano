@@ -3,7 +3,7 @@
 //! boxes (native, drawn by us through custom draw) and the soft "well" a
 //! native edit or list sits in instead of a sunken 3D edge.
 //!
-//! They follow HKUI's recipes: the primary button is the brand's (`default`
+//! They follow the design system's recipes: the primary button is the brand's (`default`
 //! variant), the rest are `outline` (a surface standing off the page on a
 //! 1 px ring), a check box is a 4 px-cornered box that fills with the brand
 //! when checked. Hover and press fade in 150 ms on ease-out, a check fills
@@ -47,9 +47,9 @@ thread_local! {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonKind {
-    /// The one action a window leads with: the brand's (HKUI `default`).
+    /// The one action a window leads with: the brand's (the `default` variant).
     Primary,
-    /// Everything else: a surface on a ring (HKUI `outline`).
+    /// Everything else: a surface on a ring (the `outline` variant).
     Secondary,
 }
 
@@ -61,7 +61,14 @@ pub fn track_hover(button: HWND) {
     }
 }
 
-unsafe extern "system" fn hover_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM, _: usize, _: usize) -> LRESULT {
+unsafe extern "system" fn hover_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+    _: usize,
+    _: usize,
+) -> LRESULT {
     match msg {
         WM_MOUSEMOVE if HOT.with(|h| h.get()) != hwnd.0 as isize => {
             let mut tme = TRACKMOUSEEVENT {
@@ -113,7 +120,14 @@ fn follow(hwnd: HWND, hot: bool, pressed: bool) -> (f32, f32) {
 
 /// Draws an owner-drawn button from its WM_DRAWITEM. `ground` is what the
 /// button sits on (its corners show it).
-pub fn draw_button_item(surface: &mut Surface, item: &DRAWITEMSTRUCT, kind: ButtonKind, ground: Color, pal: &Palette, scale: f32) {
+pub fn draw_button_item(
+    surface: &mut Surface,
+    item: &DRAWITEMSTRUCT,
+    kind: ButtonKind,
+    ground: Color,
+    pal: &Palette,
+    scale: f32,
+) {
     let text = window_text(item.hwndItem);
     let pressed = item.itemState.0 & ODS_SELECTED.0 != 0;
     let hot = HOT.with(|h| h.get()) == item.hwndItem.0 as isize;
@@ -139,7 +153,15 @@ pub struct ButtonState {
     pub disabled: bool,
 }
 
-pub fn draw_button(g: &Painter, rect: RectF, text: &str, kind: ButtonKind, state: ButtonState, pal: &Palette, scale: f32) {
+pub fn draw_button(
+    g: &Painter,
+    rect: RectF,
+    text: &str,
+    kind: ButtonKind,
+    state: ButtonState,
+    pal: &Palette,
+    scale: f32,
+) {
     let radius = size::RADIUS_FIELD * scale;
     // Disabled: 45 % opacity, as the recipe's `disabled:opacity-45`.
     let alpha = if state.disabled { 0.45 } else { 1.0 };
@@ -176,7 +198,12 @@ pub fn draw_button(g: &Painter, rect: RectF, text: &str, kind: ButtonKind, state
 
 /// shadow-focus: 1 px of brand and a soft halo around it.
 fn focus_ring(g: &Painter, rect: RectF, radius: f32, pal: &Palette, scale: f32) {
-    g.outline(rect.inset(-2.0 * scale, -2.0 * scale), radius + 2.0 * scale, 3.0 * scale, Color::from(pal.accent).with_alpha(lift::FOCUS_HALO));
+    g.outline(
+        rect.inset(-2.0 * scale, -2.0 * scale),
+        radius + 2.0 * scale,
+        3.0 * scale,
+        Color::from(pal.accent).with_alpha(lift::FOCUS_HALO),
+    );
     g.outline(rect, radius, 1.0, pal.accent);
 }
 
@@ -210,7 +237,12 @@ pub fn draw_check(nm: &NMCUSTOMDRAW, ground: Color, pal: &Palette, scale: f32) -
             g.fill(full, ground);
             let side = (16.0 * scale).min(full.width()).min(full.height()).round();
             let (cx, cy) = full.center();
-            let box_ = RectF::new((cx - side / 2.0).round(), (cy - side / 2.0).round(), (cx - side / 2.0).round() + side, (cy - side / 2.0).round() + side);
+            let box_ = RectF::new(
+                (cx - side / 2.0).round(),
+                (cy - side / 2.0).round(),
+                (cx - side / 2.0).round() + side,
+                (cy - side / 2.0).round() + side,
+            );
             let radius = size::RADIUS_CHIP * scale;
             let alpha = if disabled { 0.5 } else { 1.0 };
             let black = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
@@ -224,7 +256,11 @@ pub fn draw_check(nm: &NMCUSTOMDRAW, ground: Color, pal: &Palette, scale: f32) -
             g.outline(box_, radius, 1.0, Color::from(edge).with_alpha(alpha));
             if on > 0.0 {
                 let s = |v: f32| v * side / 16.0;
-                let tick = [(box_.left + s(4.0), box_.top + s(8.3)), (box_.left + s(6.8), box_.top + s(11.0)), (box_.left + s(12.0), box_.top + s(5.2))];
+                let tick = [
+                    (box_.left + s(4.0), box_.top + s(8.3)),
+                    (box_.left + s(6.8), box_.top + s(11.0)),
+                    (box_.left + s(12.0), box_.top + s(5.2)),
+                ];
                 g.polyline(&tick, 1.6 * scale, Color::from(pal.on_accent).with_alpha(on.clamp(0.0, 1.0) * alpha));
             }
             if focused {
@@ -237,7 +273,7 @@ pub fn draw_check(nm: &NMCUSTOMDRAW, ground: Color, pal: &Palette, scale: f32) -
 
 /// The soft rounded ground a native edit or list sits in, drawn by its
 /// parent around the child (which is placed `inset` inside it): the
-/// hover grey with a field's corner (HKUI's filled field).
+/// hover grey with a field's corner (the design system's filled field).
 pub fn draw_well(g: &Painter, rect: RectF, pal: &Palette, scale: f32) {
     let radius = size::RADIUS_FIELD * scale;
     g.round(rect, radius, pal.selection);

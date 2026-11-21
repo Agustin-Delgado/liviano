@@ -58,11 +58,11 @@ pub struct Settings {
     pub split_view: bool,
     /// A picture of the page on a tab's hover card (the card shows anyway).
     pub hover_preview: bool,
-    /// Look for a new version once a day (RF-22).
+    /// Look for a new version once a day.
     pub check_updates: bool,
     /// Manifest address; empty means the one built in (`updater`).
     pub update_url: String,
-    /// RF-23: the local pipe scripts drive the browser through (tests only).
+    /// The local pipe scripts drive the browser through (tests only).
     pub bench_enabled: bool,
     /// Offer to save a password after a login (filling is always on request).
     pub passwords_offer: bool,
@@ -113,7 +113,9 @@ pub fn from_window(current: &Settings, edited: Settings) -> Settings {
 pub fn valid_search_url(text: &str) -> bool {
     let text = text.trim();
     let lower = text.to_ascii_lowercase();
-    (lower.starts_with("https://") || lower.starts_with("http://")) && text.contains("{q}") && !text.contains(char::is_whitespace)
+    (lower.starts_with("https://") || lower.starts_with("http://"))
+        && text.contains("{q}")
+        && !text.contains(char::is_whitespace)
 }
 
 /// A whole number within `range`, as typed in a settings field.
@@ -129,4 +131,3 @@ pub fn normalize_host(text: &str) -> Option<String> {
     (!host.is_empty() && !host.contains(char::is_whitespace) && host.contains(|c: char| c.is_ascii_alphanumeric()))
         .then(|| host.to_string())
 }
-

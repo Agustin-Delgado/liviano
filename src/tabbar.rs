@@ -235,10 +235,17 @@ pub fn layout_with(
         let row = m.px(frame::ROW);
         let caption = Rect::new(0, 0, width, row);
         let frame = Frame::new(caption, m.scale);
-        let nav = nav_row(frame.right() + m.px(NAV_LEAD), m.px(2), row - m.px(2), m);
+        let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), m.px(2), row - m.px(2), m);
         let right = width - m.px(8);
         let settings = Rect::new(right - m.px(SETTINGS_W), m.px(2), right, row - m.px(2));
-        return Layout { content: Rect::new(0, row, width, height.max(row)), vertical, frame, nav, settings, ..Default::default() };
+        return Layout {
+            content: Rect::new(0, row, width, height.max(row)),
+            vertical,
+            frame,
+            nav,
+            settings,
+            ..Default::default()
+        };
     }
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
@@ -255,8 +262,6 @@ pub fn layout_with(
 const SETTINGS_W: i32 = 30;
 /// Back, forward and reload: a pinned tab's width, a hair narrower.
 const NAV_W: i32 = 28;
-/// Between the window's buttons and the page's.
-const NAV_LEAD: i32 = 8;
 
 /// Back, forward and reload from `left`, two pixels apart.
 fn nav_row(left: i32, top: i32, bottom: i32, m: &Metrics) -> [Rect; 3] {
@@ -355,10 +360,11 @@ fn layout_horizontal(
     // The window's buttons lead, the page's follow, then the tabs; the gear
     // (and the extensions) close the strip at the right.
     let frame = Frame::new(Rect::new(0, 0, width, bar), m.scale);
-    let nav = nav_row(frame.right() + m.px(NAV_LEAD), item_top, item_bottom, m);
+    let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
     let start = nav[2].right + pad;
     let settings = Rect::new(width - pad - m.px(SETTINGS_W), item_top, width - pad, item_bottom);
-    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + pad + m.px(DRAG_ROOM);
+    let reserved =
+        extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + pad + m.px(DRAG_ROOM);
     let available = width - start - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
@@ -371,7 +377,11 @@ fn layout_horizontal(
         let id = group.map(|g| g.id);
         if id != previous {
             if let Some(g) = group {
-                labels.push(Label { id: g.id, rect: Rect::new(x, item_top, x + g.label_w, item_bottom), collapsed: g.collapsed });
+                labels.push(Label {
+                    id: g.id,
+                    rect: Rect::new(x, item_top, x + g.label_w, item_bottom),
+                    collapsed: g.collapsed,
+                });
                 x += g.label_w + gap;
             }
             previous = id;
@@ -461,7 +471,11 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
             }
             if let Some(g) = group {
                 let header = m.px(GROUP_ROW);
-                labels.push(Label { id: g.id, rect: Rect::new(pad, y, side - pad, y + header), collapsed: g.collapsed });
+                labels.push(Label {
+                    id: g.id,
+                    rect: Rect::new(pad, y, side - pad, y + header),
+                    collapsed: g.collapsed,
+                });
                 y += header + gap;
             }
             previous = id;
@@ -643,7 +657,15 @@ fn paint_strip(g: &Painter, p: &Paint) {
     }
     // The partner of the active tab is on screen too: its label reads as such.
     let shown_partner = p.active.and_then(|a| {
-        p.pairs.iter().find_map(|&(l, r)| if l == a { Some(r) } else if r == a { Some(l) } else { None })
+        p.pairs.iter().find_map(|&(l, r)| {
+            if l == a {
+                Some(r)
+            } else if r == a {
+                Some(l)
+            } else {
+                None
+            }
+        })
     });
 
     // On a top strip the tabs, past their smallest width, run on under
@@ -693,7 +715,9 @@ fn paint_tabs(g: &Painter, p: &Paint, shown_partner: Option<u64>) {
         if rect.width() < 1.0 || rect.height() < 1.0 {
             continue;
         }
-        let folding = item.hidden || (rect.width() - item.rect.width() as f32).abs() > 0.5 || (rect.height() - item.rect.height() as f32).abs() > 0.5;
+        let folding = item.hidden
+            || (rect.width() - item.rect.width() as f32).abs() > 0.5
+            || (rect.height() - item.rect.height() as f32).abs() > 0.5;
         if folding && item.group.is_some() {
             // In the column the row keeps its height under the shrinking
             // clip, so its title slides away instead of squashing; either
@@ -851,7 +875,11 @@ fn paint_labels(g: &Painter, p: &Paint) {
         if p.layout.vertical {
             ghost_ground(g, rect, px(size::RADIUS_CONTROL), over, 0.0, pal);
             let dx = rect.left + px(GUIDE_X);
-            g.round(RectF::new(dx - dot / 2.0, cy - dot / 2.0, dx + dot / 2.0, cy + dot / 2.0), dot / 2.0, Color::from(tone.fill).with_alpha(opacity));
+            g.round(
+                RectF::new(dx - dot / 2.0, cy - dot / 2.0, dx + dot / 2.0, cy + dot / 2.0),
+                dot / 2.0,
+                Color::from(tone.fill).with_alpha(opacity),
+            );
             let chevron_x = rect.right - px(12.0);
             let mut room = chevron_x - px(10.0);
             if fold > 0.0 {
@@ -876,7 +904,11 @@ fn paint_labels(g: &Painter, p: &Paint) {
                 }
             } else {
                 let (cx, _) = chip.center();
-                g.round(RectF::new(cx - dot / 2.0, cy - dot / 2.0, cx + dot / 2.0, cy + dot / 2.0), dot / 2.0, Color::from(tone.fill).with_alpha(opacity));
+                g.round(
+                    RectF::new(cx - dot / 2.0, cy - dot / 2.0, cx + dot / 2.0, cy + dot / 2.0),
+                    dot / 2.0,
+                    Color::from(tone.fill).with_alpha(opacity),
+                );
             }
         }
     }
@@ -968,7 +1000,9 @@ fn paint_controls(g: &Painter, p: &Paint) {
         };
         draw_nav(g, rect, button, ink, p.scale);
     }
-    frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.window_active, p.pressed, |b| p.motion.hover(HoverKey::Window(b)));
+    frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.window_active, p.pressed, |b| {
+        p.motion.hover(HoverKey::Window(b))
+    });
 }
 
 /// Back and forward as Safari draws them (an open chevron), reload as a
@@ -978,8 +1012,12 @@ fn draw_nav(g: &Painter, rect: RectF, button: NavButton, ink: Color, scale: f32)
     let (cx, cy) = rect.center();
     let w = s(1.5);
     match button {
-        NavButton::Back => g.polyline(&[(cx + s(2.5), cy - s(5.5)), (cx - s(3.0), cy), (cx + s(2.5), cy + s(5.5))], w, ink),
-        NavButton::Forward => g.polyline(&[(cx - s(2.5), cy - s(5.5)), (cx + s(3.0), cy), (cx - s(2.5), cy + s(5.5))], w, ink),
+        NavButton::Back => {
+            g.polyline(&[(cx + s(2.5), cy - s(5.5)), (cx - s(3.0), cy), (cx + s(2.5), cy + s(5.5))], w, ink)
+        }
+        NavButton::Forward => {
+            g.polyline(&[(cx - s(2.5), cy - s(5.5)), (cx + s(3.0), cy), (cx - s(2.5), cy + s(5.5))], w, ink)
+        }
         NavButton::Reload => {
             let r = s(5.5);
             let (start, sweep) = (0.35, 5.2);
@@ -1002,7 +1040,7 @@ fn draw_nav(g: &Painter, rect: RectF, button: NavButton, ink: Color, scale: f32)
     }
 }
 
-/// A ghost button's ground (HKUI's ghost variant): nothing at rest, the
+/// A ghost button's ground (the design system's ghost variant): nothing at rest, the
 /// hover grey under the pointer, a step deeper while a press is answered.
 fn ghost_ground(g: &Painter, rect: RectF, radius: f32, over: f32, pressed: f32, pal: &Palette) {
     if over > 0.0 || pressed > 0.0 {
@@ -1322,8 +1360,7 @@ impl Motion {
         self.indicator_drawn = self.indicator.map(|to| self.indicator_rect(to));
 
         if loading && !self.reduced {
-            self.spin =
-                (self.spin + dt.min(0.1) * std::f32::consts::TAU / motion::SPIN_TURN_S) % std::f32::consts::TAU;
+            self.spin = (self.spin + dt.min(0.1) * std::f32::consts::TAU / motion::SPIN_TURN_S) % std::f32::consts::TAU;
         }
         let moving = self.hovers.moving(now)
             || self.presses.moving(now)
@@ -1417,4 +1454,3 @@ impl Motion {
         self.spin
     }
 }
-
