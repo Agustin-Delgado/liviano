@@ -222,6 +222,13 @@ pub mod specs {
     /// A popover or a combobox list opening and closing (100 ms, fade and 0.98).
     pub const POPOVER_IN: Spec = Spec::new(100, EASE);
     pub const POPOVER_OUT: Spec = Spec::new(100, EASE);
+    /// The field arriving as a macOS panel does (Spotlight): it grows from
+    /// `FIELD_FROM_SCALE` on the spring, most of the way in the first
+    /// 100 ms and then settling, while its opacity is there sooner.
+    pub const FIELD_GROW: Spec = Spec::new(320, SPRING);
+    pub const FIELD_FADE_IN: Spec = Spec::new(140, EASE_OUT);
+    /// The field leaving: it shrinks and fades together, quicker than it came.
+    pub const FIELD_OUT: Spec = Spec::new(150, EASE);
     /// A menu: 120 ms in, 100 ms out.
     pub const MENU_IN: Spec = Spec::new(120, EASE);
     pub const MENU_OUT: Spec = Spec::new(100, EASE);
@@ -244,8 +251,10 @@ pub mod specs {
     pub const SHIFT: Spec = Spec::new(160, OUT_STRONG);
     /// A box changing its size (morph).
     pub const MORPH: Spec = Spec::new(200, OUT_STRONG);
-    /// A collapsible's height.
-    pub const COLLAPSE: Spec = Spec::new(200, EASE_OUT);
+    /// A tab group folding or unfolding: the morph's curve, which covers
+    /// most of the way in the first frames (a press answered at once) and
+    /// settles softly, a little longer so the rows' fade reads.
+    pub const COLLAPSE: Spec = Spec::new(220, OUT_STRONG);
     /// The rail sliding in from its edge (the app's drawer).
     pub const RAIL: Spec = Spec::new(250, MOVE);
     /// A check box filling in.
@@ -258,6 +267,8 @@ pub const TOAST_RISE: f32 = 6.0;
 /// hangs from: celagem's popovers grow 2 % from that edge, about this much
 /// on the field's height.
 pub const POPOVER_SLIDE: f32 = 4.0;
+/// The size the field grows from and shrinks to (macOS panels: about 0.96).
+pub const FIELD_FROM_SCALE: f32 = 0.96;
 /// Tooltip timing: the pointer rests this long before one opens, it closes
 /// this long after the pointer leaves, and within the skip window after one
 /// closed the next opens at once.
@@ -455,7 +466,37 @@ struct Clock {
     entries: Vec<Entry>,
     timer: usize,
     timer_ms: u32,
+    /// The system timer is at 1 ms while something moves (see `fine_timer`).
+    fine: bool,
     stats: Stats,
+}
+
+/// While something moves, Windows' timer runs at 1 ms instead of its usual
+/// 15.6: a 15 ms `SetTimer` otherwise fires on the 15.6 ms tick or, when it
+/// just misses one, on the next at 31.2, and measured frames came 20 ms
+/// apart on average with every other one doubled, which reads as a stutter.
+/// Since Windows 10 2004 the resolution is the process's own, and it goes
+/// back the moment the clock stops, so a still window costs nothing.
+/// winmm is loaded the first time something moves, never at startup.
+fn fine_timer(on: bool) {
+    type Period = unsafe extern "system" fn(u32) -> u32;
+    thread_local! {
+        static WINMM: Option<(crate::system_dll::Library, Period, Period)> = {
+            let library = crate::system_dll::Library::load(windows::core::w!("winmm.dll"));
+            library.and_then(|l| unsafe {
+                let begin = l.function::<Period>(c"timeBeginPeriod")?;
+                let end = l.function::<Period>(c"timeEndPeriod")?;
+                Some((l, begin, end))
+            })
+        };
+    }
+    WINMM.with(|w| {
+        if let Some((_, begin, end)) = w {
+            unsafe {
+                if on { begin(1) } else { end(1) };
+            }
+        }
+    });
 }
 
 /// What the clock has done, for the script control.
@@ -470,6 +511,45 @@ pub struct Stats {
     /// Frames reported and their summed time, for the mean.
     pub frames: u64,
     pub total_frame_us: u64,
+    /// Time between one frame of a moving window and its next (what the
+    /// eye sees as smooth or not): the longest, and the sum and count for
+    /// the mean. Gaps past `GAP_RESET` are the start of another motion.
+    pub worst_gap_us: u64,
+    pub gaps: u64,
+    pub total_gap_us: u64,
+    /// The longest gap of the last motion that came to rest.
+    pub last_motion_worst_gap_us: u64,
+    motion_worst_gap_us: u64,
+    last_shown: Option<Instant>,
+}
+
+/// A pause this long between two frames is two motions, not one stutter.
+const GAP_RESET: Duration = Duration::from_millis(120);
+
+/// A moving window put a frame on screen: the gap since its previous one
+/// is counted.
+pub fn frame_shown(now: Instant) {
+    CLOCK.with(|c| {
+        let mut c = c.borrow_mut();
+        let s = &mut c.stats;
+        if let Some(gap) = s.last_shown.map(|l| now.saturating_duration_since(l)).filter(|g| *g < GAP_RESET) {
+            let us = gap.as_micros() as u64;
+            s.worst_gap_us = s.worst_gap_us.max(us);
+            s.motion_worst_gap_us = s.motion_worst_gap_us.max(us);
+            s.gaps += 1;
+            s.total_gap_us += us;
+        }
+        s.last_shown = Some(now);
+    });
+}
+
+/// A motion ended: the next frame starts a new count of gaps.
+pub fn motion_rested() {
+    CLOCK.with(|c| {
+        let s = &mut c.borrow_mut().stats;
+        s.last_shown = None;
+        s.last_motion_worst_gap_us = std::mem::take(&mut s.motion_worst_gap_us);
+    });
 }
 
 thread_local! {
@@ -519,6 +599,10 @@ fn arm(c: &mut Clock) {
             c.timer = 0;
             c.timer_ms = 0;
         }
+        if c.fine {
+            fine_timer(false);
+            c.fine = false;
+        }
         c.stats.running = false;
         return;
     }
@@ -527,6 +611,13 @@ fn arm(c: &mut Clock) {
     let soonest = c.entries.iter().map(|e| e.due.saturating_duration_since(now)).min().unwrap_or_default();
     let ms = (soonest.as_millis() as u32).max(FRAME_MS);
     let ms = if ms <= FRAME_MS + 2 { FRAME_MS } else { ms };
+    // Only a frame-rate request needs the fine timer; the loading ring's
+    // slow ticks are fine on the system's own.
+    let fine = ms == FRAME_MS;
+    if fine != c.fine {
+        fine_timer(fine);
+        c.fine = fine;
+    }
     if c.timer == 0 || c.timer_ms != ms {
         c.timer = unsafe { SetTimer(None, c.timer, ms, Some(tick)) };
         c.timer_ms = ms;

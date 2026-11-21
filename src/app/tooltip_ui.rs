@@ -16,7 +16,7 @@ use super::{App, with_app};
 use crate::{
     anim::{TOOLTIP_CLOSE_MS, TOOLTIP_DELAY_MS, TOOLTIP_SKIP_MS},
     shortcuts::Command,
-    tabbar::{Hit, Rect},
+    tabbar::{Hit, NavButton, Rect},
     tooltip::Tooltip,
 };
 
@@ -72,6 +72,9 @@ impl App {
             Hit::NewTab if !self.layout.vertical => Some(with_chord("Nueva pestaña", Command::NewTab)),
             Hit::Extensions => Some("Extensiones".to_string()),
             Hit::Group(group) => self.group_tip(group),
+            Hit::Nav(NavButton::Back) => Some(with_chord("Atrás", Command::Back)),
+            Hit::Nav(NavButton::Forward) => Some(with_chord("Adelante", Command::Forward)),
+            Hit::Nav(NavButton::Reload) => Some(with_chord("Recargar", Command::Reload)),
             _ => None,
         }
     }
@@ -82,6 +85,7 @@ impl App {
             Hit::NewTab => Some(self.layout.new_tab),
             Hit::Extensions => Some(self.layout.extensions),
             Hit::Group(group) => self.group_tip_anchor(group),
+            Hit::Nav(button) => Some(self.nav_rect(button)),
             _ => None,
         }
     }
@@ -179,6 +183,10 @@ pub(super) fn anim_state() -> serde_json::Value {
         "ticks": stats.ticks,
         "worst_frame_us": stats.worst_frame_us,
         "frames_over_16ms": stats.frames_over_16ms,
+        "worst_gap_us": stats.worst_gap_us,
+        "gaps": stats.gaps,
+        "total_gap_us": stats.total_gap_us,
+        "last_motion_worst_gap_us": stats.last_motion_worst_gap_us,
         "frames": stats.frames,
         "total_frame_us": stats.total_frame_us,
         "fading": crate::fade::snapshot().len(),

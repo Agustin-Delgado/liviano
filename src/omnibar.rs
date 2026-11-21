@@ -16,15 +16,26 @@
 //! pixels, so the panel is two windows:
 //!
 //! - the **backdrop**, per-pixel alpha (`UpdateLayeredWindow`), drawn once
-//!   per size: the antialiased shape, its 1 px ring and `shadow-pop`. It
-//!   never takes the pointer, and its bitmap is let go once handed over.
+//!   per size: the antialiased shape, its 1 px ring and a layered shadow
+//!   (contact, key and ambient, as a macOS panel floats). It never takes
+//!   the pointer, and its bitmap is let go once handed over.
 //! - the **popup** over it, holding the edit and the list, clipped by a
 //!   window region to the shape pulled in by a pixel. The region's steps
 //!   fall where the backdrop is already the same solid ground, so the edge
 //!   that shows is the backdrop's smooth one; the children paint as in any
 //!   window, which they would not inside an `UpdateLayeredWindow` one.
 //!
-//! The popup fades as before (`fade`) and the backdrop follows each step.
+//! Coming and going it scales, which a window with a native edit in it
+//! can't. So for those few hundred ms the popup stands invisible (opacity
+//! 0, still holding the keyboard) and the backdrop draws the whole panel:
+//! a picture of it at rest — the backdrop's pixels with the popup's own
+//! painting (`WM_PRINT`) laid inside the region — resampled each frame at
+//! the moment's scale and opacity. Its last frame is that picture as it
+//! is, so handing back to the real windows changes no pixel. The picture
+//! and the frame's bitmap go when the motion ends.
+//!
+//! The placeholder is drawn here, not by the edit's cue banner: that one
+//! takes the system's grey, too faint on the dark ground.
 //!
 //! Where it floats is a setting (`FieldPosition`): under the top of the
 //! page, in the middle as a command palette, or on the bottom edge with
@@ -37,19 +48,19 @@ use windows::{
         Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM},
         Graphics::Gdi::{
             AC_SRC_ALPHA, AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BeginPaint, BitBlt, ClientToScreen,
-            CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, EndPaint,
-            ExtCreateRegion, GetDC, GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RDH_RECTANGLES,
-            RGNDATA, RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetTextColor, SetWindowRgn, TEXTMETRICW,
+            CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX,
+            DT_SINGLELINE, DT_TOP, DeleteDC, DeleteObject, DrawTextW, EndPaint, ExtCreateRegion, FillRect, GetDC,
+            GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT, RDH_RECTANGLES, RGNDATA,
+            RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetBkMode, SetTextColor, SetWindowRgn,
+            TEXTMETRICW, TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
-            Controls::{
-                DRAWITEMSTRUCT, EM_GETSEL, EM_SETCUEBANNER, EM_SETMARGINS, EM_SETSEL, ODS_SELECTED, SetWindowTheme,
-                WM_MOUSELEAVE,
-            },
+            Controls::{DRAWITEMSTRUCT, EM_GETSEL, EM_SETMARGINS, EM_SETSEL, ODS_SELECTED, SetWindowTheme, WM_MOUSELEAVE},
             Input::KeyboardAndMouse::{
-                GetAsyncKeyState, GetKeyState, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE,
-                VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_RETURN, VK_SHIFT, VK_UP,
+                GetActiveWindow, GetAsyncKeyState, GetKeyState, SetActiveWindow, SetFocus, TME_LEAVE, TRACKMOUSEEVENT,
+                TrackMouseEvent, VK_DELETE, VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_RETURN, VK_SHIFT,
+                VK_UP,
             },
             Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
@@ -59,7 +70,7 @@ use windows::{
 };
 
 use crate::{
-    anim::{self, Levels, specs},
+    anim::{self, Levels, Tween, specs},
     design::{Palette, Rgb, dwm, lift, size},
     fade,
     gfx::{Align, Color, Font, Painter, RectF, Surface},
@@ -120,6 +131,19 @@ thread_local! {
     /// The backdrop and where it stands from the popup's corner (it follows
     /// the popup from `fade`'s steps, which only know the popup).
     static BACKDROP: Cell<Option<(HWND, i32, i32)>> = const { Cell::new(None) };
+    /// The placeholder the edit shows while empty (UTF-16).
+    static CUE: RefCell<Vec<u16>> = const { RefCell::new(Vec::new()) };
+    /// Whether the edit was empty at its last change: the placeholder comes
+    /// and goes with a whole repaint when that flips.
+    static WAS_EMPTY: Cell<bool> = const { Cell::new(true) };
+}
+
+/// The placeholder's ink: `ink-muted`, a step stronger than the
+/// `ink-subtle` celagem gives placeholders, so it reads on the dark ground
+/// too (over 4.5:1 on the field in both themes) and still sits well under
+/// the typed text's `ink`.
+fn placeholder_ink(palette: &Palette) -> Rgb {
+    palette.ink_muted
 }
 
 /// The field's height: the pill's ends are half of it.
@@ -337,20 +361,47 @@ impl Shape {
     }
 }
 
-/// `shadow-pop` (0 12px 32px -8px black/0.18) and its 1 px ring, in px
+/// One layer of the panel's shadow, as a CSS box-shadow: down `y`, `blur`
+/// (two sigmas), `spread` (negative pulls it in) and its opacity, in px
 /// before scaling.
-const SHADOW_Y: f32 = 12.0;
-const SHADOW_BLUR: f32 = 32.0;
-const SHADOW_SPREAD: f32 = 8.0;
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ShadowLayer {
+    y: f32,
+    blur: f32,
+    spread: f32,
+    alpha: f32,
+}
+
+/// The field floats as a macOS panel does (Spotlight): a contact shadow
+/// tight under its edge, where it meets the page; a key one a little lower;
+/// and a wide, soft ambient one that lifts it off any page. The heaviest
+/// is the ambient's `lift::POP_DROP` plus a third: a floating panel, not a
+/// popover hanging from a control.
+const SHADOW: [ShadowLayer; 3] = [
+    ShadowLayer { y: 1.0, blur: 3.0, spread: 0.0, alpha: 0.12 },
+    ShadowLayer { y: 8.0, blur: 24.0, spread: -4.0, alpha: 0.14 },
+    ShadowLayer { y: 28.0, blur: 72.0, spread: -12.0, alpha: lift::POP_DROP * 4.0 / 3.0 },
+];
+
+/// How far past its own edge a layer reaches, in blurs: at 2.5 sigmas the
+/// tail is under a 255th, so cutting it there leaves no line.
+const SHADOW_TAIL: f32 = 1.25;
 
 /// How far the backdrop reaches past the panel on each side for the shadow:
 /// (left, top, right, bottom), device pixels.
 fn shadow_margins(scale: f32) -> (i32, i32, i32, i32) {
-    let reach = (SHADOW_BLUR - SHADOW_SPREAD) * scale;
-    let side = reach.ceil() as i32 + 2;
-    let top = (reach - SHADOW_Y * scale).max(0.0).ceil() as i32 + 2;
-    let bottom = (reach + SHADOW_Y * scale).ceil() as i32 + 2;
-    (side, top, side, bottom)
+    let (mut side, mut top, mut bottom) = (0.0f32, 0.0f32, 0.0f32);
+    for drop in SHADOW {
+        let reach = (drop.blur * SHADOW_TAIL + drop.spread) * scale;
+        side = side.max(reach);
+        top = top.max(reach - drop.y * scale);
+        bottom = bottom.max(reach + drop.y * scale);
+    }
+    // The ring stands a pixel outside; the field also slides a few px
+    // toward its edge while it comes and goes.
+    let slide = anim::POPOVER_SLIDE * scale;
+    let px = |v: f32| v.max(0.0).ceil() as i32 + 2;
+    (px(side), px(top.max(slide)), px(side), px(bottom.max(slide)))
 }
 
 /// The colours the backdrop is drawn with.
@@ -359,18 +410,18 @@ struct BackdropLook {
     fill: Rgb,
     /// The ring's colour and opacity.
     ring: (Rgb, f32),
-    /// The shadow's opacity at its heart.
+    /// How much of `SHADOW`'s opacity it draws (1 on the light shell).
     shadow: f32,
 }
 
 impl BackdropLook {
     fn of(palette: &Palette) -> Self {
         // A black ring and shadow vanish on a dark page: the ring turns
-        // light and the shadow doubles, as the cards do.
+        // light and a step stronger, and the shadow deepens.
         let (ring, shadow) = if palette.dark {
-            ((Rgb(255, 255, 255), lift::POP_RING), lift::POP_DROP * 2.0)
+            ((Rgb(255, 255, 255), lift::POP_RING * 1.5), 1.6)
         } else {
-            ((Rgb(0, 0, 0), lift::POP_RING), lift::POP_DROP)
+            ((Rgb(0, 0, 0), lift::POP_RING), 1.0)
         };
         Self { fill: palette.field, ring, shadow }
     }
@@ -390,9 +441,12 @@ fn erfc(x: f32) -> f32 {
 /// an antialiased edge. Inside, past the edge, there is nothing to work
 /// out: the ground is solid there.
 fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: BackdropLook, scale: f32) {
-    let shadow = shape.shifted(SHADOW_Y * scale, -SHADOW_SPREAD * scale);
-    // CSS blur radius = 2 sigma.
-    let k = 1.0 / (SHADOW_BLUR * scale / 2.0 * std::f32::consts::SQRT_2);
+    // Each layer: its shape, 1 / (sigma √2) for erfc (CSS blur = 2 sigma)
+    // and its opacity at heart.
+    let layers = SHADOW.map(|drop| {
+        let k = 1.0 / (drop.blur * scale / 2.0 * std::f32::consts::SQRT_2);
+        (shape.shifted(drop.y * scale, drop.spread * scale), k, (drop.alpha * look.shadow).min(1.0))
+    });
     let pack = |a: f32, r: f32, g: f32, b: f32| -> u32 {
         let c = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
         c(a) << 24 | c(r) << 16 | c(g) << 8 | c(b)
@@ -410,9 +464,10 @@ fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: Backdro
         }
         let cover = (0.5 - d).clamp(0.0, 1.0);
         let ring = ((1.5 - d).clamp(0.0, 1.0) - cover) * look.ring.1;
-        let drop = look.shadow * 0.5 * erfc(shadow.distance(x, y) * k);
+        // The layers stack as shadows do, each over the others.
+        let clear: f32 = layers.iter().map(|(s, k, alpha)| 1.0 - alpha * 0.5 * erfc(s.distance(x, y) * k)).product();
         // Shadow, then ring over it, then the ground over both.
-        let mut a = drop;
+        let mut a = 1.0 - clear;
         let (mut r, mut g, mut b) = (0.0, 0.0, 0.0);
         a = ring + a * (1.0 - ring);
         r = rr * ring + r * (1.0 - ring);
@@ -488,9 +543,157 @@ fn blend(alpha: u8) -> BLENDFUNCTION {
     BLENDFUNCTION { BlendOp: AC_SRC_OVER as u8, BlendFlags: 0, SourceConstantAlpha: alpha, AlphaFormat: AC_SRC_ALPHA as u8 }
 }
 
-/// Keeps the backdrop under the popup: same opacity, same place (a slide
-/// included), shown and hidden with it. `fade` calls it on every step.
+// ---------- coming and going ----------
+
+/// The field's scale and how far it stands off its place (px, down) at
+/// `size`: 0 is where it comes from and goes to, 1 at rest. A spring may
+/// carry `size` a little past 1.
+fn pose(size: f32, slide: f32) -> (f32, f32) {
+    let from = anim::FIELD_FROM_SCALE;
+    (from + (1.0 - from) * size, slide * (1.0 - size))
+}
+
+/// The point the field grows from, in the picture's pixels, for a panel
+/// whose box there is `panel`: the middle of the edge it hangs from on top
+/// and at the bottom, its centre in the middle.
+fn pivot(position: FieldPosition, panel: RECT) -> (f32, f32) {
+    let cx = (panel.left + panel.right) as f32 / 2.0;
+    match position {
+        FieldPosition::Top => (cx, panel.top as f32),
+        FieldPosition::Middle => (cx, (panel.top + panel.bottom) as f32 / 2.0),
+        FieldPosition::Bottom => (cx, panel.bottom as f32),
+    }
+}
+
+/// Draws `src` (premultiplied BGRA, `width` x `height`) into `dst` (the
+/// same size) scaled by `scale` about `pivot`, moved `dy` px down and at
+/// `opacity`: bilinear, transparent past the source's edges. At rest
+/// (scale 1, no offset, opacity 1) it is a plain copy, pixel for pixel.
+fn resample(src: &[u32], width: usize, height: usize, dst: &mut [u32], pivot: (f32, f32), scale: f32, dy: f32, opacity: f32) {
+    let opacity = opacity.clamp(0.0, 1.0);
+    if scale == 1.0 && dy == 0.0 && opacity >= 1.0 {
+        dst.copy_from_slice(src);
+        return;
+    }
+    let inv = 1.0 / scale.max(0.01);
+    // Where each output column and row reads from: the source pixel to its
+    // upper left and how far toward the next one (0..=256).
+    let along = |count: usize, centre: f32, offset: f32| -> Vec<(isize, u32)> {
+        (0..count)
+            .map(|i| {
+                let at = centre + (i as f32 + 0.5 - offset - centre) * inv - 0.5;
+                let base = at.floor();
+                (base as isize, ((at - base) * 256.0).round() as u32)
+            })
+            .collect()
+    };
+    let columns = along(width, pivot.0, 0.0);
+    let rows = along(height, pivot.1, dy);
+    let fetch = |x: isize, y: isize| -> u32 {
+        if x < 0 || y < 0 || x >= width as isize || y >= height as isize { 0 } else { src[y as usize * width + x as usize] }
+    };
+    let fade = (opacity * 256.0).round() as u32;
+    for (y, &(sy, fy)) in rows.iter().enumerate() {
+        let out = &mut dst[y * width..(y + 1) * width];
+        if sy < -1 || sy >= height as isize {
+            out.fill(0);
+            continue;
+        }
+        for (x, &(sx, fx)) in columns.iter().enumerate() {
+            let (p00, p10, p01, p11) = (fetch(sx, sy), fetch(sx + 1, sy), fetch(sx, sy + 1), fetch(sx + 1, sy + 1));
+            if p00 | p10 | p01 | p11 == 0 {
+                out[x] = 0;
+                continue;
+            }
+            // Weights out of 65536.
+            let (w00, w10, w01, w11) = ((256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy);
+            let mut pixel = 0u32;
+            for shift in [0u32, 8, 16, 24] {
+                let c = |p: u32| (p >> shift) & 0xFF;
+                let sum = c(p00) * w00 + c(p10) * w10 + c(p01) * w01 + c(p11) * w11;
+                let value = (((sum + 32768) >> 16) * fade + 128) >> 8;
+                pixel |= value.min(255) << shift;
+            }
+            out[x] = pixel;
+        }
+    }
+}
+
+/// The panel coming in or going out: the backdrop draws all of it, from a
+/// picture of it at rest, while the popup stands invisible over it.
+struct Motion {
+    /// Opacity, 0..1.
+    presence: Tween<f32>,
+    /// 0 where it comes from and goes to, 1 at rest (see `pose`).
+    size: Tween<f32>,
+    closing: bool,
+    /// The picture is out of date (new rows, new text, a new place): taken
+    /// again before the next frame.
+    stale: bool,
+    still: Option<Still>,
+    /// The bitmap each frame is drawn into, kept for the motion's length.
+    frame: Option<Canvas>,
+}
+
+/// The panel at rest as the screen shows it: the backdrop with the popup's
+/// painting inside its region, premultiplied.
+struct Still {
+    pixels: Vec<u32>,
+    width: i32,
+    height: i32,
+    /// Where its corner goes on screen.
+    at: POINT,
+    pivot: (f32, f32),
+    slide: f32,
+}
+
+thread_local! {
+    static MOTION: RefCell<Option<Motion>> = const { RefCell::new(None) };
+}
+
+fn moving() -> bool {
+    MOTION.with(|m| m.borrow().is_some())
+}
+
+/// Something the picture shows changed: it is taken again before the next frame.
+fn motion_stale() {
+    MOTION.with(|m| {
+        if let Some(m) = m.borrow_mut().as_mut() {
+            m.stale = true;
+        }
+    });
+}
+
+fn set_opacity(hwnd: HWND, alpha: u8) {
+    unsafe {
+        let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
+    }
+}
+
+/// Click-through while it goes, so a click lands on what is under it.
+fn set_click_through(hwnd: HWND, on: bool) {
+    unsafe {
+        let ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        let ex = if on { ex | WS_EX_TRANSPARENT.0 as i32 } else { ex & !(WS_EX_TRANSPARENT.0 as i32) };
+        SetWindowLongW(hwnd, GWL_EXSTYLE, ex);
+    }
+}
+
+/// One frame of the motion, from the clock.
+fn motion_step() -> bool {
+    let Some(omnibar) = INSTANCE.with(|i| i.get()) else {
+        MOTION.with(|m| m.borrow_mut().take());
+        return false;
+    };
+    unsafe { (*omnibar).advance_motion() }
+}
+
+/// Keeps the backdrop under the popup at rest: same opacity, same place,
+/// shown and hidden with it.
 fn mirror(popup: HWND) {
+    if moving() {
+        return;
+    }
     let Some((backdrop, dx, dy)) = BACKDROP.with(|b| b.get()) else { return };
     unsafe {
         if !IsWindowVisible(popup).as_bool() {
@@ -585,7 +788,16 @@ unsafe extern "system" fn backdrop_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
         WM_PAINT | WM_PRINT | WM_PRINTCLIENT => {
             let mut ps = PAINTSTRUCT::default();
             let hdc = if msg == WM_PAINT { unsafe { BeginPaint(hwnd, &mut ps) } } else { HDC(wparam.0 as _) };
-            if let Some(p) = PAINTED.with(|p| p.get()) {
+            // Mid-motion the picture is the frame on screen.
+            let framed = MOTION.with(|m| {
+                let m = m.borrow();
+                let Some((frame, still)) = m.as_ref().and_then(|m| m.frame.as_ref().zip(m.still.as_ref())) else { return false };
+                unsafe {
+                    let _ = BitBlt(hdc, 0, 0, still.width, still.height, Some(frame.dc), 0, 0, SRCCOPY);
+                }
+                true
+            });
+            if let Some(p) = PAINTED.with(|p| p.get()).filter(|_| !framed) {
                 if let Some(canvas) = Canvas::new(p.size.0, p.size.1) {
                     render_backdrop(canvas.pixels(), p.size.0 as usize, p.shape, p.look, p.scale);
                     unsafe {
@@ -725,9 +937,9 @@ impl Omnibar {
             // neither corners, nor border, nor shadow of its own.
             dwm::set(popup, dwm::CORNERS, dwm::DO_NOT_ROUND);
             dwm::set(popup, dwm::BORDER_COLOR, dwm::COLOR_NONE);
-            // Layered for good, so it can fade in and out as a popover.
+            // Layered for good: it stands invisible while the backdrop
+            // draws it coming and going.
             fade::prepare(popup, 255);
-            fade::follow(popup, mirror);
             BACKDROP.with(|b| b.set(Some((backdrop, 0, 0))));
             Ok(Self {
                 popup,
@@ -797,7 +1009,9 @@ impl Omnibar {
             let _ = InvalidateRect(Some(self.popup), None, true);
             let _ = InvalidateRect(Some(self.list), None, true);
         }
-        if let Some(layout) = self.layout.get() {
+        if moving() {
+            motion_stale();
+        } else if let Some(layout) = self.layout.get() {
             self.draw_backdrop(&layout);
         }
     }
@@ -811,20 +1025,44 @@ impl Omnibar {
 
     /// Opens in `frame` at `position` (see `position_for`).
     pub fn open(&mut self, frame: Frame, position: FieldPosition, cue: &str, text: &str, select_all: bool) {
+        CUE.with(|c| *c.borrow_mut() = cue.encode_utf16().collect());
         unsafe {
-            let cue = HSTRING::from(cue);
-            SendMessageW(self.edit, EM_SETCUEBANNER, Some(WPARAM(1)), Some(LPARAM(cue.as_ptr() as isize)));
             let _ = SetWindowTextW(self.edit, &HSTRING::from(text));
             let len = text.encode_utf16().count() as isize;
             let start = if select_all { 0 } else { len };
             SendMessageW(self.edit, EM_SETSEL, Some(WPARAM(start as usize)), Some(LPARAM(len)));
+            WAS_EMPTY.with(|e| e.set(text.is_empty()));
+            // A new placeholder on an edit that was already empty.
+            let _ = InvalidateRect(Some(self.edit), None, true);
         }
         self.position = position;
         self.set_rows(&[]);
+        // Already on screen (one mode handing over to another) it stays
+        // put; coming back while it leaves, it turns around from where it is.
+        let shown = unsafe { IsWindowVisible(self.popup).as_bool() };
+        let leaving = MOTION.with(|m| m.borrow().as_ref().is_some_and(|m| m.closing));
+        let animate = !anim::reduced() && (!shown || leaving);
+        if leaving && !animate {
+            // Animations turned off mid-exit: back at once.
+            MOTION.with(|m| m.borrow_mut().take());
+            self.drawn.set(None);
+        }
+        if animate {
+            // Before placing, so the place itself is drawn by the motion.
+            self.start_motion(false);
+        }
         self.place(frame);
-        // A popover opening: 100 ms of fade, coming a few px from the edge
-        // it hangs from (the list grows with what it finds).
-        fade::fade_in(self.popup, specs::POPOVER_IN, 255, slide(position, self.scale));
+        if animate {
+            // Invisible but there: it takes the keyboard at once, and what
+            // is typed meanwhile shows in the next frame's picture.
+            set_click_through(self.popup, false);
+            self.advance_motion();
+            set_opacity(self.popup, 0);
+            anim::drive(motion_step);
+        } else if !moving() {
+            set_click_through(self.popup, false);
+            set_opacity(self.popup, 255);
+        }
         unsafe {
             if owns_foreground() {
                 let _ = ShowWindow(self.popup, SW_SHOW);
@@ -835,6 +1073,9 @@ impl Omnibar {
                 // so what is typed there never lands here. A click on the
                 // window gives the field the focus as usual.
                 let _ = ShowWindow(self.popup, SW_SHOWNOACTIVATE);
+            }
+            if animate {
+                let _ = SetWindowPos(self.backdrop, Some(self.popup), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
             }
         }
         mirror(self.popup);
@@ -890,20 +1131,23 @@ impl Omnibar {
             }
             let _ = InvalidateRect(Some(self.popup), None, false);
         }
-        // A fade sliding in goes on from the new place.
-        fade::rest_at(self.popup, layout.panel.left, layout.panel.top);
+        if moving() {
+            // The motion draws the backdrop: its picture is taken again.
+            motion_stale();
+            return;
+        }
         self.draw_backdrop(&layout);
         mirror(self.popup);
     }
 
-    /// Draws the backdrop for `layout` when its size, corners, colours or
-    /// the part in sight changed; otherwise `mirror` only moves it.
-    fn draw_backdrop(&self, layout: &Layout) {
-        let Some((palette, _)) = LOOK.with(|l| l.get()) else { return };
+    /// The part of the backdrop in sight for `layout` (relative to the
+    /// panel), the shape inside it and its colours. The shadow ends with the
+    /// owner's window, as a popover's ends with the page: nothing is drawn
+    /// over the desktop.
+    fn backdrop_frame(&self, layout: &Layout) -> Option<(RECT, Shape, BackdropLook)> {
+        let (palette, _) = LOOK.with(|l| l.get())?;
         let (ml, mt, mr, mb) = shadow_margins(self.scale);
         let (width, height) = (layout.width(), layout.height());
-        // The shadow ends with the owner's window, as a popover's ends with
-        // the page: nothing is drawn over the desktop.
         let mut clip = RECT { left: -ml, top: -mt, right: width + mr, bottom: height + mb };
         unsafe {
             let mut client = RECT::default();
@@ -918,13 +1162,8 @@ impl Omnibar {
             }
         }
         if clip.right <= clip.left || clip.bottom <= clip.top {
-            return;
+            return None;
         }
-        let drawn = Drawn { size: (width, height), radii: layout.radii, look: BackdropLook::of(&palette), clip };
-        if self.drawn.get() == Some(drawn) {
-            return;
-        }
-        let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
         let shape = Shape {
             left: -clip.left as f32,
             top: -clip.top as f32,
@@ -932,9 +1171,21 @@ impl Omnibar {
             height: height as f32,
             radii: layout.radii,
         };
-        let painted = Painted { size: (bw, bh), shape, look: drawn.look, scale: self.scale };
+        Some((clip, shape, BackdropLook::of(&palette)))
+    }
+
+    /// Draws the backdrop for `layout` when its size, corners, colours or
+    /// the part in sight changed; otherwise `mirror` only moves it.
+    fn draw_backdrop(&self, layout: &Layout) {
+        let Some((clip, shape, look)) = self.backdrop_frame(layout) else { return };
+        let drawn = Drawn { size: (layout.width(), layout.height()), radii: layout.radii, look, clip };
+        if self.drawn.get() == Some(drawn) {
+            return;
+        }
+        let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
+        let painted = Painted { size: (bw, bh), shape, look, scale: self.scale };
         let Some(canvas) = Canvas::new(bw, bh) else { return };
-        render_backdrop(canvas.pixels(), bw as usize, shape, painted.look, painted.scale);
+        render_backdrop(canvas.pixels(), bw as usize, shape, look, self.scale);
         let at = POINT { x: layout.panel.left + clip.left, y: layout.panel.top + clip.top };
         let size = SIZE { cx: bw, cy: bh };
         let zero = POINT::default();
@@ -960,8 +1211,220 @@ impl Omnibar {
         self.drawn.set(Some(drawn));
     }
 
+    // ---------- coming and going ----------
+
+    /// The panel at rest as the screen shows it: the backdrop, and inside
+    /// the popup's region what the popup paints, its ground and children
+    /// asked to print themselves into bitmaps of their own.
+    fn take_still(&self) -> Option<Still> {
+        let layout = self.layout.get()?;
+        let (palette, scale) = LOOK.with(|l| l.get())?;
+        let (clip, shape, look) = self.backdrop_frame(&layout)?;
+        let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
+        let mut pixels = vec![0u32; (bw * bh) as usize];
+        render_backdrop(&mut pixels, bw as usize, shape, look, self.scale);
+        let (w, h) = (layout.width(), layout.height());
+        let content = Canvas::new(w, h)?;
+        let rect = RECT { left: 0, top: 0, right: w, bottom: h };
+        let m = self.metrics;
+        SURFACES.with(|s| s.borrow_mut().0.paint(content.dc, rect, |g| paint_panel(g, rect, &layout, m, &palette, scale)));
+        let mut origin = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.popup, &mut origin);
+        }
+        let children = [Some(self.edit), (layout.shown > 0).then_some(self.list)];
+        for child in children.into_iter().flatten() {
+            let mut r = RECT::default();
+            unsafe {
+                let _ = GetWindowRect(child, &mut r);
+            }
+            let (cw, ch) = (r.right - r.left, r.bottom - r.top);
+            if cw <= 0 || ch <= 0 {
+                continue;
+            }
+            let Some(piece) = Canvas::new(cw, ch) else { continue };
+            unsafe {
+                // PRF_CHECKVISIBLE left out: the popup may not be shown yet.
+                let flags = PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND | PRF_CHILDREN;
+                SendMessageW(child, WM_PRINT, Some(WPARAM(piece.dc.0 as usize)), Some(LPARAM(flags as isize)));
+            }
+            let (dx, dy) = (r.left - origin.left, r.top - origin.top);
+            let (src, dst) = (piece.pixels(), content.pixels());
+            for y in 0..ch {
+                let ty = y + dy;
+                if !(0..h).contains(&ty) {
+                    continue;
+                }
+                for x in 0..cw {
+                    let tx = x + dx;
+                    if (0..w).contains(&tx) {
+                        dst[(ty * w + tx) as usize] = src[(y * cw + x) as usize];
+                    }
+                }
+            }
+        }
+        // GDI leaves the alpha byte at 0: inside the region it is all opaque.
+        let (ox, oy) = (-clip.left, -clip.top);
+        let painted = content.pixels();
+        for (top, bottom, left, right) in region_bands(w, h, layout.radii) {
+            for y in top..bottom {
+                let ty = y + oy;
+                if !(0..bh).contains(&ty) {
+                    continue;
+                }
+                for x in left..right {
+                    let tx = x + ox;
+                    if (0..bw).contains(&tx) {
+                        pixels[(ty * bw + tx) as usize] = 0xFF00_0000 | (painted[(y * w + x) as usize] & 0x00FF_FFFF);
+                    }
+                }
+            }
+        }
+        let panel = RECT { left: ox, top: oy, right: ox + w, bottom: oy + h };
+        Some(Still {
+            pixels,
+            width: bw,
+            height: bh,
+            at: POINT { x: layout.panel.left + clip.left, y: layout.panel.top + clip.top },
+            pivot: pivot(self.position, panel),
+            slide: slide(self.position, self.scale) as f32,
+        })
+    }
+
+    /// Sets the motion heading in (or out) from wherever it is now.
+    fn start_motion(&self, closing: bool) {
+        let now = std::time::Instant::now();
+        MOTION.with(|m| {
+            let mut m = m.borrow_mut();
+            let (presence, size) = match m.as_ref() {
+                Some(was) => (was.presence.value(now), was.size.value(now)),
+                None if closing => (1.0, 1.0),
+                None => (0.0, 0.0),
+            };
+            let (target, fade, grow) =
+                if closing { (0.0, specs::FIELD_OUT, specs::FIELD_OUT) } else { (1.0, specs::FIELD_FADE_IN, specs::FIELD_GROW) };
+            let presence = Tween::new(presence, target, now, fade);
+            let size = Tween::new(size, target, now, grow);
+            match m.as_mut() {
+                Some(was) => {
+                    was.presence = presence;
+                    was.size = size;
+                    was.closing = closing;
+                    was.stale = true;
+                }
+                None => *m = Some(Motion { presence, size, closing, stale: true, still: None, frame: None }),
+            }
+        });
+    }
+
+    /// Draws the motion's frame for now; false once it is over (and handed
+    /// back to the windows at rest).
+    fn advance_motion(&self) -> bool {
+        // Out of its cell while it works: printing the children calls back
+        // into the popup.
+        let Some(mut motion) = MOTION.with(|m| m.borrow_mut().take()) else { return false };
+        let now = std::time::Instant::now();
+        if motion.stale || motion.still.is_none() {
+            motion.stale = false;
+            if let Some(still) = self.take_still() {
+                let size = (still.width, still.height);
+                if motion.still.as_ref().is_none_or(|s| (s.width, s.height) != size) || motion.frame.is_none() {
+                    motion.frame = Canvas::new(size.0, size.1);
+                }
+                motion.still = Some(still);
+            }
+        }
+        if !motion.presence.moving(now) && !motion.size.moving(now) {
+            self.finish_motion(motion);
+            return false;
+        }
+        if let (Some(still), Some(frame)) = (motion.still.as_ref(), motion.frame.as_ref()) {
+            let (scale, dy) = pose(motion.size.value(now), still.slide);
+            let opacity = motion.presence.value(now);
+            let (w, h) = (still.width as usize, still.height as usize);
+            resample(&still.pixels, w, h, frame.pixels(), still.pivot, scale, dy, opacity);
+            let size = SIZE { cx: still.width, cy: still.height };
+            let zero = POINT::default();
+            unsafe {
+                let _ = UpdateLayeredWindow(
+                    self.backdrop,
+                    None,
+                    Some(&still.at),
+                    Some(&size),
+                    Some(frame.dc),
+                    Some(&zero),
+                    COLORREF(0),
+                    Some(&blend(255)),
+                    ULW_ALPHA,
+                );
+                if !IsWindowVisible(self.backdrop).as_bool() {
+                    let _ = SetWindowPos(
+                        self.backdrop,
+                        Some(self.popup),
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+                    );
+                }
+            }
+        }
+        MOTION.with(|m| *m.borrow_mut() = Some(motion));
+        true
+    }
+
+    /// The motion is over: the real windows take over (or go), and its
+    /// picture and bitmap are let go with it.
+    fn finish_motion(&self, motion: Motion) {
+        let closing = motion.closing;
+        drop(motion);
+        if closing {
+            unsafe {
+                let _ = ShowWindow(self.popup, SW_HIDE);
+                let _ = ShowWindow(self.backdrop, SW_HIDE);
+            }
+            set_click_through(self.popup, false);
+        } else {
+            // The popup first: over the last frame it changes no pixel; then
+            // the backdrop goes back to its own drawing under it.
+            set_opacity(self.popup, 255);
+            self.drawn.set(None);
+            if let Some(layout) = self.layout.get() {
+                self.draw_backdrop(&layout);
+            }
+            mirror(self.popup);
+        }
+    }
+
     pub fn close(&mut self) {
-        fade::fade_out(self.popup, specs::POPOVER_OUT, slide(self.position, self.scale), None);
+        unsafe {
+            if !IsWindowVisible(self.popup).as_bool() {
+                return;
+            }
+            // Hand the keyboard back before it goes, as hiding it would.
+            if GetActiveWindow() == self.popup {
+                let _ = SetActiveWindow(self.owner);
+            }
+        }
+        if anim::reduced() {
+            MOTION.with(|m| m.borrow_mut().take());
+            unsafe {
+                let _ = ShowWindow(self.popup, SW_HIDE);
+                let _ = ShowWindow(self.backdrop, SW_HIDE);
+            }
+            return;
+        }
+        if MOTION.with(|m| m.borrow().as_ref().is_some_and(|m| m.closing)) {
+            return;
+        }
+        self.start_motion(true);
+        // The first frame is the panel as it stands: drawn before the popup
+        // goes invisible, so nothing blinks.
+        self.advance_motion();
+        set_opacity(self.popup, 0);
+        set_click_through(self.popup, true);
+        anim::drive(motion_step);
     }
 
     /// Where a menu that belongs to the field opens: under the field's left
@@ -1060,6 +1523,7 @@ impl Omnibar {
         unsafe {
             SendMessageW(self.list, LB_SETCURSEL, Some(WPARAM(index)), None);
         }
+        motion_stale();
     }
 
     fn move_selection(&self, key_down: bool) {
@@ -1112,9 +1576,46 @@ unsafe extern "system" fn edit_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
         }
         // Swallow the characters of Enter and Esc so the edit doesn't beep.
         WM_CHAR if wparam.0 == 0x0D || wparam.0 == 0x1B => return LRESULT(0),
+        // Empty, the edit draws only its ground: the placeholder is ours.
+        WM_PAINT | WM_PRINTCLIENT if unsafe { GetWindowTextLengthW(hwnd) } == 0 => {
+            let mut ps = PAINTSTRUCT::default();
+            // BeginPaint hides the caret while this draws, EndPaint shows it.
+            let hdc = if msg == WM_PAINT { unsafe { BeginPaint(hwnd, &mut ps) } } else { HDC(wparam.0 as _) };
+            paint_placeholder(hwnd, hdc);
+            if msg == WM_PAINT {
+                unsafe {
+                    let _ = EndPaint(hwnd, &ps);
+                }
+            }
+            return LRESULT(0);
+        }
         _ => {}
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// The empty edit: its ground and the placeholder in the edit's own font,
+/// where its first character would go (no margins: the glass column is the
+/// margin), so typing replaces it without a shift.
+fn paint_placeholder(edit: HWND, hdc: HDC) {
+    let (field, _, _) = BRUSHES.with(|b| b.get());
+    let Some((palette, _)) = LOOK.with(|l| l.get()) else { return };
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetClientRect(edit, &mut rect);
+        if field != 0 {
+            FillRect(hdc, &rect, HBRUSH(field as _));
+        }
+        let font = SendMessageW(edit, WM_GETFONT, None, None).0;
+        let before = (font != 0).then(|| SelectObject(hdc, HFONT(font as _).into()));
+        SetTextColor(hdc, placeholder_ink(&palette).colorref());
+        SetBkMode(hdc, TRANSPARENT);
+        let mut cue = CUE.with(|c| c.borrow().clone());
+        DrawTextW(hdc, &mut cue, &mut rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX | DT_END_ELLIPSIS);
+        if let Some(before) = before {
+            SelectObject(hdc, before);
+        }
+    }
 }
 
 unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -1126,6 +1627,15 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
                 let row = INSTANCE.with(|i| i.get()).and_then(|o| unsafe { (*o).selected_row() });
                 signal(Signal::Submit { row, shift: false });
             } else if id == 1 && code == EN_CHANGE_CODE {
+                let edit = HWND(lparam.0 as _);
+                let empty = unsafe { GetWindowTextLengthW(edit) } == 0;
+                if WAS_EMPTY.with(|e| e.replace(empty)) != empty {
+                    // The placeholder comes or goes: the whole line again.
+                    unsafe {
+                        let _ = InvalidateRect(Some(edit), None, true);
+                    }
+                }
+                motion_stale();
                 signal(Signal::Changed);
             }
             LRESULT(0)

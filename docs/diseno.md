@@ -22,7 +22,9 @@ tokens están en `src/design.rs` y los movimientos en `src/anim.rs`
 | Sombras | `shadow-card`: anillo 1 px negro/0.08 + caída 0 2 6 −2 negro/0.12; halo de foco brand/0.18 | celagem `brand.css` (`--shadow-card`, `--shadow-focus`) |
 | Botón | alto 26 px, esquina field, primario de marca, secundario con contorno | celagem `src/lib/components/button/recipe.ts` |
 | Casilla | esquina 4, borde `line-strong`, hover brand/40, marcada en brand con tilde blanco | celagem `src/lib/components/checkbox/` (receta de HKUI) |
-| Grupos de pestañas | nueve tonos: gris, azul, rojo, amarillo, verde, rosa, violeta, cian y naranja. En claro, la etiqueta lleva el paso `ink` del tono con texto #FCFCFC; en oscuro, el paso `solid` con texto #141414. Texto sobre etiqueta ≥ 4.5:1 y etiqueta sobre la tira ≥ 3:1 (lo comprueba un test). Etiqueta: alto 20, esquina control, texto small (12) medium; línea de 2 px | celagem `brand.css` (`--color-tone-*`) |
+| Grupos de pestañas | nueve tonos: gris, azul, rojo, amarillo, verde, rosa, violeta, cian y naranja; en claro el paso `ink` del tono, en oscuro el `solid` (el relleno, ≥ 3:1 sobre la tira). El nombre se escribe en el color del grupo, llevado hacia la tinta un 20 % (25 % en oscuro), sobre un tinte del tono al 10 % (14 % en oscuro): ≥ 4.5:1 sobre la tira, sobre el tinte y con hover (lo comprueba un test). Arriba: etiqueta de alto 22, esquina control, texto small (12) medium, como el título de una pestaña; sin nombre, un punto de 6 px; línea de 1.5 px. Al costado: fila de 26, punto de 6 px, nombre (o el sitio de la primera pestaña), guía de 1 px y pestañas corridas 12 px | celagem `brand.css` (`--color-tone-*`) |
+| Botones de la ventana | semáforos de macOS: círculos de 12 px en zonas de 20 px, a 8 px del borde. Cerrar #FF5F57, minimizar #FEBC2E, maximizar #28C840, con su glifo al pasar el puntero por cualquiera; grises con la ventana inactiva | macOS (no hay equivalente en celagem) |
+| Atrás, adelante, recargar | botones de 28×28, fondo fantasma con hover; apagados en `subtle` sin hover; trazo de 1.5 px | celagem `button/recipe.ts` (variante `ghost`) |
 
 El tema oscuro es nuestro, porque celagem no tiene. Mantiene los mismos
 pasos y roles, invertidos. El índigo sube a #818CF9 para leerse sobre
@@ -38,7 +40,7 @@ Algunas cosas de Search no chocan con celagem y quedaron igual:
 | Qué se mueve | Duración y curva | Fuente |
 |---|---|---|
 | Hover y press de botones, pestañas y filas | 150 ms, `ease-out` (0, 0, 0.2, 1) | celagem `button/recipe.ts` (`transition-colors duration-150`) |
-| Campo único y su lista (popover) | 100 ms entrada y salida, `ease`; viaja 4 px desde el borde del que cuelga (baja arriba, sube abajo, sólo fundido al medio) | celagem `src/lib/components/popover/motion.ts` (`zoom-in-98` con origen en el lado del disparador) |
+| Campo único y su lista | Entra como un panel de macOS (Spotlight): crece desde 0,96 con el resorte en 320 ms (casi todo en los primeros 100 ms) y el fundido llega en 140 ms, `ease-out`. Sale en 150 ms, `ease`: se encoge a 0,96 y se desvanece. Al medio crece desde su centro; arriba y abajo, desde el borde del que cuelga, con 4 px de viaje | resorte de celagem `toast/styles.css`; `zoom-in-95`/`zoom-out-95` de `dialog/` y `popover/motion.ts` (origen del lado del disparador) |
 | Menú | 120 ms entrada, 100 ms salida, `ease` | celagem `src/lib/components/menu/recipe.ts` |
 | Ajustes (diálogo) | 100 ms, `ease` | celagem `src/lib/components/dialog/recipe.ts` |
 | Tooltip | demora 600 ms, entrada 100 ms, salida 80 ms; cierre tras 100 ms; si otro tooltip cerró hace menos de 300 ms, abre sin demora | HKUI `src/lib/tooltip/root/tooltip-root.svelte`, `tooltip-group.ts`, `provider/tooltip-provider.svelte` |
@@ -47,7 +49,7 @@ Algunas cosas de Search no chocan con celagem y quedaron igual:
 | Fondo de la pestaña activa al cambiar de pestaña | 140 ms, `--ease-out-strong` | más corto que el indicador de celagem: a 200 ms, cruzar toda la tira se sentía lento |
 | Vecinas que hacen lugar (reordenar, abrir, cerrar) | 160 ms y 200 ms, `--ease-out-strong` (0.23, 1, 0.32, 1) | celagem `brand.css` |
 | Columna de pestañas que vuelve | 250 ms, `--ease-move` (0.77, 0, 0.175, 1) | celagem `brand.css`; `app-sidebar/rail-module.svelte` |
-| Grupo que se contrae o se expande | 200 ms, `ease-out`: sus pestañas se pliegan hacia la etiqueta (o salen de ella) y todo lo de al lado acompaña con la misma curva, el botón + incluido | celagem `src/lib/components/collapsible/` (alto del panel) |
+| Grupo que se contrae o se expande | 220 ms, `--ease-out-strong`: sus pestañas se pliegan hacia la etiqueta (o salen de ella) mientras se desvanecen, la flecha gira, la línea del grupo se apaga y todo lo de al lado acompaña con la misma curva. Si la pestaña activa queda adentro, su fondo no viaja: aparece con un fundido en la que la reemplaza | celagem `src/lib/components/collapsible/` (alto del panel); la curva fuerte hace casi todo el camino al principio |
 | Etiqueta de un grupo nuevo | 200 ms, `--ease-out-strong`, se despliega y aparece con un fundido, como una pestaña que se abre | celagem `brand.css` |
 | Tilde de la casilla | 75 ms | HKUI, receta del checkbox |
 | Anillo de carga | 1 vuelta/s, a 20 cuadros/s | `animate-spin` de Tailwind |
@@ -68,15 +70,24 @@ Si Windows tiene apagadas las animaciones de la interfaz
 
 ## Desvíos a propósito
 
-- **Sin escala en el popover ni en el diálogo.** Son ventanas con
-  controles nativos adentro (el campo es un `Edit`, Ajustes son controles
-  de Windows), y una ventana Win32 no se escala sin pixelarse. Lo que sí
-  hacen es un fundido real de la ventana entera, con sus hijos, en
-  ventanas en capas.
+- **El campo se escala con una foto de sí mismo.** Una ventana con un
+  `Edit` nativo no se escala. Mientras entra o sale, la ventana del
+  `Edit` queda invisible (opacidad 0, con el teclado ya tomado) y la ventana
+  de fondo dibuja el campo entero: una foto en reposo (su fondo, la sombra
+  y lo que pintan el campo y sus hijos con `WM_PRINT`) remuestreada en cada
+  cuadro a la escala y opacidad del momento. El último cuadro es la foto
+  tal cual, así que el traspaso a las ventanas reales no cambia ningún
+  píxel. La foto y el bitmap del cuadro se sueltan al terminar. Ajustes no
+  se escala: sólo se funde.
+- **El placeholder del campo es nuestro.** El cue banner del `Edit` usa el
+  gris del sistema y no se le puede cambiar el color. Con el campo vacío lo
+  dibujamos en `ink-muted` (más de 4,5:1 en claro y oscuro), con la fuente
+  del `Edit` y donde iría su primer carácter.
 - **El campo es una píldora en dos ventanas.** Windows sólo redondea
   unos pocos píxeles fijos. Debajo va una ventana con alfa por píxel
-  (`UpdateLayeredWindow`) con la forma suavizada, el anillo y
-  `shadow-pop`. Encima va la ventana con el `Edit` y la lista, recortada
+  (`UpdateLayeredWindow`) con la forma suavizada, el anillo y una sombra
+  en tres capas: de contacto, principal y ambiente, amplia y difusa, como
+  los paneles de macOS. Encima va la ventana con el `Edit` y la lista, recortada
   por una región un píxel adentro del borde. Los escalones de la región
   caen sobre el fondo liso de abajo, así que el borde que se ve es el
   suavizado. Con la lista abierta, el lado del campo queda redondo y el
@@ -104,23 +115,33 @@ Si Windows tiene apagadas las animaciones de la interfaz
 - `tools/frames.ps1` graba los cuadros intermedios de una animación. Corre
   el disparador, captura con PrintWindow cada N ms, compone cada ventana
   en capas con su opacidad del momento y arma una tira. Las tiras están en
-  `docs/capturas/tira-*.png`.
+  `docs/capturas/tira-*.png`. Cada cuadro tarda unos 300 ms en capturarse
+  (PrintWindow de la ventana entera con su WebView), así que una animación
+  corta no deja cuadros intermedios. Las tiras `campo2-abrir-*` y
+  `campo2-cerrar-*` se grabaron con las duraciones del campo multiplicadas
+  por 8, en un build sólo para eso.
 - `LIVIANO_BENCH=1` agrega al `state` del pipe la clave `anim`, con
   cuadros, peor cuadro y cuadros de más de 16 ms.
 
 ## Logo
 
-Una pluma blanca sobre un cuadrado de esquinas redondeadas en el índigo de
-marca (#6468F0), con la tinta `on-brand` (#FCFCFC). La pluma dice
-«liviano» sin palabras y, inclinada hacia arriba, también dice que avanza.
-El cuadrado de marca hace que se lea igual sobre la barra de tareas clara
-y la oscura.
+Una pluma blanca sobre un cuadrado de esquinas redondeadas en grafito
+(de #51515C arriba a #27272F abajo). La pluma dice «liviano» sin palabras
+y, inclinada hacia arriba, también dice que avanza. El grafito es neutro
+a propósito: el índigo queda para lo activo dentro de la ventana.
 
-- `assets/logo/liviano.svg` es la fuente; `liviano-mono.svg` es la pluma
-  sola en `currentColor`.
-- `assets/logo/pixels/` tiene las versiones de 16, 20, 24 y 32 px dibujadas
-  a mano, píxel por píxel: ahí el SVG escalado empasta el raquis y la
-  muesca.
-- `python -I tools/logo.py` arma `assets/logo/liviano.ico` (16 a 64 en
-  BMP, 256 en PNG) y las vistas previas de `docs/logo/`. `build.rs` lo
-  embebe como recurso 1 con `liviano.rc`.
+La pluma no está dibujada a mano. Sale de unos pocos números en
+`tools/logo.py`: el raquis curvo, el ancho de cada paleta a lo largo de
+él, el ángulo de las barbas y los lugares donde las barbas se separan.
+
+- `python -I tools/logo.py` es la fuente y escribe todo lo demás:
+  `assets/logo/liviano.svg` (claro), `liviano-dark.svg` (oscuro: pluma
+  blanca y plata sobre casi negro), `liviano-mono.svg` (la pluma sola en
+  `currentColor`), `liviano.ico` (16 a 64 en BMP, 256 en PNG) y las
+  vistas previas de `docs/logo/`. Los SVG no se editan.
+- Por debajo de 48 px las barbas y los cortes finos se empastan, así que
+  los tamaños chicos salen de una pluma más simple (tabla `DETAIL`): más
+  grande dentro del cuadrado, sin barbas, con un solo corte profundo y el
+  raquis más grueso.
+- `build.rs` embebe el `.ico` como recurso 1 con `liviano.rc`. El exe
+  lleva sólo el claro: Windows no cambia el ícono de un exe con el tema.

@@ -118,21 +118,11 @@ public static class LivianoFrames {
         return bitmap;
     }
 
-    // A per-pixel window's own opacity can't be read from outside. The
-    // field's backdrop fades with the field (the window of the same owner
-    // whose class it extends), so it takes that one's.
-    static float PerPixelOpacity(IntPtr hwnd) {
-        var name = new System.Text.StringBuilder(256);
-        GetClassName(hwnd, name, 256);
-        if (name.ToString() != "LivianoOmnibarBackdrop") return 1f;
-        uint pid, other;
-        GetWindowThreadProcessId(hwnd, out pid);
-        for (IntPtr w = FindWindowEx(IntPtr.Zero, IntPtr.Zero, "LivianoOmnibar", null); w != IntPtr.Zero; w = FindWindowEx(IntPtr.Zero, w, "LivianoOmnibar", null)) {
-            GetWindowThreadProcessId(w, out other);
-            if (other == pid) return Opacity(w);
-        }
-        return 1f;
-    }
+    // A per-pixel window's own opacity can't be read from outside; the
+    // field's backdrop carries it in its pixels (coming and going it draws
+    // the whole field, faded, while the field itself stands at 0), and
+    // answers WM_PRINT with the frame on screen.
+    static float PerPixelOpacity(IntPtr hwnd) { return 1f; }
 
     class Win { public IntPtr Hwnd; public RECT Frame; public RECT Window; }
 

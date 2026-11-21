@@ -43,6 +43,11 @@ pub enum Event {
     /// The page of this tab took focus (a click on it).
     PageClicked(u64),
     FindChanged(u64),
+    /// The tab's back/forward history changed (`HistoryChanged`).
+    HistoryChanged(u64),
+    /// The tab's history, asked for its back (true) or forward menu: the
+    /// JSON of DevTools' `Page.getNavigationHistory`.
+    NavHistory(u64, bool, String),
     /// A page posted a message: tab, source URL, message as JSON.
     WebMessage(u64, String, String),
     Command(Command),
@@ -68,6 +73,8 @@ impl Event {
             Event::ProcessFailed(..) => &"evento:ProcessFailed",
             Event::PageClicked(_) => &"evento:PageClicked",
             Event::FindChanged(_) => &"evento:FindChanged",
+            Event::HistoryChanged(_) => &"evento:HistoryChanged",
+            Event::NavHistory(..) => &"evento:NavHistory",
             Event::WebMessage(..) => &"evento:WebMessage",
             Event::Command(_) => &"evento:Command",
             Event::Download(_) => &"evento:Download",
@@ -88,6 +95,8 @@ impl Event {
             | Event::ProcessFailed(id, ..)
             | Event::PageClicked(id)
             | Event::FindChanged(id)
+            | Event::HistoryChanged(id)
+            | Event::NavHistory(id, ..)
             | Event::WebMessage(id, ..)
             | Event::Vault(id, _) => *id,
             _ => 0,
@@ -259,6 +268,13 @@ impl WebTab {
                     }
                     crate::diag::trace(|| format!("navigation completed tab={id} ok={}", ok.as_bool()));
                     push(Event::NavigationCompleted(id, ok.as_bool()));
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            tab.webview.add_HistoryChanged(
+                &HistoryChangedEventHandler::create(Box::new(move |_, _| {
+                    push(Event::HistoryChanged(id));
                     Ok(())
                 })),
                 &mut token,
@@ -462,6 +478,40 @@ impl WebTab {
     pub fn forward(&self) {
         unsafe {
             let _ = self.webview.GoForward();
+        }
+    }
+
+    /// Whether back and forward have somewhere to go.
+    pub fn can_go(&self) -> (bool, bool) {
+        let (mut back, mut forward) = (BOOL(0), BOOL(0));
+        unsafe {
+            let _ = self.webview.CanGoBack(&mut back);
+            let _ = self.webview.CanGoForward(&mut forward);
+        }
+        (back.as_bool(), forward.as_bool())
+    }
+
+    /// Asks for the tab's history (WebView2 has no API of its own for it:
+    /// DevTools' `Page.getNavigationHistory` answers); it arrives as
+    /// `Event::NavHistory`.
+    pub fn request_history(&self, id: u64, back: bool) {
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(move |result, json| {
+            if result.is_ok() {
+                push(Event::NavHistory(id, back, json));
+            }
+            Ok(())
+        }));
+        unsafe {
+            let _ = self.webview.CallDevToolsProtocolMethod(&HSTRING::from("Page.getNavigationHistory"), &HSTRING::from("{}"), &handler);
+        }
+    }
+
+    /// Goes to an entry of the history `request_history` listed.
+    pub fn go_to_history_entry(&self, entry: i64) {
+        let handler = CallDevToolsProtocolMethodCompletedHandler::create(Box::new(|_, _| Ok(())));
+        let params = format!(r#"{{"entryId":{entry}}}"#);
+        unsafe {
+            let _ = self.webview.CallDevToolsProtocolMethod(&HSTRING::from("Page.navigateToHistoryEntry"), &HSTRING::from(params), &handler);
         }
     }
 

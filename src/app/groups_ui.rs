@@ -65,6 +65,7 @@ impl App {
                 GroupInfo {
                     id: g.id,
                     name: &g.name,
+                    title: self.group_heading(g.id, &g.name),
                     color: g.color,
                     collapsed: g.collapsed,
                     count: self.tabs.tabs.iter().filter(|t| t.group == Some(g.id)).count(),
@@ -72,6 +73,18 @@ impl App {
                 }
             })
             .collect()
+    }
+
+    /// What a group's header says in the column: its name or, unnamed, the
+    /// site of its first tab, so two unnamed groups still read apart.
+    fn group_heading(&self, group: u64, name: &str) -> String {
+        if !name.trim().is_empty() {
+            return name.to_string();
+        }
+        let first = self.tabs.members(group).first().and_then(|id| self.tabs.get(*id));
+        let host = first.map(|t| crate::omnibox::display_host(&t.url)).unwrap_or("");
+        let host = host.strip_prefix("www.").unwrap_or(host);
+        if host.is_empty() { "Grupo".to_string() } else { host.to_string() }
     }
 
     /// After a group changed: the strip is laid out again and saved.
@@ -97,9 +110,9 @@ impl App {
     pub(super) fn toggle_group(&mut self, group: u64) {
         let Some(folded) = self.tabs.group(group).map(|g| g.collapsed) else { return };
         let before = self.tabs.active;
-        if let Some(leaving) = before {
-            self.capture_thumb(leaving);
-        }
+        // No picture of the page is taken here, unlike a tab switch: a
+        // folded tab has no card to show it on, and decoding the capture
+        // on this thread landed in the middle of the fold.
         self.tabs.set_collapsed(group, !folded);
         self.after_fold(before);
     }

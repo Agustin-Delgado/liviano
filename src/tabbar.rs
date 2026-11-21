@@ -7,7 +7,7 @@ use windows::Win32::Foundation::RECT;
 
 use crate::{
     anim::{Levels, Tween, specs},
-    design::{Palette, Rgb, group_tone, motion, size},
+    design::{Palette, Rgb, group_tint, group_tone, motion, size},
     frame::{self, Frame, WindowButton},
     gfx::{Align, Color, Font, Painter, RectF},
     tab_groups::{Drop, GroupColor},
@@ -26,8 +26,41 @@ pub enum Hit {
     PinnedExtension(usize),
     /// Minimize, maximize or close: the window's own buttons.
     Window(WindowButton),
+    /// Back, forward or reload, beside them.
+    Nav(NavButton),
     /// The gear: Ajustes, always there.
     Settings,
+}
+
+/// The page's own buttons, after the window's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum NavButton {
+    Back,
+    Forward,
+    Reload,
+}
+
+impl NavButton {
+    pub const ALL: [NavButton; 3] = [NavButton::Back, NavButton::Forward, NavButton::Reload];
+}
+
+/// Which of the page's buttons can act: back and forward follow the live
+/// tab's history, reload needs a page.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct NavState {
+    pub back: bool,
+    pub forward: bool,
+    pub reload: bool,
+}
+
+impl NavState {
+    pub fn enabled(&self, button: NavButton) -> bool {
+        match button {
+            NavButton::Back => self.back,
+            NavButton::Forward => self.forward,
+            NavButton::Reload => self.reload,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -75,6 +108,9 @@ pub struct TabInfo<'a> {
 pub struct GroupInfo<'a> {
     pub id: u64,
     pub name: &'a str,
+    /// What its header says in the column: the name, or for an unnamed
+    /// group the site of its first tab ("Grupo" when there is none).
+    pub title: String,
     pub color: GroupColor,
     /// Folded: only its label shows.
     pub collapsed: bool,
@@ -106,8 +142,8 @@ pub struct Label {
 }
 
 /// The label of a top strip: its name with room either side, capped, or
-/// the coloured dot alone. `text_w` is the name measured in the label's
-/// font (0 for an unnamed group).
+/// a small dot alone. `text_w` is the name measured in the label's font
+/// (0 for an unnamed group).
 pub fn label_width(text_w: f32, scale: f32) -> i32 {
     let m = Metrics { scale };
     if text_w <= 0.0 { m.px(LABEL_DOT_W) } else { (text_w.ceil() as i32 + m.px(2 * LABEL_PAD)).min(m.px(LABEL_MAX_W)) }
@@ -118,14 +154,21 @@ pub fn label_font(scale: f32) -> Font {
     Font::new(size::TEXT_SMALL * scale, size::MEDIUM, Align::Center)
 }
 
-const LABEL_DOT_W: i32 = 22;
+const LABEL_DOT_W: i32 = 20;
 const LABEL_PAD: i32 = 8;
 const LABEL_MAX_W: i32 = 140;
-/// The coloured pill inside a label, and the dot of an unnamed one.
-const PILL_H: f32 = 20.0;
-const DOT: f32 = 10.0;
-/// How far a group's tabs sit in from the column's edge, under its header.
-const GROUP_INDENT: i32 = 10;
+/// The tinted chip of a label on a top strip.
+const CHIP_H: f32 = 22.0;
+/// The group's mark: a dot a little over half a mark's letter.
+const DOT: f32 = 6.0;
+/// The header of a group in the column: shorter than a tab's row, so it
+/// reads as a heading over them rather than one more row.
+const GROUP_ROW: i32 = 26;
+/// How far a group's tabs sit in from the column's edge, under its header:
+/// clear of the guide line that hangs from the header's dot.
+const GROUP_INDENT: i32 = 12;
+/// Where the dot and the guide line sit, in from the header's left.
+const GUIDE_X: f32 = 6.0;
 /// Air between a group and what is next to it in the column.
 const GROUP_AIR: i32 = 4;
 
@@ -140,12 +183,14 @@ pub struct Layout {
     pub labels: Vec<Label>,
     pub new_tab: Rect,
     pub vertical: bool,
+    /// Back, forward and reload, after the window's buttons.
+    pub nav: [Rect; 3],
     /// The extensions button; empty when no extension is installed.
     pub extensions: Rect,
     /// The pinned extensions beside it, in order.
     pub extension_marks: Vec<Rect>,
-    /// The gear that opens Ajustes: next to the window's buttons on a top
-    /// strip and on the caption row, at the foot of the column.
+    /// The gear that opens Ajustes: at the right end of a top strip and of
+    /// the caption row, at the foot of the column.
     pub settings: Rect,
     /// The window's caption band and buttons (there is no title bar).
     pub frame: Frame,
@@ -189,10 +234,11 @@ pub fn layout_with(
         // be dragged from: a slim caption row over the page.
         let row = m.px(frame::ROW);
         let caption = Rect::new(0, 0, width, row);
-        let frame = Frame::new(caption, width, m.scale);
-        let right = frame.buttons[0].left - m.px(4);
+        let frame = Frame::new(caption, m.scale);
+        let nav = nav_row(frame.right() + m.px(NAV_LEAD), m.px(2), row - m.px(2), m);
+        let right = width - m.px(8);
         let settings = Rect::new(right - m.px(SETTINGS_W), m.px(2), right, row - m.px(2));
-        return Layout { content: Rect::new(0, row, width, height.max(row)), vertical, frame, settings, ..Default::default() };
+        return Layout { content: Rect::new(0, row, width, height.max(row)), vertical, frame, nav, settings, ..Default::default() };
     }
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
@@ -207,9 +253,28 @@ pub fn layout_with(
 
 /// The gear's width (the extensions button's).
 const SETTINGS_W: i32 = 30;
+/// Back, forward and reload: a pinned tab's width, a hair narrower.
+const NAV_W: i32 = 28;
+/// Between the window's buttons and the page's.
+const NAV_LEAD: i32 = 8;
+
+/// Back, forward and reload from `left`, two pixels apart.
+fn nav_row(left: i32, top: i32, bottom: i32, m: &Metrics) -> [Rect; 3] {
+    let (w, gap) = (m.px(NAV_W), m.px(2));
+    std::array::from_fn(|i| {
+        let l = left + i as i32 * (w + gap);
+        Rect::new(l, top, l + w, bottom)
+    })
+}
+
+/// The width of the three, gaps included.
+fn nav_width(m: &Metrics) -> i32 {
+    3 * m.px(NAV_W) + 2 * m.px(2)
+}
 
 /// Room always left free between the last tab (or +) and what sits at the
 /// right of the strip, so the window can be grabbed however many tabs there are.
+/// (Between the window's buttons and back there is always a little more.)
 const DRAG_ROOM: i32 = 32;
 
 /// Width the extensions block takes at the right of a horizontal strip.
@@ -287,17 +352,17 @@ fn layout_horizontal(
             previous = group.map(|g| g.id);
         }
     }
-    let frame = Frame::new(Rect::new(0, 0, width, bar), width, m.scale);
-    let settings_right = frame.buttons[0].left - m.px(4);
-    let settings = Rect::new(settings_right - m.px(SETTINGS_W), item_top, settings_right, item_bottom);
-    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m))
-        + frame.width()
-        + m.px(4 + SETTINGS_W + 2)
-        + m.px(DRAG_ROOM);
-    let available = width - 2 * pad - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
+    // The window's buttons lead, the page's follow, then the tabs; the gear
+    // (and the extensions) close the strip at the right.
+    let frame = Frame::new(Rect::new(0, 0, width, bar), m.scale);
+    let nav = nav_row(frame.right() + m.px(NAV_LEAD), item_top, item_bottom, m);
+    let start = nav[2].right + pad;
+    let settings = Rect::new(width - pad - m.px(SETTINGS_W), item_top, width - pad, item_bottom);
+    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + pad + m.px(DRAG_ROOM);
+    let available = width - start - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
-    let mut x = pad;
+    let mut x = start;
     let mut items = Vec::with_capacity(tabs.len());
     let mut labels = Vec::new();
     let mut previous = None;
@@ -335,6 +400,7 @@ fn layout_horizontal(
         new_tab,
         vertical: false,
         frame,
+        nav,
         settings,
         ..Default::default()
     }
@@ -348,10 +414,12 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
     let cell = m.px(40);
 
     let mut items = Vec::with_capacity(tabs.len());
-    // The top row is the caption: the window's buttons at its right, the
-    // rest of it moves the window (as the traffic lights above Search's column).
+    // The top row is the caption: the window's buttons at its left, back,
+    // forward and reload at its right (Arc's column), the rest of it moves
+    // the window.
     let caption = Rect::new(0, 0, side, m.px(BAR));
-    let frame = Frame::new(caption, side - 1, m.scale);
+    let frame = Frame::new(caption, m.scale);
+    let nav = nav_row(side - pad - nav_width(m), m.px(6), caption.bottom - m.px(6), m);
     // Pinned tabs: a grid of squares under it.
     let per_row = ((side - 2 * pad + gap) / (cell + gap)).max(1);
     let start = caption.bottom + m.px(2);
@@ -392,8 +460,9 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
                 y += m.px(GROUP_AIR);
             }
             if let Some(g) = group {
-                labels.push(Label { id: g.id, rect: Rect::new(pad, y, side - pad, y + row), collapsed: g.collapsed });
-                y += row + gap;
+                let header = m.px(GROUP_ROW);
+                labels.push(Label { id: g.id, rect: Rect::new(pad, y, side - pad, y + header), collapsed: g.collapsed });
+                y += header + gap;
             }
             previous = id;
         }
@@ -426,6 +495,7 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
         new_tab,
         vertical: true,
         frame,
+        nav,
         ..Default::default()
     }
 }
@@ -434,6 +504,9 @@ impl Layout {
     pub fn hit(&self, x: i32, y: i32) -> Option<Hit> {
         if let Some(button) = self.frame.button_at(x, y) {
             return Some(Hit::Window(button));
+        }
+        if let Some(i) = self.nav.iter().position(|r| r.contains(x, y)) {
+            return Some(Hit::Nav(NavButton::ALL[i]));
         }
         if self.settings.contains(x, y) {
             return Some(Hit::Settings);
@@ -507,6 +580,10 @@ pub struct Paint<'a> {
     pub maximized: bool,
     /// A window button held down.
     pub pressed: Option<WindowButton>,
+    /// The window is the active one: its lights wear their colours.
+    pub window_active: bool,
+    /// Which of back, forward and reload can act.
+    pub nav: NavState,
 }
 
 impl From<Rect> for RectF {
@@ -569,18 +646,46 @@ fn paint_strip(g: &Painter, p: &Paint) {
         p.pairs.iter().find_map(|&(l, r)| if l == a { Some(r) } else if r == a { Some(l) } else { None })
     });
 
+    // On a top strip the tabs, past their smallest width, run on under
+    // the extensions and the gear: they are cut short of them.
+    let tabs_area = if p.layout.vertical || p.layout.strip.width() == 0 {
+        RectF::from(p.layout.strip)
+    } else {
+        let end = [p.layout.extension_marks.first().copied(), Some(p.layout.extensions), Some(p.layout.settings)]
+            .into_iter()
+            .flatten()
+            .filter(|r| r.width() > 0)
+            .map(|r| r.left)
+            .min()
+            .unwrap_or(p.layout.strip.right);
+        RectF::new(0.0, 0.0, (end - frame::px(2, p.scale)) as f32, p.layout.strip.bottom as f32)
+    };
+    g.clip(tabs_area, |g| paint_tabs(g, p, shown_partner));
+
+    paint_controls(g, p);
+}
+
+/// The group lines, the live tab's card, the tabs and the group labels.
+fn paint_tabs(g: &Painter, p: &Paint, shown_partner: Option<u64>) {
+    let pal = p.palette;
+    let radius = size::RADIUS * p.scale;
     paint_group_lines(g, p);
 
     // The live tab's card first, on its own: it slides from the tab that
-    // was live to the one that is now, under the titles.
+    // was live to the one that is now, under the titles. When a group
+    // folds over the live tab it fades in on the next one instead of
+    // sliding across the label.
     let tabs = order_like(p.layout, p.tabs);
     if let Some((item, tab)) = p.layout.items.iter().zip(&tabs).find(|(i, _)| p.active == Some(i.id)) {
         let ground = if tab.private { pal.private_tab } else { pal.tab_active };
-        let opacity = p.motion.opacity_of(item.id);
+        let opacity = p.motion.opacity_of(item.id) * p.motion.live_opacity();
         let rect = p.motion.live_rect(p.motion.rect_of(item));
-        g.card(rect, radius, Color::from(ground).with_alpha(opacity), pal.dark, opacity, p.scale);
+        if opacity > 0.0 && !item.hidden {
+            g.card(rect, radius, Color::from(ground).with_alpha(opacity), pal.dark, opacity, p.scale);
+        }
     }
 
+    let row = 32.0 * p.scale;
     for (item, tab) in p.layout.items.iter().zip(&tabs) {
         let rect = p.motion.rect_of(item);
         // Folded into its group's label, or on its way there: cut to what
@@ -591,28 +696,40 @@ fn paint_strip(g: &Painter, p: &Paint) {
         let folding = item.hidden || (rect.width() - item.rect.width() as f32).abs() > 0.5 || (rect.height() - item.rect.height() as f32).abs() > 0.5;
         if folding && item.group.is_some() {
             // In the column the row keeps its height under the shrinking
-            // clip, so its title slides away instead of squashing.
-            let whole = if p.layout.vertical { RectF::new(rect.left, rect.top, rect.right, rect.top + 32.0 * p.scale) } else { rect };
-            g.clip(rect, |g| paint_tab(g, p, item, tab, whole, shown_partner));
+            // clip, so its title slides away instead of squashing; either
+            // way it fades with what is left of it.
+            let (whole, fade) = if p.layout.vertical {
+                (RectF::new(rect.left, rect.top, rect.right, rect.top + row), fold_fade(rect.height() / row))
+            } else {
+                (rect, fold_fade((rect.width() - 8.0 * p.scale) / (48.0 * p.scale)))
+            };
+            if fade > 0.0 {
+                g.clip(rect, |g| paint_tab(g, p, item, tab, whole, shown_partner, fade));
+            }
         } else {
-            paint_tab(g, p, item, tab, rect, shown_partner);
+            paint_tab(g, p, item, tab, rect, shown_partner, 1.0);
         }
     }
     paint_labels(g, p);
+}
 
-    paint_controls(g, p);
+/// How opaque a folding tab is for how much of it is left (0..1): it is
+/// gone a little before its room is, so nothing squeezes at the end.
+fn fold_fade(left: f32) -> f32 {
+    let t = ((left - 0.15) / 0.85).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// One tab: its ground, its mark or icon, its title and its cross.
-fn paint_tab(g: &Painter, p: &Paint, item: &Item, tab: &TabInfo, rect: RectF, shown_partner: Option<u64>) {
+fn paint_tab(g: &Painter, p: &Paint, item: &Item, tab: &TabInfo, rect: RectF, shown_partner: Option<u64>, fade: f32) {
     let pal = p.palette;
     let px = |v: f32| v * p.scale;
     let radius = px(size::RADIUS);
     let vertical = p.layout.vertical;
     {
         let active = p.active == Some(item.id);
-        let hover = p.motion.hover(HoverKey::Tab(item.id));
-        let opacity = p.motion.opacity_of(item.id);
+        let hover = p.motion.hover(HoverKey::Tab(item.id)) * fade;
+        let opacity = p.motion.opacity_of(item.id) * fade;
         if !active {
             if item.pinned {
                 g.round(rect, radius, Color::from(pal.tab_tile.mix(pal.tab_hover, hover)).with_alpha(opacity));
@@ -677,39 +794,46 @@ fn paint_tab(g: &Painter, p: &Paint, item: &Item, tab: &TabInfo, rect: RectF, sh
     }
 }
 
-/// What joins a group's tabs: a line under them on a top strip (from the
-/// label to the last tab, as Chrome's), a bar down their side in the
-/// column (Edge's). It shortens with the tabs as the group folds.
+/// What joins a group's tabs: a fine line under them on a top strip (from
+/// the label to the last tab, as Chrome's), a hairline guide down from the
+/// header's dot in the column. It shortens with the tabs as the group folds.
 fn paint_group_lines(g: &Painter, p: &Paint) {
     let px = |v: f32| v * p.scale;
     for label in &p.layout.labels {
         let Some(info) = p.tab_groups.iter().find(|i| i.id == label.id) else { continue };
-        let fill = Color::from(group_tone(info.color, p.palette.dark).fill).with_alpha(p.motion.opacity_of(label.id));
+        let tone = group_tone(info.color, p.palette.dark);
+        let opacity = p.motion.opacity_of(label.id);
         let at = p.motion.rect_of_label(label);
         let members = p.layout.items.iter().filter(|i| i.group == Some(label.id)).map(|i| p.motion.rect_of(i));
         if p.layout.vertical {
             let bottom = members.map(|r| r.bottom).fold(at.bottom, f32::max);
-            if bottom - at.bottom > px(4.0) {
-                let x = at.left + px(5.0);
-                g.round(RectF::new(x, at.bottom + px(1.0), x + px(2.0), bottom - px(2.0)), px(1.0), fill);
+            if bottom - at.bottom > px(6.0) {
+                let w = px(1.0).max(1.0);
+                let x = (at.left + px(GUIDE_X)).round() - w / 2.0;
+                let line = Color::from(tone.fill).with_alpha(0.45 * opacity);
+                g.round(RectF::new(x, at.bottom - px(4.0), x + w, bottom - px(4.0)), w / 2.0, line);
             }
         } else {
             let right = members.map(|r| r.right).fold(at.right, f32::max);
             if right - at.right > px(1.0) {
                 let top = at.bottom + px(2.0);
-                g.round(RectF::new(at.left + px(2.0), top, right - px(2.0), top + px(2.0)), px(1.0), fill);
+                // Folded, the line would only underline the chip: it fades
+                // out as the tabs fold in.
+                let line = Color::from(tone.fill).with_alpha(0.8 * opacity * (1.0 - p.motion.fold_of(label.id)));
+                g.round(RectF::new(at.left + px(4.0), top, right - px(4.0), top + px(1.5)), px(0.75), line);
             }
         }
     }
 }
 
-/// Each group's label: a pill of its colour with its name (or a dot when
-/// it has none); in the column, a header row with a chevron that says
-/// whether it is folded and, folded or unnamed, how many tabs it holds.
+/// Each group's label. On a top strip, a chip of the group's colour at a
+/// tint, with its name in that colour (or a small dot when it has none).
+/// In the column, a heading over its tabs: the dot the guide line hangs
+/// from, the name in the group's colour, the count while folded and a
+/// chevron that turns as it folds.
 fn paint_labels(g: &Painter, p: &Paint) {
     let pal = p.palette;
     let px = |v: f32| v * p.scale;
-    let radius = px(size::RADIUS);
     for label in &p.layout.labels {
         let Some(info) = p.tab_groups.iter().find(|i| i.id == label.id) else { continue };
         let tone = group_tone(info.color, pal.dark);
@@ -719,56 +843,52 @@ fn paint_labels(g: &Painter, p: &Paint) {
         }
         let opacity = p.motion.opacity_of(label.id);
         let over = p.motion.hover(HoverKey::Group(label.id));
-        ghost_ground(g, rect, radius, over, 0.0, pal);
-        let fill = Color::from(tone.fill).with_alpha(opacity);
-        let on = Color::from(tone.on).with_alpha(opacity);
+        let fold = p.motion.fold_of(label.id);
         let (_, cy) = rect.center();
-        let h = px(PILL_H);
         let dot = px(DOT);
         let named = !info.name.trim().is_empty();
+        let name_ink = Color::from(tone.ink).with_alpha(opacity);
         if p.layout.vertical {
-            let left = rect.left + px(4.0);
-            let chevron_x = rect.right - px(14.0);
-            let room = chevron_x - px(12.0);
-            let mut after = left;
-            if named {
-                let pill = RectF::new(left, cy - h / 2.0, (left + info.label_w as f32).min(room), cy + h / 2.0);
-                g.round(pill, px(size::RADIUS_CONTROL), fill);
-                g.text(info.name, pill.inset(px(LABEL_PAD as f32), 0.0), label_font(p.scale), on);
-                after = pill.right;
-            } else {
-                g.round(RectF::new(left + px(2.0), cy - dot / 2.0, left + px(2.0) + dot, cy + dot / 2.0), dot / 2.0, fill);
-                after = after + px(2.0) + dot;
+            ghost_ground(g, rect, px(size::RADIUS_CONTROL), over, 0.0, pal);
+            let dx = rect.left + px(GUIDE_X);
+            g.round(RectF::new(dx - dot / 2.0, cy - dot / 2.0, dx + dot / 2.0, cy + dot / 2.0), dot / 2.0, Color::from(tone.fill).with_alpha(opacity));
+            let chevron_x = rect.right - px(12.0);
+            let mut room = chevron_x - px(10.0);
+            if fold > 0.0 {
+                let count = info.count.to_string();
+                let font = Font::new(px(size::TEXT_SMALL), size::REGULAR, Align::Trailing);
+                let ink = Color::from(pal.ink_asleep).with_alpha(opacity * fold);
+                g.text(&count, RectF::new(room - px(24.0), rect.top, room, rect.bottom), font, ink);
+                room -= px(28.0) * fold;
             }
-            if label.collapsed || !named {
-                let count = if info.count == 1 { "1 pestaña".to_string() } else { format!("{} pestañas", info.count) };
-                let text = RectF::new(after + px(8.0), rect.top, room, rect.bottom);
-                let ink = Color::from(pal.ink_muted.mix(pal.ink, over)).with_alpha(opacity);
-                g.text(&count, text, Font::new(px(size::TEXT_SMALL), size::REGULAR, Align::Leading), ink);
-            }
-            let ink = Color::from(pal.ink_muted.mix(pal.ink, over)).with_alpha(opacity);
-            draw_chevron(g, (chevron_x, cy), label.collapsed, ink, p.scale);
-        } else if named {
-            let pill = RectF::new(rect.left, cy - h / 2.0, rect.right, cy + h / 2.0);
-            g.round(pill, px(size::RADIUS_CONTROL), fill);
-            if pill.width() > px(2.0 * LABEL_PAD as f32) {
-                g.text(info.name, pill.inset(px(LABEL_PAD as f32), 0.0), label_font(p.scale), on);
-            }
+            let text = RectF::new(dx + px(10.0), rect.top, room, rect.bottom);
+            g.text(&info.title, text, Font::new(px(size::TEXT_SMALL), size::MEDIUM, Align::Leading), name_ink);
+            let ink = Color::from(pal.ink_asleep.mix(pal.ink_muted, over)).with_alpha(opacity);
+            draw_chevron(g, (chevron_x, cy), fold, ink, p.scale);
         } else {
-            let (cx, _) = rect.center();
-            g.round(RectF::new(cx - dot / 2.0, cy - dot / 2.0, cx + dot / 2.0, cy + dot / 2.0), dot / 2.0, fill);
+            let h = px(CHIP_H);
+            let chip = RectF::new(rect.left, cy - h / 2.0, rect.right, cy + h / 2.0);
+            let tint = group_tint(pal.dark) * (1.0 + 0.7 * over);
+            g.round(chip, px(size::RADIUS_CONTROL), Color::from(tone.fill).with_alpha(tint * opacity));
+            if named {
+                if chip.width() > px(2.0 * LABEL_PAD as f32) {
+                    g.text(info.name, chip.inset(px(LABEL_PAD as f32), 0.0), label_font(p.scale), name_ink);
+                }
+            } else {
+                let (cx, _) = chip.center();
+                g.round(RectF::new(cx - dot / 2.0, cy - dot / 2.0, cx + dot / 2.0, cy + dot / 2.0), dot / 2.0, Color::from(tone.fill).with_alpha(opacity));
+            }
         }
     }
 }
 
-/// A small chevron: pointing down while the group is open, right when folded.
-fn draw_chevron(g: &Painter, (cx, cy): (f32, f32), folded: bool, ink: Color, scale: f32) {
+/// A small chevron, turning from pointing down (open) to pointing right
+/// (`folded` 1) as the group folds.
+fn draw_chevron(g: &Painter, (cx, cy): (f32, f32), folded: f32, ink: Color, scale: f32) {
     let s = |v: f32| v * scale;
-    let points = if folded {
-        [(cx - s(1.5), cy - s(3.5)), (cx + s(2.0), cy), (cx - s(1.5), cy + s(3.5))]
-    } else {
-        [(cx - s(3.5), cy - s(1.5)), (cx, cy + s(2.0)), (cx + s(3.5), cy - s(1.5))]
-    };
+    let (sin, cos) = ((1.0 - folded.clamp(0.0, 1.0)) * std::f32::consts::FRAC_PI_2).sin_cos();
+    let turn = |(x, y): (f32, f32)| (cx + s(x * cos - y * sin), cy + s(x * sin + y * cos));
+    let points = [turn((-1.5, -3.5)), turn((2.0, 0.0)), turn((-1.5, 3.5))];
     g.polyline(&points, s(1.4), ink);
 }
 
@@ -833,7 +953,53 @@ fn paint_controls(g: &Painter, p: &Paint) {
         ghost_ground(g, gear, radius, over, p.motion.pressed(HoverKey::Settings), pal);
         draw_gear(g, gear, pal.ink_muted.mix(pal.ink, over), p.scale);
     }
-    frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.pressed, |b| p.motion.hover(HoverKey::Window(b)));
+    for (button, rect) in NavButton::ALL.into_iter().zip(p.layout.nav) {
+        if rect.width() == 0 {
+            continue;
+        }
+        let rect: RectF = rect.into();
+        let ink = if p.nav.enabled(button) {
+            let over = p.motion.hover(HoverKey::Nav(button));
+            ghost_ground(g, rect, radius, over, p.motion.pressed(HoverKey::Nav(button)), pal);
+            Color::from(pal.ink_muted.mix(pal.ink, over))
+        } else {
+            // Unavailable: faint, and nothing answers the pointer.
+            Color::from(pal.ink_asleep).with_alpha(if pal.dark { 0.6 } else { 0.7 })
+        };
+        draw_nav(g, rect, button, ink, p.scale);
+    }
+    frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.window_active, p.pressed, |b| p.motion.hover(HoverKey::Window(b)));
+}
+
+/// Back and forward as Safari draws them (an open chevron), reload as a
+/// circular arrow.
+fn draw_nav(g: &Painter, rect: RectF, button: NavButton, ink: Color, scale: f32) {
+    let s = |v: f32| v * scale;
+    let (cx, cy) = rect.center();
+    let w = s(1.5);
+    match button {
+        NavButton::Back => g.polyline(&[(cx + s(2.5), cy - s(5.5)), (cx - s(3.0), cy), (cx + s(2.5), cy + s(5.5))], w, ink),
+        NavButton::Forward => g.polyline(&[(cx - s(2.5), cy - s(5.5)), (cx + s(3.0), cy), (cx - s(2.5), cy + s(5.5))], w, ink),
+        NavButton::Reload => {
+            let r = s(5.5);
+            let (start, sweep) = (0.35, 5.2);
+            g.arc(cx, cy, r, start, sweep, s(1.4), ink);
+            // The arrowhead where the arc ends, pointing on round.
+            let a = start + sweep;
+            let (sin, cos) = a.sin_cos();
+            let (ex, ey) = (cx + r * sin, cy - r * cos);
+            let (tx, ty) = (cos, sin);
+            let (nx, ny) = (sin, -cos);
+            g.polygon(
+                &[
+                    (ex + tx * s(2.6), ey + ty * s(2.6)),
+                    (ex - tx * s(0.8) + nx * s(2.6), ey - ty * s(0.8) + ny * s(2.6)),
+                    (ex - tx * s(0.8) - nx * s(2.6), ey - ty * s(0.8) - ny * s(2.6)),
+                ],
+                ink,
+            );
+        }
+    }
 }
 
 /// A ghost button's ground (HKUI's ghost variant): nothing at rest, the
@@ -929,6 +1095,7 @@ pub enum HoverKey {
     Extensions,
     PinnedExtension(usize),
     Window(WindowButton),
+    Nav(NavButton),
     Settings,
 }
 
@@ -942,6 +1109,7 @@ impl HoverKey {
             Hit::Extensions => [Some(HoverKey::Extensions), None],
             Hit::PinnedExtension(i) => [Some(HoverKey::PinnedExtension(i)), None],
             Hit::Window(b) => [Some(HoverKey::Window(b)), None],
+            Hit::Nav(b) => [Some(HoverKey::Nav(b)), None],
             Hit::Settings => [Some(HoverKey::Settings), None],
         }
     }
@@ -967,6 +1135,11 @@ pub struct Motion {
     live: Option<(RectF, Tween<f32>)>,
     live_id: Option<u64>,
     live_drawn: Option<RectF>,
+    /// The live card fading in on the tab that took over from one a group
+    /// folded away.
+    live_fade: Option<Tween<f32>>,
+    /// Each group label's fold, 0 open to 1 folded (its chevron turns with it).
+    folds: HashMap<u64, Tween<f32>>,
     /// Tabs and group labels (their ids never clash) gliding or resizing
     /// toward their place in the layout.
     moves: HashMap<u64, Tween<RectF>>,
@@ -1058,10 +1231,20 @@ impl Motion {
 
         let same_strip = self.strip == layout.strip && self.strip.width() > 0;
         let hidden: Vec<u64> = layout.items.iter().filter(|i| i.hidden).map(|i| i.id).collect();
+        // A group folding or unfolding moves everything on the
+        // collapsible's curve, so its tabs and their neighbours keep pace.
+        let folding = same_strip && hidden != self.hidden;
+        for label in &layout.labels {
+            let target = if label.collapsed { 1.0 } else { 0.0 };
+            match self.folds.get_mut(&label.id) {
+                Some(fold) if same_strip => fold.to(target, now, specs::COLLAPSE),
+                _ => {
+                    self.folds.insert(label.id, Tween::rest(target));
+                }
+            }
+        }
+        self.folds.retain(|id, _| layout.labels.iter().any(|l| l.id == *id));
         if same_strip {
-            // A group folding or unfolding moves everything on the
-            // collapsible's curve, so its tabs and their neighbours keep pace.
-            let folding = hidden != self.hidden;
             for (id, rect, gone) in placed(layout) {
                 let target = RectF::from(rect);
                 match self.drawn.get(&id) {
@@ -1097,9 +1280,15 @@ impl Motion {
         self.strip = layout.strip;
         self.drawn = placed(layout).map(|(id, rect, _)| (id, self.rect_at(id, rect))).collect();
 
-        // The live card slides when another tab becomes live in the same strip.
+        // The live card slides when another tab becomes live in the same
+        // strip, unless a group folded the one it was on: then it would
+        // cross the label, so it fades in where it lands.
         let now_live = active.and_then(|id| layout.items.iter().find(|i| i.id == id));
         match (now_live, self.live_drawn) {
+            (Some(item), Some(_)) if self.live_id != Some(item.id) && same_strip && folding => {
+                self.live = None;
+                self.live_fade = Some(Tween::new(0.0, 1.0, now, specs::MORPH));
+            }
             (Some(item), Some(from)) if self.live_id != Some(item.id) && same_strip => {
                 self.live = Some((from, Tween::new(0.0, 1.0, now, specs::LIVE_CARD)));
             }
@@ -1111,6 +1300,9 @@ impl Motion {
         }
         if self.live.as_ref().is_some_and(|(_, t)| !t.moving(now)) {
             self.live = None;
+        }
+        if self.live_fade.as_ref().is_some_and(|t| !t.moving(now)) || !same_strip {
+            self.live_fade = None;
         }
         self.live_id = now_live.map(|i| i.id);
         self.live_drawn = now_live.map(|item| self.live_rect(self.rect_of(item)));
@@ -1136,6 +1328,8 @@ impl Motion {
         let moving = self.hovers.moving(now)
             || self.presses.moving(now)
             || self.live.is_some()
+            || self.live_fade.is_some()
+            || self.folds.values().any(|t| t.moving(now))
             || !self.moves.is_empty()
             || !self.appear.is_empty()
             || self.rail.is_some()
@@ -1186,6 +1380,16 @@ impl Motion {
     /// How opaque an item is drawn (a tab that just opened fades in).
     pub fn opacity_of(&self, id: u64) -> f32 {
         self.appear.get(&id).map_or(1.0, |t| t.value(self.at()).clamp(0.0, 1.0))
+    }
+
+    /// How opaque the live card is (1 but while it fades in after a fold).
+    pub fn live_opacity(&self) -> f32 {
+        self.live_fade.as_ref().map_or(1.0, |t| t.value(self.at()).clamp(0.0, 1.0))
+    }
+
+    /// How far a group is folded, 0 (open) to 1.
+    pub fn fold_of(&self, group: u64) -> f32 {
+        self.folds.get(&group).map_or(0.0, |t| t.value(self.at()).clamp(0.0, 1.0))
     }
 
     /// Where the live tab's card is drawn this frame, heading to `to`.

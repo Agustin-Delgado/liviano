@@ -40,21 +40,33 @@ Una animación interrumpida sigue desde donde está. Nada bloquea la
 entrada. En reposo no hay timer: 0 % de CPU. Si Windows tiene las
 animaciones apagadas, todo llega de una.
 
+No hay barra de título: las pestañas ocupan su lugar y los botones de la
+ventana son tres semáforos de 12 px, como en macOS, al principio de la fila:
+cerrar (rojo), minimizar (amarillo) y maximizar (verde). Con las pestañas
+arriba van antes de las pestañas; al costado, arriba a la izquierda de la
+columna; ocultas, a la izquierda de la fila de la ventana. Su glifo aparece al
+pasar el puntero por cualquiera de los tres, y con la ventana inactiva se ven
+grises. El espacio libre de la fila mueve la ventana, con doble clic la
+maximiza y con clic derecho abre el menú de la ventana; pasar el mouse por
+el verde muestra los diseños de ajuste de Windows 11. La sombra, los bordes
+para cambiar el tamaño (también el de arriba) y las esquinas siguen siendo
+los de Windows.
+
+Al lado de los semáforos están **Atrás, Adelante y Recargar** (al costado, a la
+derecha de esa misma fila, como en Arc). Siguen a la pestaña activa: una
+flecha sin adónde ir se ve apagada y no responde. Clic derecho, o mantener
+apretada una flecha, abre el historial de la pestaña hacia ese lado (hasta
+quince entradas, la más cercana primero). Los botones 4 y 5 del mouse van
+atrás y adelante sobre la fila; sobre la página los maneja la propia página.
+
 El engranaje abre Ajustes y está siempre a la vista:
 
-- con las pestañas arriba, a la izquierda de los botones de la ventana;
+- con las pestañas arriba, al final de la fila, a la derecha de las
+  extensiones;
 - con las pestañas al costado, al pie de la columna;
-- con las pestañas ocultas, en la fila de la ventana.
+- con las pestañas ocultas, al final de la fila de la ventana.
 
 Al dejar el puntero encima muestra el tooltip «Ajustes (Ctrl+,)».
-
-No hay barra de título: como en Chrome y Edge, las pestañas ocupan su lugar y
-los botones de minimizar, maximizar y cerrar se dibujan al final de la fila
-(con las pestañas al costado, arriba de la columna, como los semáforos de
-Search). El espacio libre de la fila mueve la ventana, con doble clic la
-maximiza y con clic derecho abre el menú de la ventana; pasar el mouse por
-maximizar muestra los diseños de ajuste de Windows 11. La sombra, los bordes
-para cambiar el tamaño y las esquinas siguen siendo los de Windows.
 
 Cada pestaña lleva el ícono de su sitio (sin ícono, o privada, su inicial).
 Con el puntero quieto sobre una pestaña aparece, como en Chrome, una tarjeta
@@ -67,15 +79,16 @@ queda).
 
 | | |
 |---|---|
-| ![Pestañas arriba, tema claro](docs/capturas/claro-horizontal.png) | ![Pestañas arriba, tema oscuro](docs/capturas/oscuro-horizontal.png) |
-| ![Pestañas al costado, tema claro](docs/capturas/claro-vertical.png) | ![Pestañas al costado, tema oscuro](docs/capturas/oscuro-vertical.png) |
+| ![Pestañas arriba, tema claro](docs/capturas/tira-arriba-claro.png) | ![Pestañas arriba, tema oscuro](docs/capturas/tira-arriba-oscuro.png) |
+| ![Pestañas al costado, tema claro](docs/capturas/tira-costado-claro.png) | ![Pestañas al costado, tema oscuro](docs/capturas/tira-costado-oscuro.png) |
+| ![Semáforos con el puntero encima](docs/capturas/tira-arriba-claro-semaforo.png) | ![Semáforos al costado, tema oscuro](docs/capturas/tira-costado-oscuro-semaforo.png) |
 | ![El engranaje con su tooltip](docs/capturas/engranaje-claro.png) | ![El engranaje con su tooltip, tema oscuro](docs/capturas/engranaje-oscuro.png) |
 | ![Campo único abierto](docs/capturas/campo-claro.png) | ![Campo único, tema oscuro](docs/capturas/campo-oscuro.png) |
 | ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |
 | ![Pestañas ocultas: sólo la fila de la ventana](docs/capturas/claro-colapsado.png) | ![Historial, tema oscuro](docs/capturas/historial-oscuro.png) |
 | ![Tarjeta de una pestaña, tema claro](docs/capturas/tarjeta-claro.png) | ![Tarjeta de una pestaña al costado, tema oscuro](docs/capturas/tarjeta-oscuro-vertical.png) |
-| ![Grupos de pestañas arriba, tema claro](docs/capturas/grupos-claro-horizontal.png) | ![Grupos contraídos, tema oscuro](docs/capturas/grupos-oscuro-horizontal-contraido.png) |
-| ![Grupos al costado, tema claro](docs/capturas/grupos-claro-vertical.png) | ![Grupos al costado contraídos, tema oscuro](docs/capturas/grupos-oscuro-vertical-contraido.png) |
+| ![Grupos contraídos arriba, tema claro](docs/capturas/tira-arriba-claro-contraidos.png) | ![Grupos contraídos arriba, tema oscuro](docs/capturas/tira-arriba-oscuro-contraidos.png) |
+| ![Grupos al costado contraídos, tema claro](docs/capturas/tira-costado-claro-contraidos.png) | ![Grupos al costado contraídos, tema oscuro](docs/capturas/tira-costado-oscuro-contraidos.png) |
 | ![Menú de la etiqueta de un grupo](docs/capturas/grupos-claro-menu-grupo.png) | ![Menú de una pestaña: agregarla a un grupo](docs/capturas/grupos-claro-menu-pestana.png) |
 
 Cuadros intermedios, con el tiempo de cada uno, grabados con
@@ -85,7 +98,7 @@ Cuadros intermedios, con el tiempo de cada uno, grabados con
 |---|---|
 | ![Hover de una pestaña, 150 ms](docs/capturas/tira-hover-claro.png) | ![Cambio de pestaña: la tarjeta se desliza](docs/capturas/tira-pestana-oscuro.png) |
 | ![La columna vuelve desde el borde](docs/capturas/tira-columna-claro.png) | ![Tooltip del engranaje: 600 ms de demora y fundido](docs/capturas/tira-engranaje-oscuro.png) |
-| ![Un grupo que se contrae arriba, 200 ms](docs/capturas/grupos-tira-contraer-claro-horizontal.png) | ![Un grupo que se contrae en la columna](docs/capturas/grupos-tira-contraer-claro-vertical.png) |
+| ![Un grupo que se contrae arriba, 220 ms](docs/capturas/tira-contraer-arriba.png) | ![Un grupo que se contrae en la columna](docs/capturas/tira-contraer-costado.png) |
 
 Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
 al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.
@@ -199,12 +212,16 @@ en Ajustes.
 Como en Chrome y Edge. Clic derecho en una pestaña: "Agregar pestaña a un
 grupo nuevo" (Ctrl+Shift+G), "Agregar al grupo" con los grupos que haya, o
 "Quitar del grupo". El grupo nuevo pide su nombre en el campo único; Enter
-vacío lo deja sin nombre y se ve como un punto de color.
+vacío lo deja sin nombre.
 
-- **Arriba**, cada grupo es una etiqueta de su color antes de sus pestañas, y
-  una línea del mismo color las une. **Al costado**, es una fila con sus
-  pestañas debajo, un poco corridas, y una barra al costado.
-- **Un clic en la etiqueta** contrae el grupo: sólo queda la etiqueta (al
+- **Arriba**, cada grupo es una etiqueta antes de sus pestañas: el nombre
+  escrito en el color del grupo sobre un tinte muy tenue de ese color (sin
+  nombre, sólo un punto), y una línea fina del mismo color las une.
+  **Al costado**, es una fila con un punto, el nombre en su color (sin nombre,
+  el sitio de la primera pestaña) y una flecha; sus pestañas van debajo, un
+  poco corridas, con una guía fina a la izquierda.
+- **Un clic en la etiqueta** contrae el grupo en 220 ms: las pestañas se
+  pliegan y se desvanecen, y la flecha gira. Sólo queda la etiqueta (al
   costado, con cuántas pestañas tiene). Si la pestaña activa estaba ahí,
   pasa a una visible. Ctrl+Tab se saltea las contraídas; elegir una por
   Ctrl+K o Ctrl+1…8 expande su grupo.

@@ -1,7 +1,8 @@
-//! The window's own frame, as Chrome and Edge draw theirs: no title bar,
-//! the tab strip in its place and the three window buttons drawn here. This
-//! is the geometry (where the buttons and the caption are, and what the
-//! pointer is over: tested) and how the buttons are drawn.
+//! The window's own frame: no title bar, the tab strip in its place and the
+//! three window buttons drawn here, at the strip's left end as macOS puts
+//! its traffic lights. This is the geometry (where the buttons and the
+//! caption are, and what the pointer is over: tested) and how the buttons
+//! are drawn.
 
 use crate::{
     design::{Palette, Rgb},
@@ -11,17 +12,23 @@ use crate::{
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WindowButton {
+    Close,
     Minimize,
     Maximize,
-    Close,
 }
 
 impl WindowButton {
-    pub const ALL: [WindowButton; 3] = [WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close];
+    /// Left to right, as macOS orders them: close, minimize, zoom.
+    pub const ALL: [WindowButton; 3] = [WindowButton::Close, WindowButton::Minimize, WindowButton::Maximize];
 }
 
-/// Width of one window button: Windows 11's own.
-pub const BUTTON_W: i32 = 46;
+/// Width each button answers to: the 12 px light with 4 px either side, so
+/// the three touch and a near miss still lands on one.
+pub const BUTTON_W: i32 = 20;
+/// The light itself (macOS draws its traffic lights 12 px across).
+const LIGHT: f32 = 12.0;
+/// From the window's left edge to the first button's area.
+pub const LEAD: i32 = 8;
 /// Height of the caption row when the tabs are hidden (collapsed column).
 pub const ROW: i32 = 32;
 /// The band along the top edge that resizes the window while it is not
@@ -35,25 +42,26 @@ const CORNER: i32 = 16;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Frame {
     pub caption: Rect,
-    /// Minimize, maximize and close, left to right.
+    /// Close, minimize and maximize, left to right.
     pub buttons: [Rect; 3],
 }
 
 impl Frame {
-    /// The buttons right-aligned so the last one ends at `right`, across
-    /// the caption's full height.
-    pub fn new(caption: Rect, right: i32, scale: f32) -> Self {
+    /// The buttons from the caption's left end, across its full height.
+    pub fn new(caption: Rect, scale: f32) -> Self {
         let w = px(BUTTON_W, scale);
+        let left = caption.left + px(LEAD, scale);
         let mut buttons = [Rect::default(); 3];
         for (i, slot) in buttons.iter_mut().enumerate() {
-            let r = right - (2 - i as i32) * w;
-            *slot = Rect::new(r - w, caption.top, r, caption.bottom);
+            let l = left + i as i32 * w;
+            *slot = Rect::new(l, caption.top, l + w, caption.bottom);
         }
         Self { caption, buttons }
     }
 
-    pub fn width(&self) -> i32 {
-        self.buttons[2].right - self.buttons[0].left
+    /// Where the buttons end: what comes after them starts past here.
+    pub fn right(&self) -> i32 {
+        self.buttons[2].right
     }
 
     pub fn button_at(&self, x: i32, y: i32) -> Option<WindowButton> {
@@ -119,76 +127,87 @@ pub fn client_top(window_top: i32, maximized: bool, frame: i32) -> i32 {
     if maximized { window_top + frame } else { window_top }
 }
 
-/// Windows 11's red under the close button, and its ink there.
-const CLOSE_HOVER: Rgb = Rgb(0xC4, 0x2B, 0x1C);
-const CLOSE_PRESSED: Rgb = Rgb(0xC8, 0x40, 0x31);
-const CLOSE_INK: Rgb = Rgb(0xFF, 0xFF, 0xFF);
+/// One traffic light: its fill, its rim and the glyph that shows on it
+/// while the pointer is over the three (macOS's own colours).
+struct Light {
+    fill: Rgb,
+    rim: Rgb,
+    glyph: Rgb,
+}
 
-/// Draws the three buttons. `hover` gives each one's fade (0..1).
+fn light(button: WindowButton) -> Light {
+    match button {
+        WindowButton::Close => Light { fill: Rgb(0xFF, 0x5F, 0x57), rim: Rgb(0xE2, 0x46, 0x3F), glyph: Rgb(0x4D, 0x00, 0x00) },
+        WindowButton::Minimize => Light { fill: Rgb(0xFE, 0xBC, 0x2E), rim: Rgb(0xE1, 0xA1, 0x16), glyph: Rgb(0x99, 0x57, 0x00) },
+        WindowButton::Maximize => Light { fill: Rgb(0x28, 0xC8, 0x40), rim: Rgb(0x14, 0xAE, 0x2E), glyph: Rgb(0x00, 0x65, 0x00) },
+    }
+}
+
+/// Draws the three lights. `hover` gives each one's fade (0..1): over any
+/// of them all three show their glyphs, as on macOS. In a window that is
+/// not the active one they go grey, and get their colour back under the
+/// pointer.
+#[allow(clippy::too_many_arguments)]
 pub fn paint(
     g: &Painter,
     frame: &Frame,
     pal: &Palette,
     scale: f32,
     maximized: bool,
+    active: bool,
     pressed: Option<WindowButton>,
     hover: impl Fn(WindowButton) -> f32,
 ) {
+    let over = WindowButton::ALL.iter().map(|b| hover(*b)).fold(0.0f32, f32::max);
+    let colour = if active { 1.0 } else { over };
+    let (idle_fill, idle_rim) = if pal.dark { (Rgb::grey(0x4A), Rgb::grey(0x40)) } else { (Rgb::grey(0xD6), Rgb::grey(0xC6)) };
     for button in WindowButton::ALL {
-        let full: RectF = frame.rect_of(button).into();
-        if full.width() <= 0.0 {
+        let area: RectF = frame.rect_of(button).into();
+        if area.width() <= 0.0 {
             continue;
         }
-        // Clear of whatever ran under it (tabs past their smallest width
-        // overflow the strip), short of the strip's bottom line.
-        let rect = RectF::new(full.left, full.top, full.right, full.bottom - 1.0);
-        g.fill(rect, pal.chrome);
-        let over = hover(button);
-        let down = pressed == Some(button) && over > 0.0;
-        let ink = if button == WindowButton::Close {
-            if down {
-                g.fill(rect, CLOSE_PRESSED);
-            } else if over > 0.0 {
-                g.fill(rect, Color::from(CLOSE_HOVER).with_alpha(over));
-            }
-            pal.ink_muted.mix(CLOSE_INK, over)
-        } else {
-            if down {
-                g.fill(rect, pal.pin_live);
-            } else if over > 0.0 {
-                g.fill(rect, Color::from(pal.tab_hover).with_alpha(over));
-            }
-            pal.ink_muted.mix(pal.ink, over)
-        };
-        draw_glyph(g, full, button, maximized, ink, scale);
+        let (cx, cy) = area.center();
+        let r = LIGHT * scale / 2.0;
+        let disc = RectF::new(cx - r, cy - r, cx + r, cy + r);
+        let l = light(button);
+        let mut fill = idle_fill.mix(l.fill, colour);
+        if pressed == Some(button) && hover(button) > 0.0 {
+            fill = fill.mix(Rgb::grey(0x00), 0.2);
+        }
+        g.round(disc, r, idle_rim.mix(l.rim, colour));
+        let rim = 0.5 * scale.max(1.0);
+        g.round(disc.inset(rim, rim), r - rim, fill);
+        if over > 0.0 {
+            draw_glyph(g, (cx, cy), button, maximized, Color::from(l.glyph).with_alpha(over), scale);
+        }
     }
 }
 
-/// The glyphs Windows 11 draws: a dash, a square (two for restore) and a
-/// cross, 10 px wide, in hairlines.
-fn draw_glyph(g: &Painter, rect: RectF, button: WindowButton, maximized: bool, ink: Rgb, scale: f32) {
+/// The glyph a light shows under the pointer: a cross, a dash, and two
+/// arrowheads pointing out (maximize) or in (restore).
+fn draw_glyph(g: &Painter, (cx, cy): (f32, f32), button: WindowButton, maximized: bool, ink: Color, scale: f32) {
     let s = |v: f32| v * scale;
-    let (cx, cy) = rect.center();
-    // Snapped to the pixel grid so the hairlines stay crisp.
-    let (cx, cy) = (cx.round() + 0.5, cy.round() + 0.5);
-    let w = s(1.0).max(1.0);
-    let half = s(5.0).round();
+    let w = s(1.1);
     match button {
-        WindowButton::Minimize => g.line((cx - half, cy), (cx + half, cy), w, ink),
-        WindowButton::Maximize if maximized => {
-            let front = RectF::new(cx - half, cy - half + s(2.0), cx + half - s(2.0), cy + half);
-            g.outline(front.inset(-w / 2.0, -w / 2.0), s(1.5), w, ink);
-            // The window behind: only its top and right edges show.
-            let (l, t, r, b) = (cx - half + s(2.0), cy - half, cx + half, cy + half - s(2.0));
-            g.polyline(&[(l, t + s(0.5)), (l + s(1.0), t), (r - s(1.0), t), (r, t + s(1.0)), (r, b - s(1.0)), (r - s(0.5), b)], w, ink);
-        }
-        WindowButton::Maximize => {
-            let square = RectF::new(cx - half, cy - half, cx + half, cy + half);
-            g.outline(square.inset(-w / 2.0, -w / 2.0), s(1.5), w, ink);
-        }
         WindowButton::Close => {
-            g.line((cx - half, cy - half), (cx + half, cy + half), w, ink);
-            g.line((cx - half, cy + half), (cx + half, cy - half), w, ink);
+            let a = s(2.5);
+            g.line((cx - a, cy - a), (cx + a, cy + a), w, ink);
+            g.line((cx - a, cy + a), (cx + a, cy - a), w, ink);
+        }
+        WindowButton::Minimize => g.line((cx - s(3.0), cy), (cx + s(3.0), cy), w, ink),
+        WindowButton::Maximize => {
+            // Two right triangles on the diagonal, their square corners
+            // away from the centre to grow and toward it to shrink back.
+            let leg = s(3.6);
+            if maximized {
+                let n = s(0.7);
+                g.polygon(&[(cx - n, cy - n), (cx - n - leg, cy - n), (cx - n, cy - n - leg)], ink);
+                g.polygon(&[(cx + n, cy + n), (cx + n + leg, cy + n), (cx + n, cy + n + leg)], ink);
+            } else {
+                let f = s(3.4);
+                g.polygon(&[(cx - f, cy - f), (cx - f + leg, cy - f), (cx - f, cy - f + leg)], ink);
+                g.polygon(&[(cx + f, cy + f), (cx + f - leg, cy + f), (cx + f, cy + f - leg)], ink);
+            }
         }
     }
 }

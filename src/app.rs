@@ -40,6 +40,7 @@ mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
 mod groups_ui;
+mod nav_ui;
 mod hovercard_ui;
 mod panel_ui;
 mod popups_ui;
@@ -156,6 +157,9 @@ struct App {
     extensions: extensions_ui::Extensions,
     popups: popups_ui::Popups,
     frame: frame_ui::FrameUi,
+    nav: nav_ui::NavUi,
+    /// The strip was moving at the last paint (for the frame gaps).
+    motion_was_running: bool,
     engine: engine_ui::EngineUi,
 }
 
@@ -285,6 +289,8 @@ pub fn run() -> windows::core::Result<()> {
         extensions: extensions_ui::Extensions::load(),
         popups: Default::default(),
         frame: Default::default(),
+        nav: Default::default(),
+        motion_was_running: false,
         engine: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
@@ -531,6 +537,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_LBUTTONDBLCLK => LRESULT(0),
+        WM_XBUTTONDOWN => LRESULT(1),
+        WM_XBUTTONUP => {
+            let which = ((wparam.0 >> 16) & 0xFFFF) as u16;
+            with_app(|app| app.x_button(which));
+            LRESULT(1)
+        }
         WM_MBUTTONUP => {
             let (x, y) = x_y(lparam);
             with_app(|app| {
@@ -591,6 +603,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_NCACTIVATE => {
             // Keep the title bar looking active while our own popup has focus.
             let omnibar_open = with_app(|app| app.mode.is_some()).unwrap_or(false);
+            // The traffic lights go grey in a window in the background.
+            with_app(|app| app.set_window_active(wparam.0 != 0 || omnibar_open));
             if omnibar_open && wparam.0 == 0 {
                 return unsafe { DefWindowProcW(hwnd, msg, WPARAM(1), lparam) };
             }
@@ -713,6 +727,8 @@ impl App {
             motion: &self.motion,
             maximized: self.is_maximized(),
             pressed: self.frame.pressed,
+            window_active: !self.frame.inactive,
+            nav: self.nav.state,
         };
         let dirty = RECT {
             left: dirty.left.max(0),
@@ -731,6 +747,13 @@ impl App {
         self.surface = surface;
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
+        if next.is_some() || self.motion_was_running {
+            crate::anim::frame_shown(started);
+        }
+        if next.is_none() && self.motion_was_running {
+            crate::anim::motion_rested();
+        }
+        self.motion_was_running = next.is_some();
         if let Some(ms) = next {
             crate::anim::report_frame(started.elapsed());
             crate::anim::repaint_after(self.hwnd, self.moving_area(&fills), ms);
@@ -827,6 +850,7 @@ impl App {
         }
         self.update_title();
         self.place_vault_bar();
+        self.refresh_nav();
     }
 
     fn wake(&mut self, id: u64) {
@@ -1091,6 +1115,12 @@ impl App {
             Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
             Event::ProcessFailed(id, kind) => self.process_failed(id, kind),
             Event::PageClicked(id) => self.page_focused(id),
+            Event::HistoryChanged(id) => {
+                if self.tabs.active == Some(id) {
+                    self.refresh_nav();
+                }
+            }
+            Event::NavHistory(id, back, json) => self.on_nav_history(id, back, &json),
             Event::FindChanged(id) => {
                 if self.mode == Some(Mode::Find) && self.tabs.active == Some(id) {
                     self.show_find_status();
@@ -1364,8 +1394,9 @@ impl App {
     /// and the window's buttons: only those repaint, never the page area.
     fn invalidate_hover_area(&self) {
         let l = &self.layout;
-        let [min, max, close] = l.frame.buttons;
-        let areas = [l.strip, l.frame.caption, l.settings, min, max, close];
+        let [close, min, max] = l.frame.buttons;
+        let [back, forward, reload] = l.nav;
+        let areas = [l.strip, l.frame.caption, l.settings, min, max, close, back, forward, reload];
         if areas.iter().all(|r| r.width() == 0) {
             self.invalidate();
             return;
@@ -1441,6 +1472,7 @@ impl App {
                 self.open_pinned_extension(nth);
             }
             Some(Hit::Window(button)) => self.press_window_button(button),
+            Some(Hit::Nav(button)) => self.nav_mouse_down(button),
             None => {
                 if self.mode.is_some() {
                     self.close_omnibar();
@@ -1450,6 +1482,10 @@ impl App {
     }
 
     fn context_menu(&mut self, x: i32, y: i32) {
+        if let Some(Hit::Nav(button)) = self.layout.hit(x, y) {
+            self.ask_history(button);
+            return;
+        }
         if let Some(Hit::Group(group)) = self.layout.hit(x, y) {
             self.group_menu(x, y, group);
             return;

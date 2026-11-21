@@ -21,8 +21,8 @@ use windows::{
         Graphics::{
             Direct2D::{
                 Common::{
-                    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_HOLLOW,
-                    D2D_SIZE_U, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
+                    D2D_RECT_F, D2D_SIZE_F, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_BEGIN_HOLLOW,
+                    D2D_SIZE_U, D2D1_FIGURE_END_CLOSED, D2D1_FIGURE_END_OPEN, D2D1_PIXEL_FORMAT,
                 },
                 D2D1_ANTIALIAS_MODE_ALIASED, D2D1_ARC_SEGMENT, D2D1_ARC_SIZE_LARGE, D2D1_ARC_SIZE_SMALL,
                 D2D1_CAP_STYLE_ROUND, D2D1_DRAW_TEXT_OPTIONS_CLIP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
@@ -35,7 +35,7 @@ use windows::{
             },
             DirectWrite::{
                 DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
+                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_TRAILING,
                 DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
                 DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
                 IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat,
@@ -119,6 +119,7 @@ impl From<RECT> for RectF {
 pub enum Align {
     Leading,
     Center,
+    Trailing,
 }
 
 /// A size in pixels (already scaled), a weight and an alignment. The
@@ -224,6 +225,7 @@ impl Shared {
             let _ = format.SetTextAlignment(match font.align {
                 Align::Leading => DWRITE_TEXT_ALIGNMENT_LEADING,
                 Align::Center => DWRITE_TEXT_ALIGNMENT_CENTER,
+                Align::Trailing => DWRITE_TEXT_ALIGNMENT_TRAILING,
             });
             let ellipsis = self.dwrite.CreateEllipsisTrimmingSign(&format).ok()?;
             let trimming = DWRITE_TRIMMING { granularity: DWRITE_TRIMMING_GRANULARITY_CHARACTER, ..Default::default() };
@@ -441,6 +443,22 @@ impl Painter<'_> {
             sink.EndFigure(D2D1_FIGURE_END_OPEN);
             if sink.Close().is_ok() {
                 self.rt().DrawGeometry(&path, self.ink(color), width, &self.shared.round);
+            }
+        }
+    }
+
+    /// A filled polygon (the window buttons' small arrows).
+    pub fn polygon(&self, points: &[(f32, f32)], color: impl Into<Color>) {
+        let Some(&first) = points.first() else { return };
+        unsafe {
+            let Ok(path) = self.shared.d2d.CreatePathGeometry() else { return };
+            let Ok(sink) = path.Open() else { return };
+            sink.BeginFigure(Vector2::new(first.0, first.1), D2D1_FIGURE_BEGIN_FILLED);
+            let rest: Vec<Vector2> = points[1..].iter().map(|p| Vector2::new(p.0, p.1)).collect();
+            sink.AddLines(&rest);
+            sink.EndFigure(D2D1_FIGURE_END_CLOSED);
+            if sink.Close().is_ok() {
+                self.rt().FillGeometry(&path, self.ink(color), None);
             }
         }
     }

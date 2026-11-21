@@ -30,7 +30,7 @@ impl Rgb {
     }
 
     /// A grey `level` of the way from black to white.
-    const fn grey(level: u8) -> Self {
+    pub const fn grey(level: u8) -> Self {
         Self(level, level, level)
     }
 
@@ -139,18 +139,22 @@ const DARK: Palette = Palette {
     private_mark: Rgb(0xAC, 0x8F, 0xF8),
 };
 
-/// A tab group's colour: the label's fill (also the line that joins its
-/// tabs) and the text on it.
+/// A tab group's colour: its mark (the dot, the line that joins its tabs,
+/// the label's faint tint) and its name.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Tone {
     pub fill: Rgb,
-    pub on: Rgb,
+    /// The group's name written in its colour, on the shell or on the
+    /// faint tint of the label: the fill a fifth (a quarter in the dark) of
+    /// the way to the ink.
+    pub ink: Rgb,
 }
 
-/// The group palette: celagem's tones (brand.css `--color-tone-*`). On the
-/// light shell the label wears the tone's `ink` step with white text; on the
-/// dark one its `solid` step with dark text. Every pair reads at 4.5:1 or
-/// more, and every fill stands 4.3:1 or more off its shell.
+/// The group palette: celagem's tones (brand.css `--color-tone-*`): the
+/// tone's `ink` step on the light shell, its `solid` step on the dark one.
+/// Every fill stands 3:1 or more off its shell, and the name (the fill a
+/// fifth or a quarter of the way to the ink) reads at 4.5:1 or more on the
+/// shell and on the label's tint.
 pub fn group_tone(color: crate::tab_groups::GroupColor, dark: bool) -> Tone {
     use crate::tab_groups::GroupColor::*;
     let (light, dark_fill) = match color {
@@ -164,7 +168,17 @@ pub fn group_tone(color: crate::tab_groups::GroupColor, dark: bool) -> Tone {
         Cyan => (Rgb(0x00, 0x7B, 0xB2), Rgb(0x00, 0xB2, 0xD1)),              // cyan 0.55 0.13 235 / 0.7 0.13 215
         Orange => (Rgb(0xBE, 0x4C, 0x00), Rgb(0xF4, 0x74, 0x1E)),            // orange 0.56 0.17 50 / 0.7 0.18 48
     };
-    if dark { Tone { fill: dark_fill, on: Rgb::grey(0x14) } } else { Tone { fill: light, on: Rgb::grey(0xFC) } }
+    if dark {
+        Tone { fill: dark_fill, ink: dark_fill.mix(Rgb::grey(0xED), 0.25) }
+    } else {
+        Tone { fill: light, ink: light.mix(Rgb::grey(0x17), 0.2) }
+    }
+}
+
+/// How much of a group's colour its label's ground takes: a tint, never a
+/// saturated pill.
+pub fn group_tint(dark: bool) -> f32 {
+    if dark { 0.14 } else { 0.10 }
 }
 
 /// Measures in device-independent pixels (multiplied by the window's DPI

@@ -47,6 +47,8 @@ pub(super) struct FrameUi {
     pub(super) pressed: Option<WindowButton>,
     /// Leaving the non-client maximize button is being watched.
     nc_tracking: bool,
+    /// The window is in the background (its lights go grey).
+    pub(super) inactive: bool,
 }
 
 /// Takes the title bar away and adds the layout entries to the system menu.
@@ -175,6 +177,14 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
 }
 
 impl App {
+    pub(super) fn set_window_active(&mut self, active: bool) {
+        if self.frame.inactive == !active {
+            return;
+        }
+        self.frame.inactive = !active;
+        self.invalidate_frame();
+    }
+
     pub(super) fn is_maximized(&self) -> bool {
         is_maximized(self.hwnd)
     }
@@ -235,9 +245,10 @@ impl App {
     }
 
     fn invalidate_frame(&self) {
-        let caption = self.layout.frame.caption;
-        unsafe {
-            let _ = InvalidateRect(Some(self.hwnd), Some(&caption.win()), false);
+        for r in self.layout.frame.buttons {
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), Some(&r.win()), false);
+            }
         }
     }
 
