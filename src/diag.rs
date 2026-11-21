@@ -4,7 +4,11 @@
 //!   elsewhere), an exception nobody handled, and the engine's own process
 //!   failures (a renderer or the browser process that died).
 //! - `hang.log`: the UI thread stuck for more than `HANG_AFTER` — what it was
-//!   doing and for how long — and any single handler slower than `SLOW_AFTER`.
+//!   doing and for how long — and any single handler that held the thread
+//!   for `STALL_AFTER` or more (a dropped frame the person can feel). Time
+//!   in a modal loop (a menu, a message box) is the person reading it, not
+//!   the handler: it does not count. A handler slow only because of a slower
+//!   one inside it is not written twice: the inner one is the culprit.
 //! - `trace.log`, only with `NEA_TRACE=1`: timestamped marks and every
 //!   handler slower than a few milliseconds, for measuring.
 //!
@@ -39,7 +43,7 @@ const HANG_AFTER: Duration = Duration::from_secs(2);
 /// Quiet this long and not idle: the watchdog pings.
 const PING_AFTER: Duration = Duration::from_millis(1000);
 /// A single handler this slow is written down even if it never reaches a hang.
-const SLOW_AFTER: Duration = Duration::from_millis(250);
+const STALL_AFTER: Duration = Duration::from_millis(50);
 /// With tracing on, handlers slower than this are traced.
 const TRACE_SLOW_AFTER: Duration = Duration::from_millis(4);
 const CHECK_EVERY: Duration = Duration::from_secs(1);
@@ -80,6 +84,10 @@ static WAITING: AtomicBool = AtomicBool::new(false);
 static NAME: AtomicPtr<&'static str> = AtomicPtr::new(std::ptr::null_mut());
 static DETAIL: AtomicU64 = AtomicU64::new(0);
 static SINCE: AtomicU64 = AtomicU64::new(0);
+/// Microseconds the UI thread spent in modal loops (see `modal`), in all.
+static MODAL_US: AtomicU64 = AtomicU64::new(0);
+/// Microseconds of handlers already written down as stalls, in all.
+static REPORTED_US: AtomicU64 = AtomicU64::new(0);
 
 fn start() -> Instant {
     static START: OnceLock<Instant> = OnceLock::new();
@@ -156,7 +164,8 @@ pub fn doing(name: &'static &'static str, detail: u64) -> Doing {
     NAME.store(name as *const &'static str as *mut _, Ordering::Relaxed);
     DETAIL.store(detail, Ordering::Relaxed);
     SINCE.store(now_ms(), Ordering::Relaxed);
-    Doing { name, detail, started: Instant::now(), previous }
+    let excluded = (MODAL_US.load(Ordering::Relaxed), REPORTED_US.load(Ordering::Relaxed));
+    Doing { name, detail, started: Instant::now(), previous, excluded }
 }
 
 pub struct Doing {
@@ -164,6 +173,35 @@ pub struct Doing {
     detail: u64,
     started: Instant,
     previous: (*mut &'static str, u64, u64),
+    /// `MODAL_US` and `REPORTED_US` when the guard was made.
+    excluded: (u64, u64),
+}
+
+/// Marks a modal loop (`TrackPopupMenu`, a message box) until the guard
+/// drops: its time is the person's, not the handler's that opened it.
+pub fn modal() -> Modal {
+    Modal { started: Instant::now() }
+}
+
+pub struct Modal {
+    started: Instant,
+}
+
+impl Drop for Modal {
+    fn drop(&mut self) {
+        MODAL_US.fetch_add(self.started.elapsed().as_micros() as u64, Ordering::Relaxed);
+    }
+}
+
+/// The time a handler held the thread itself: `took_us` less the modal
+/// loops and the inner stalls already written down while it ran.
+fn own_time(took_us: u64, modal_us: u64, reported_us: u64) -> u64 {
+    took_us.saturating_sub(modal_us).saturating_sub(reported_us)
+}
+
+/// Whether a handler that held the thread this long is a stall.
+fn is_stall(own_us: u64) -> bool {
+    own_us >= STALL_AFTER.as_micros() as u64
 }
 
 impl Drop for Doing {
@@ -173,8 +211,12 @@ impl Drop for Doing {
         NAME.store(name, Ordering::Relaxed);
         DETAIL.store(detail, Ordering::Relaxed);
         SINCE.store(since, Ordering::Relaxed);
-        if took >= SLOW_AFTER {
-            log(Log::Hang, format!("{} slow: {} ({}) took {} ms", stamp(), self.name, self.detail, took.as_millis()));
+        let modal = MODAL_US.load(Ordering::Relaxed).wrapping_sub(self.excluded.0);
+        let reported = REPORTED_US.load(Ordering::Relaxed).wrapping_sub(self.excluded.1);
+        let own = own_time(took.as_micros() as u64, modal, reported);
+        if is_stall(own) {
+            REPORTED_US.fetch_add(own, Ordering::Relaxed);
+            log(Log::Hang, format!("{} slow: {} ({}) took {} ms", stamp(), self.name, self.detail, own / 1000));
         }
         if took >= TRACE_SLOW_AFTER && tracing() {
             let (name, detail) = (*self.name, self.detail);

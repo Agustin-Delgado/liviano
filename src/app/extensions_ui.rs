@@ -149,6 +149,7 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
 }
 
 fn confirm(owner: HWND, text: &str) -> bool {
+    let _modal = crate::diag::modal();
     unsafe {
         MessageBoxW(
             Some(owner),
@@ -161,6 +162,7 @@ fn confirm(owner: HWND, text: &str) -> bool {
 
 /// The system folder picker (IFileOpenDialog with FOS_PICKFOLDERS).
 fn pick_folder(owner: HWND) -> Option<PathBuf> {
+    let _modal = crate::diag::modal();
     unsafe {
         let dialog: IFileOpenDialog = CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER).ok()?;
         let options = dialog.GetOptions().ok()?;
@@ -596,7 +598,10 @@ impl App {
                 point.x = button.right;
             }
             let _ = ClientToScreen(self.hwnd, &mut point);
+            // Its time is the person reading the menu.
+            let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, flags, point.x, point.y, None, self.hwnd, None).0 as usize;
+            drop(modal);
             let _ = DestroyMenu(menu);
             chosen
         };

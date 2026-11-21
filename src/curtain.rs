@@ -265,7 +265,10 @@ fn choose(owner: HWND, (x, y): (i32, i32), host: &str, rules: &[Rule]) -> Option
         // The keyboard focus is inside the page (another process's window);
         // a popup menu wants its owner to hold it.
         let _ = SetFocus(Some(owner));
+        // Its time is the person reading the menu.
+        let modal = crate::diag::modal();
         let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_CENTERALIGN, x, y, None, owner, None).0 as usize;
+        drop(modal);
         let _ = DestroyMenu(menu);
         match chosen {
             0 => None,

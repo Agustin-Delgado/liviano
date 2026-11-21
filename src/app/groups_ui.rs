@@ -282,8 +282,11 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_GROUP, w!("Close group"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
+            // Its time is the person reading the menu.
+            let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
                 .0 as usize;
+            drop(modal);
             let _ = DestroyMenu(menu);
             chosen
         };

@@ -186,6 +186,8 @@ impl App {
             for (i, (_, label)) in entries.iter().enumerate() {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_ENTRY + i, &wide(label));
             }
+            // Its time is the person reading the menu.
+            let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(
                 menu,
                 TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
@@ -196,6 +198,7 @@ impl App {
                 None,
             )
             .0 as usize;
+            drop(modal);
             let _ = DestroyMenu(menu);
             chosen
         };
