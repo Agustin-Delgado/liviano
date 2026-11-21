@@ -116,7 +116,28 @@ pub fn install(dir: &Path) {
         previous(info);
     }));
     seh::install(dir);
+    trace(|| format!("process started {:.1} ms before", since_process_start_ms()));
     let _ = std::thread::Builder::new().name("watchdog".into()).stack_size(64 * 1024).spawn(watch);
+}
+
+/// How long ago the process was created, in ms: the time the loader took
+/// before `main`, which every trace mark leaves out.
+fn since_process_start_ms() -> f64 {
+    use windows::Win32::{
+        Foundation::FILETIME,
+        System::{
+            SystemInformation::GetSystemTimePreciseAsFileTime,
+            Threading::{GetCurrentProcess, GetProcessTimes},
+        },
+    };
+    let ticks = |t: FILETIME| ((t.dwHighDateTime as u64) << 32) | t.dwLowDateTime as u64;
+    let (mut created, mut exited, mut kernel, mut user) = Default::default();
+    if unsafe { GetProcessTimes(GetCurrentProcess(), &mut created, &mut exited, &mut kernel, &mut user) }.is_err() {
+        return 0.0;
+    }
+    let now = unsafe { GetSystemTimePreciseAsFileTime() };
+    // FILETIME counts 100 ns.
+    ticks(now).saturating_sub(ticks(created)) as f64 / 10_000.0
 }
 
 /// The window the watchdog pings.

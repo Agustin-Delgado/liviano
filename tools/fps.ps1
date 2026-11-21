@@ -35,7 +35,9 @@ param(
     [string[]]$Only = @(),
     [switch]$KeepData,
     # Exit with code 1 when hang.log has a handler of 50 ms or more.
-    [switch]$FailOnStall
+    [switch]$FailOnStall,
+    # Print each dropped frame with its time (ms from start, as in trace.log).
+    [switch]$ShowGaps
 )
 
 $ErrorActionPreference = 'Stop'
@@ -169,6 +171,8 @@ try {
             $groups = @{}
             foreach ($m in $marks) {
                 $label = [string]$m[0]
+                # The loading ring turns at its own, slower rate (SPIN_FRAME_MS).
+                if ($label -eq 'ring') { continue }
                 if (-not $groups.ContainsKey($label)) { $groups[$label] = New-Object System.Collections.Generic.List[double] }
                 $groups[$label].Add([double]$m[1] / 1000.0)
             }
@@ -179,7 +183,10 @@ try {
                 for ($k = 1; $k -lt $t.Count; $k++) {
                     $gap = $t[$k] - $t[$k - 1]
                     # A pause this long is a second motion, not a slow frame.
-                    if ($gap -lt 150) { $intervals.Add($gap) }
+                    if ($gap -lt 150) {
+                        $intervals.Add($gap)
+                        if ($ShowGaps -and $gap -gt 1.5 * $TargetMs) { Write-Host ("    gap {0:N1} ms before {1:N1} [{2}]" -f $gap, $t[$k], $label) }
+                    }
                 }
             }
         }

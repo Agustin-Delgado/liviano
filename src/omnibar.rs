@@ -51,8 +51,9 @@ use windows::{
             ClientToScreen, CreateCompatibleDC, CreateDIBSection, CreateSolidBrush, DIB_RGB_COLORS, DT_END_ELLIPSIS,
             DT_LEFT, DT_NOPREFIX, DT_SINGLELINE, DT_TOP, DeleteDC, DeleteObject, DrawTextW, EndPaint, ExtCreateRegion,
             FillRect, GetDC, GetTextMetricsW, HBITMAP, HBRUSH, HDC, HFONT, HGDIOBJ, InvalidateRect, PAINTSTRUCT,
-            RDH_RECTANGLES, RGNDATA, RGNDATAHEADER, ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetBkMode,
-            SetTextColor, SetWindowRgn, TEXTMETRICW, TRANSPARENT,
+            RDH_RECTANGLES, RDW_ALLCHILDREN, RDW_FRAME, RDW_INVALIDATE, RGNDATA, RGNDATAHEADER, RedrawWindow,
+            ReleaseDC, SRCCOPY, SelectObject, SetBkColor, SetBkMode, SetTextColor, SetWindowRgn, TEXTMETRICW,
+            TRANSPARENT,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -480,6 +481,80 @@ fn erfc(x: f32) -> f32 {
 /// an antialiased edge. Inside, past the edge, there is nothing to work
 /// out: the ground is solid there.
 fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: BackdropLook, scale: f32) {
+    if width == 0 {
+        return;
+    }
+    let height = pixels.len() / width;
+    let pixel = backdrop_pixel(shape, look, scale);
+    // Away from the corners every column of a row (and every row of a
+    // column) is the same: only the bands along the edges are worked out,
+    // with one column and one row for the middle, and the rest is copied.
+    // The cost no longer grows with the panel's size.
+    let pad = slice_pad(&shape, scale);
+    let cols = kept_lines(width, shape.left, shape.width, pad);
+    let rows = kept_lines(height, shape.top, shape.height, pad);
+    let mut grid = vec![0u32; cols.source.len() * rows.source.len()];
+    for (j, &y) in rows.source.iter().enumerate() {
+        for (i, &x) in cols.source.iter().enumerate() {
+            grid[j * cols.source.len() + i] = pixel(x as f32 + 0.5, y as f32 + 0.5);
+        }
+    }
+    for y in 0..height {
+        let src = &grid[rows.index(y) * cols.source.len()..][..cols.source.len()];
+        let dst = &mut pixels[y * width..][..width];
+        match cols.middle {
+            Some((from, to)) => {
+                dst[..from].copy_from_slice(&src[..from]);
+                dst[from..to].fill(src[from]);
+                dst[to..].copy_from_slice(&src[from + 1..]);
+            }
+            None => dst.copy_from_slice(src),
+        }
+    }
+}
+
+/// How far from the panel's edge the bands that are worked out reach: past
+/// the corners and the shifts of every shadow layer, with room to spare.
+fn slice_pad(shape: &Shape, scale: f32) -> usize {
+    let shift = SHADOW.iter().map(|d| (d.y.abs() + d.spread.abs()) * scale).fold(0.0f32, f32::max);
+    (shape.radii.0.max(shape.radii.1) + shift + 8.0).ceil() as usize
+}
+
+/// Which lines (columns or rows) of a backdrop are worked out: all of them,
+/// or the bands along both edges and one middle line that stands for the
+/// lines between them.
+struct KeptLines {
+    /// The lines worked out, in order.
+    source: Vec<usize>,
+    /// The lines from..to that copy line `from` (also the index of the
+    /// middle line in `source`).
+    middle: Option<(usize, usize)>,
+}
+
+impl KeptLines {
+    /// The index in `source` of the line that `line` copies.
+    fn index(&self, line: usize) -> usize {
+        match self.middle {
+            Some((from, to)) if line >= to => line - (to - from) + 1,
+            Some((from, _)) if line >= from => from,
+            _ => line,
+        }
+    }
+}
+
+fn kept_lines(len: usize, start: f32, size: f32, pad: usize) -> KeptLines {
+    let start = start.max(0.0) as usize;
+    let end = (start + size.max(0.0) as usize).min(len);
+    let (from, to) = (start + pad, end.saturating_sub(pad));
+    if to <= from + 1 {
+        return KeptLines { source: (0..len).collect(), middle: None };
+    }
+    KeptLines { source: (0..=from).chain(to..len).collect(), middle: Some((from, to)) }
+}
+
+/// The backdrop at one pixel centre: the panel's fill, its ring and the
+/// shadow layers under both.
+fn backdrop_pixel(shape: Shape, look: BackdropLook, scale: f32) -> impl Fn(f32, f32) -> u32 {
     // Each layer: its shape, 1 / (sigma √2) for erfc (CSS blur = 2 sigma)
     // and its opacity at heart.
     let layers = SHADOW.map(|drop| {
@@ -494,12 +569,10 @@ fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: Backdro
     let (fr, fg, fb) = (f(look.fill.0), f(look.fill.1), f(look.fill.2));
     let solid = pack(1.0, fr, fg, fb);
     let (rr, rg, rb) = (f(look.ring.0.0), f(look.ring.0.1), f(look.ring.0.2));
-    for (i, pixel) in pixels.iter_mut().enumerate() {
-        let (x, y) = ((i % width) as f32 + 0.5, (i / width) as f32 + 0.5);
+    move |x, y| {
         let d = shape.distance(x, y);
         if d < -1.0 {
-            *pixel = solid;
-            continue;
+            return solid;
         }
         let cover = (0.5 - d).clamp(0.0, 1.0);
         let ring = ((1.5 - d).clamp(0.0, 1.0) - cover) * look.ring.1;
@@ -516,7 +589,7 @@ fn render_backdrop(pixels: &mut [u32], width: usize, shape: Shape, look: Backdro
         r = fr * cover + r * (1.0 - cover);
         g = fg * cover + g * (1.0 - cover);
         b = fb * cover + b * (1.0 - cover);
-        *pixel = pack(a, r, g, b);
+        pack(a, r, g, b)
     }
 }
 
@@ -567,7 +640,8 @@ fn apply_region(hwnd: HWND, width: i32, height: i32, radii: (f32, f32)) {
         let region = ExtCreateRegion(None, bytes as u32, buffer.as_ptr() as *const RGNDATA);
         if !region.is_invalid() {
             // The window owns the region from here on.
-            SetWindowRgn(hwnd, Some(region), true);
+            // Drawn again by whoever placed it (see `place`).
+            SetWindowRgn(hwnd, Some(region), false);
         }
     }
 }
@@ -717,7 +791,8 @@ thread_local! {
     static MOTION: RefCell<Option<Motion>> = const { RefCell::new(None) };
 }
 
-fn moving() -> bool {
+/// The field or its panel grows, shrinks or changes size on screen.
+pub fn moving() -> bool {
     MOTION.with(|m| m.borrow().is_some())
 }
 
@@ -1152,6 +1227,8 @@ impl Omnibar {
             }
         }
         mirror(self.popup);
+        // From here what is typed lands in the field (see `tools/startup.ps1`).
+        crate::diag::trace(|| "field shown".to_string());
     }
 
     pub fn place(&self, frame: Frame) {
@@ -1169,7 +1246,9 @@ impl Omnibar {
                 layout.panel.top,
                 width,
                 height,
-                SWP_NOACTIVATE,
+                // Nothing is drawn while it moves: everything is invalidated
+                // once below, and the next paint (or frame) draws it all.
+                SWP_NOACTIVATE | SWP_NOREDRAW,
             );
             // The text line in the middle of the pill; the edit ends where
             // the pill's right end starts to curve in.
@@ -1180,7 +1259,7 @@ impl Omnibar {
                 layout.field_top + (m.field - line) / 2,
                 width - glass - m.field / 2,
                 line,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
             );
             // EC_LEFTMARGIN | EC_RIGHTMARGIN, both zero: the glass column is the margin.
             SendMessageW(self.edit, EM_SETMARGINS, Some(WPARAM(3)), Some(LPARAM(0)));
@@ -1192,7 +1271,7 @@ impl Omnibar {
                 list.top,
                 list.right - list.left,
                 list.bottom - list.top,
-                SWP_NOZORDER | SWP_NOACTIVATE,
+                SWP_NOZORDER | SWP_NOACTIVATE | SWP_NOREDRAW,
             );
             let _ = ShowWindow(self.list, if layout.shown > 0 { SW_SHOWNA } else { SW_HIDE });
             if self.scroll_to_end.replace(false) && layout.upward && self.rows > 0 {
@@ -1202,7 +1281,7 @@ impl Omnibar {
             if reshaped {
                 apply_region(self.popup, width, height, layout.radii);
             }
-            let _ = InvalidateRect(Some(self.popup), None, false);
+            let _ = RedrawWindow(Some(self.popup), None, None, RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_FRAME);
         }
         if moving() {
             // The motion draws the backdrop: its picture is taken again.

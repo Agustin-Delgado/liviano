@@ -246,6 +246,8 @@ thread_local! {
     /// The window was made ahead of time and waits hidden: the settings
     /// (as JSON) and the palette (as text) it was filled with.
     static PREPARED: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+    /// The palette the window is coloured with (`palette_key`).
+    static PAINTED_WITH: RefCell<String> = const { RefCell::new(String::new()) };
 }
 
 fn settings_key(settings: &Settings) -> String {
@@ -466,6 +468,7 @@ pub fn set_palette(palette: &Palette) {
     }) else {
         return;
     };
+    PAINTED_WITH.with(|p| *p.borrow_mut() = palette_key(palette));
     let old = COLORS.with(|c| c.get());
     unsafe {
         for brush in [old.background, old.field, old.selection] {
@@ -1378,7 +1381,7 @@ fn emit(settings: Settings) {
     }
 }
 
-/// Saves what is still typed, then destroys the window and what it held.
+/// Saves what is still typed, then hides the window until the next open.
 fn close() {
     let pending = with_state(|st| match commit_all_fields(st) {
         Outcome::Changed => Some(st.settings.clone()),
@@ -1388,19 +1391,17 @@ fn close() {
     if let Some(settings) = pending {
         emit(settings);
     }
-    let Some(state) = STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut g| g.take())) else { return };
-    // It leaves as a dialog does (100 ms) and is destroyed once out of sight.
-    crate::fade::fade_out(state.hwnd, crate::anim::specs::DIALOG, 0, Some(destroy));
-    unsafe {
-        let _ = DeleteObject(state.font.into());
-        let _ = DeleteObject(state.heading_font.into());
-        let colors = COLORS.with(|c| c.replace(Colors::default()));
-        for brush in [colors.background, colors.field, colors.selection] {
-            if brush != 0 {
-                let _ = DeleteObject(HBRUSH(brush as _).into());
-            }
-        }
-    }
+    let Some((hwnd, settings)) =
+        STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.settings.clone()))))
+    else {
+        return;
+    };
+    // It leaves as a dialog does (100 ms) and then waits hidden, as the
+    // window made ahead does: the next open only shows it again. Making
+    // and destroying it on each open also left about six GDI objects behind.
+    crate::fade::fade_out(hwnd, crate::anim::specs::DIALOG, 0, None);
+    let painted_with = PAINTED_WITH.with(|p| p.borrow().clone());
+    PREPARED.with(|p| *p.borrow_mut() = Some((settings_key(&settings), painted_with)));
     if let Some(closed) = CLOSED.with(|c| c.get()) {
         closed();
     }
@@ -1409,12 +1410,6 @@ fn close() {
 /// Who hears that the window closed (the app makes the next one ahead).
 pub fn set_closed_handler(handler: fn()) {
     CLOSED.with(|c| c.set(Some(handler)));
-}
-
-fn destroy(hwnd: HWND) {
-    unsafe {
-        let _ = DestroyWindow(hwnd);
-    }
 }
 
 /// Owner-drawn row of the shortcuts list: the action on the left, its chords

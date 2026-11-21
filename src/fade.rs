@@ -264,6 +264,11 @@ fn step() -> bool {
     FADING.with(|f| !f.borrow().is_empty())
 }
 
+/// Some window is fading in or out.
+pub fn running() -> bool {
+    FADING.with(|f| !f.borrow().is_empty())
+}
+
 /// For the script control: what is fading and how far along.
 pub fn snapshot() -> Vec<(isize, f32, bool)> {
     let now = Instant::now();

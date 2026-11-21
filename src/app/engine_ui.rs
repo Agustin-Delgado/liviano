@@ -31,6 +31,12 @@ use crate::{
     web::{self, Event},
 };
 
+/// How often held engine work looks again whether the strip is at rest.
+const HELD_CHECK_MS: u32 = 16;
+const TIMER_HELD: usize = 0x43;
+/// Engine work is held at most this long, motion or not.
+const HOLD_AT_MOST: Duration = Duration::from_millis(600);
+
 /// The id the spare is made under; no tab ever gets it.
 pub(super) const SPARE: u64 = u64::MAX;
 const KEEP_SPARE: Duration = Duration::from_secs(30);
@@ -59,6 +65,18 @@ pub(super) struct EngineUi {
     /// No new spare before then (one was just taken).
     hold_until: Option<Instant>,
     restarts: Vec<Instant>,
+    /// Tabs waiting for the strip to settle before their view is made.
+    held_wakes: Vec<u64>,
+    /// Views made while the strip moved, waiting to be shown.
+    held_ready: Vec<(u64, windows::core::Result<ICoreWebView2Controller>)>,
+    /// The tab that took the spare, until its view is wired.
+    from_spare: Option<u64>,
+    /// A spare is wanted once the strip is at rest.
+    held_spare: bool,
+    /// The tab whose page gets the keyboard once the strip is at rest.
+    held_focus: Option<u64>,
+    /// When the oldest held work was held.
+    held_since: Option<Instant>,
 }
 
 /// What a failed engine process means for the app.
@@ -95,7 +113,100 @@ unsafe extern "system" fn on_warm_timer(_: HWND, _: u32, _: usize, _: u32) {
     with_app(|app| app.warm_tick());
 }
 
+unsafe extern "system" fn on_held_timer(_: HWND, _: u32, _: usize, _: u32) {
+    let _doing = crate::diag::doing(&"timer:held", 0);
+    with_app(|app| app.release_held());
+}
+
+/// Whether held engine work may run now: the strip is at rest, or it was
+/// held for too long already (a strip that never settles).
+fn may_release(settling: bool, held_since: Option<Instant>, now: Instant) -> bool {
+    !settling || held_since.is_some_and(|since| now.duration_since(since) >= HOLD_AT_MOST)
+}
+
 impl App {
+    /// A tab needs its view. Making one holds the UI thread inside the
+    /// engine for 50-120 ms. For a tab in the background nobody waits on
+    /// the page, so the making waits until the strip is at rest: its slide
+    /// never pays for it. A tab on screen is the page the person waits for,
+    /// and goes at once (from the spare when there is one, a few ms).
+    pub(super) fn wake(&mut self, id: u64) {
+        let private = self.tabs.get(id).is_some_and(|t| t.private);
+        let cheap = !private
+            && self.env.is_some()
+            && (self.engine.spare.is_some() || (self.engine.making && self.engine.claim.is_none()));
+        if cheap || self.on_screen(id) {
+            self.wake_now(id);
+            return;
+        }
+        if !self.engine.held_wakes.contains(&id) {
+            self.engine.held_wakes.push(id);
+        }
+        self.hold();
+    }
+
+    /// A view is ready: shown now, or once the strip is at rest. The spare
+    /// was made long before: wiring it is cheap, and the page starts now.
+    pub(super) fn view_ready(&mut self, id: u64, result: windows::core::Result<ICoreWebView2Controller>) {
+        let from_spare = self.engine.from_spare.take() == Some(id);
+        if !from_spare && !self.on_screen(id) && self.something_moves(Instant::now()) {
+            self.engine.held_ready.push((id, result));
+            self.hold();
+            return;
+        }
+        self.controller_ready(id, result);
+    }
+
+    /// Gives `id`'s page the keyboard once the strip is at rest, if it is
+    /// still the active tab then.
+    pub(super) fn focus_when_settled(&mut self, id: u64) {
+        self.engine.held_focus = Some(id);
+        self.hold();
+    }
+
+    fn on_screen(&self, id: u64) -> bool {
+        self.shown_panes().iter().any(|(shown, _)| *shown == id)
+    }
+
+    /// The strip's layout, the field or a fading window moves: engine work
+    /// waits. The loading ring and hovers do not count (see `settling`).
+    fn something_moves(&self, now: Instant) -> bool {
+        self.motion.settling(now) || crate::omnibar::moving() || crate::fade::running()
+    }
+
+    fn hold(&mut self) {
+        self.engine.held_since.get_or_insert_with(Instant::now);
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_HELD, HELD_CHECK_MS, Some(on_held_timer));
+        }
+    }
+
+    /// Runs the held engine work if the strip is at rest; else looks again soon.
+    fn release_held(&mut self) {
+        let now = Instant::now();
+        if !may_release(self.something_moves(now), self.engine.held_since, now) {
+            return;
+        }
+        unsafe {
+            let _ = KillTimer(Some(self.hwnd), TIMER_HELD);
+        }
+        self.engine.held_since = None;
+        for (id, result) in std::mem::take(&mut self.engine.held_ready) {
+            self.controller_ready(id, result);
+        }
+        for id in std::mem::take(&mut self.engine.held_wakes) {
+            self.wake_now(id);
+        }
+        if std::mem::take(&mut self.engine.held_spare) {
+            self.make_spare();
+        }
+        if let Some(id) = self.engine.held_focus.take()
+            && self.tabs.active == Some(id)
+        {
+            self.focus_page();
+        }
+    }
+
     /// Someone is about to need a view: start the engine and make a spare.
     pub(super) fn warm_up(&mut self) {
         self.engine.wanted_until = Some(Instant::now() + KEEP_SPARE);
@@ -103,7 +214,10 @@ impl App {
             self.engine.started_for_spare = self.tabs.tabs.is_empty();
             self.request_environment();
         }
-        self.make_spare();
+        // Asked for in the middle of a switch or a key press: the motion it
+        // starts has not drawn its first frame yet.
+        self.engine.held_spare = true;
+        self.hold();
     }
 
     /// Makes the spare now if none is there or coming, and sets when to look
@@ -112,7 +226,7 @@ impl App {
         let mut next = WARM_CHECK_EVERY;
         // Making a view holds the UI thread for 50 ms or more inside the
         // engine: never while something moves on screen.
-        let moving = crate::anim::stats().running;
+        let moving = self.something_moves(Instant::now());
         if moving {
             next = Duration::from_millis(SPARE_AFTER_MOTION_MS);
         }
@@ -156,6 +270,7 @@ impl App {
     pub(super) fn take_spare(&mut self, id: u64) -> bool {
         if let Some(controller) = self.engine.spare.take() {
             crate::diag::trace(|| format!("spare taken tab={id}"));
+            self.engine.from_spare = Some(id);
             self.engine.hold_until = Some(Instant::now() + REPLENISH_AFTER);
             // Through the queue, as any new view: the caller is in the
             // middle of showing tabs.

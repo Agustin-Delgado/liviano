@@ -1469,6 +1469,24 @@ impl Motion {
         self.rail.is_some()
     }
 
+    /// Only the loading ring moves at `now`: it turns at its own rate.
+    pub fn only_spinning(&self, now: Instant) -> bool {
+        !self.settling(now) && !self.hovers.moving(now) && !self.presses.moving(now)
+    }
+
+    /// Something of the strip's layout still glides at `now`: a tab, a
+    /// group's fold, the live card, the column. Hovers, presses and the
+    /// loading ring do not count: they never end while a page loads.
+    pub fn settling(&self, now: Instant) -> bool {
+        self.live.as_ref().is_some_and(|(_, t)| t.moving(now))
+            || self.live_fade.as_ref().is_some_and(|t| t.moving(now))
+            || self.folds.values().any(|t| t.moving(now))
+            || self.moves.values().any(|t| t.moving(now))
+            || self.appear.values().any(|t| t.moving(now))
+            || self.rail.as_ref().is_some_and(|t| t.moving(now))
+            || self.indicator_slide.as_ref().is_some_and(|(_, t)| t.moving(now))
+    }
+
     /// What this frame draws that motion can change, for `changed_area`.
     /// `loading` are the tabs that show the loading ring.
     pub fn sheet(&self, layout: &Layout, active: Option<u64>, loading: &[u64], scale: f32) -> Sheet {

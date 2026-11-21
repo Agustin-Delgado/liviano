@@ -13,7 +13,7 @@ use windows::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
-            LOGFONTW, PAINTSTRUCT, UpdateWindow,
+            LOGFONTW, PAINTSTRUCT,
         },
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
@@ -84,8 +84,6 @@ const AWAY_AFTER_MS: u32 = 1_500;
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
 const WM_APP_REPAINT: u32 = WM_APP + 3;
-/// Gives the page the keyboard after a switch (see `select`).
-const WM_APP_FOCUS: u32 = WM_APP + 4;
 const MENU_PIN: usize = 10;
 const MENU_DUPLICATE: usize = 11;
 const MENU_KEEP_AWAKE: usize = 12;
@@ -519,6 +517,8 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             unsafe {
                 let _ = EndPaint(hwnd, &ps);
             }
+            static PAINTED: std::sync::Once = std::sync::Once::new();
+            PAINTED.call_once(|| crate::diag::trace(|| "first paint".to_string()));
             LRESULT(0)
         }
         vault_ui::WM_APP_VAULT => {
@@ -529,15 +529,6 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             if crate::favicon::take_arrived() {
                 with_app(|app| app.invalidate_strip());
             }
-            LRESULT(0)
-        }
-        WM_APP_FOCUS => {
-            // Only if the switch it was posted for still holds.
-            with_app(|app| {
-                if app.tabs.active == Some(wparam.0 as u64) {
-                    app.focus_page();
-                }
-            });
             LRESULT(0)
         }
         hovercard_ui::WM_APP_THUMB => {
@@ -811,7 +802,7 @@ impl App {
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
         if next.is_some() || self.motion_was_running {
-            crate::anim::mark("strip");
+            crate::anim::mark(if self.motion.only_spinning(now) { "ring" } else { "strip" });
             crate::anim::frame_shown(started);
         }
         if next.is_none() && self.motion_was_running {
@@ -955,7 +946,7 @@ impl App {
         self.refresh_nav();
     }
 
-    fn wake(&mut self, id: u64) {
+    fn wake_now(&mut self, id: u64) {
         crate::diag::trace(|| format!("wake tab={id}"));
         let Some(env) = self.env.clone() else {
             self.request_environment();
@@ -1017,12 +1008,9 @@ impl App {
             self.session_dirty = true;
             self.invalidate();
             // Moving the keyboard into the page waits on the engine's process
-            // (90-170 ms measured for a page that just woke): the strip shows
-            // the switch first, and the keyboard follows in a message of its own.
-            unsafe {
-                let _ = UpdateWindow(self.hwnd);
-                let _ = PostMessageW(Some(self.hwnd), WM_APP_FOCUS, WPARAM(id as usize), LPARAM(0));
-            }
+            // (90-170 ms measured for a page that just woke): it follows once
+            // the live card has slid over.
+            self.focus_when_settled(id);
         }
     }
 
@@ -1213,7 +1201,7 @@ impl App {
                 self.invalidate();
             }
             Event::ControllerReady(engine_ui::SPARE, result) => self.spare_ready(result),
-            Event::ControllerReady(id, result) => self.controller_ready(id, result),
+            Event::ControllerReady(id, result) => self.view_ready(id, result),
             Event::TitleChanged(id) => {
                 let records = self.tabs.records(id);
                 if let Some(tab) = self.tabs.get_mut(id)
