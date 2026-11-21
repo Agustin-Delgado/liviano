@@ -167,10 +167,11 @@ const GROUP_ROW: i32 = 22;
 /// The header's dot: a little under the name's x-height.
 const HEADER_DOT: f32 = 5.0;
 
-/// The header's name: the caption step, medium. Its ink is muted; only the
-/// dot and the guide line carry the group's colour.
+/// The header's name: the caption step, regular (medium looks too heavy at
+/// 11 px). Its ink is muted; only the dot and the guide line carry the
+/// group's colour.
 fn header_font(scale: f32) -> Font {
-    Font::new(size::CAPTION * scale, size::MEDIUM, Align::Leading)
+    Font::new(size::CAPTION * scale, size::REGULAR, Align::Leading)
 }
 
 /// The y of the middle of the name's lowercase letters in a header: the dot
