@@ -21,6 +21,13 @@ pub const PREFIX: &str = "Nea:";
 /// Credential Manager rejects larger secrets (CRED_MAX_CREDENTIAL_BLOB_SIZE).
 const MAX_BLOB: usize = 5 * 512;
 
+/// Two threads that write at the same time can lose an entry, and an
+/// import writes on its own thread: every write and delete takes this.
+fn write_turn() -> std::sync::MutexGuard<'static, ()> {
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    TURN.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
 /// A password in memory. Its bytes are overwritten when it is dropped, and
 /// it never prints.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -218,7 +225,10 @@ impl Store {
             UserName: PWSTR(user.as_mut_ptr()),
             ..Default::default()
         };
-        let result = unsafe { CredWriteW(&credential, 0) };
+        let result = {
+            let _turn = write_turn();
+            unsafe { CredWriteW(&credential, 0) }
+        };
         wipe(&mut blob);
         result
     }
@@ -277,7 +287,11 @@ impl Store {
     /// True when the account is gone (also when it wasn't there).
     pub fn delete(&self, account: &Account) -> bool {
         let name = HSTRING::from(target(&self.prefix, &account.origin, &account.username));
-        match unsafe { CredDeleteW(&name, CRED_TYPE_GENERIC, None) } {
+        let deleted = {
+            let _turn = write_turn();
+            unsafe { CredDeleteW(&name, CRED_TYPE_GENERIC, None) }
+        };
+        match deleted {
             Ok(()) => true,
             Err(error) => not_found(&error),
         }

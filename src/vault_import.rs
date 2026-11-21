@@ -4,16 +4,22 @@
 //! keeps it locked), read, decrypted with the profile key and deleted, and
 //! each password goes straight into Credential Manager.
 
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
+};
 
 use windows::{
     Win32::{
-        Foundation::{HWND, POINT},
+        Foundation::{HWND, LPARAM, POINT, WPARAM},
         UI::{
             Controls::Dialogs::{OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW},
             WindowsAndMessaging::{
                 AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MB_ICONINFORMATION, MB_OK, MF_GRAYED,
-                MF_SEPARATOR, MF_STRING, MessageBoxW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+                MF_SEPARATOR, MF_STRING, MessageBoxW, PostMessageW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
             },
         },
     },
@@ -279,19 +285,42 @@ pub fn logins_from_csv(text: &str) -> Option<(Vec<Login>, usize)> {
 
 /// Saves what isn't saved yet. An account already in the store keeps its
 /// password: an import never overwrites. Returns (added, already there, failed).
+#[cfg(all(test, nea_tests))]
 pub fn import(store: &Store, logins: &[Login]) -> (usize, usize, usize) {
-    let (mut added, mut existing, mut failed) = (0, 0, 0);
-    for login in logins {
+    let imported = import_with(store, logins, &AtomicBool::new(false), |_| {});
+    (imported.added, imported.existing, imported.failed)
+}
+
+/// What `import_with` did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Imported {
+    pub added: usize,
+    pub existing: usize,
+    pub failed: usize,
+    /// Logins left out because `stop` was set.
+    pub left: usize,
+}
+
+/// `import`, one login at a time: `done(n)` after each, and it ends early
+/// (what is saved stays saved) when `stop` is set.
+pub fn import_with(store: &Store, logins: &[Login], stop: &AtomicBool, mut done: impl FnMut(usize)) -> Imported {
+    let mut imported = Imported::default();
+    for (n, login) in logins.iter().enumerate() {
+        if stop.load(Ordering::SeqCst) {
+            imported.left = logins.len() - n;
+            break;
+        }
         let account = vault::Account { origin: login.origin.clone(), username: login.username.clone() };
         if store.password(&account).is_some() {
-            existing += 1;
+            imported.existing += 1;
         } else if store.save(&login.origin, &login.username, login.password.expose()).is_ok() {
-            added += 1;
+            imported.added += 1;
         } else {
-            failed += 1;
+            imported.failed += 1;
         }
+        done(n + 1);
     }
-    (added, existing, failed)
+    imported
 }
 
 fn count(n: usize, one: &str, many: &str) -> String {
@@ -345,13 +374,21 @@ fn wide(text: &str) -> HSTRING {
     HSTRING::from(text)
 }
 
-/// "Importar…": a menu of the browsers found and a CSV file, then a message
-/// saying what came in. The menu opens at `at` (screen coordinates), or at
-/// the mouse. Modal: call it outside any borrow of the app state.
-pub fn run(owner: HWND, at: Option<POINT>) {
+/// Where an import reads from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Source {
+    Browser(Browser),
+    Csv(PathBuf),
+}
+
+/// "Import…": a menu of the browsers found and a CSV file (then the file
+/// dialog). The menu opens at `at` (screen coordinates), or at the mouse.
+/// Modal but short: call it outside any borrow of the app state, with the
+/// field already closed. Nothing is read here but the list of browsers.
+pub fn choose(owner: HWND, at: Option<POINT>) -> Option<Source> {
     let found = browsers();
     let chosen = unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return };
+        let menu = CreatePopupMenu().ok()?;
         for (i, browser) in found.iter().enumerate() {
             let _ = AppendMenuW(menu, MF_STRING, i + 1, &wide(&format!("From {}", browser.name)));
         }
@@ -370,43 +407,156 @@ pub fn run(owner: HWND, at: Option<POINT>) {
         let _ = DestroyMenu(menu);
         chosen
     };
-    let store = Store::default();
-    let text = match chosen {
-        0 => return,
-        MENU_CSV => {
-            let Some(path) = pick_csv(owner) else { return };
-            import_csv(&store, &path)
-        }
-        i => {
-            let Some(browser) = found.get(i - 1) else { return };
-            let outcome = read_browser(browser);
-            let (added, existing, failed) = import(&store, &outcome.logins);
-            report(std::slice::from_ref(&outcome), added, existing, failed)
-        }
-    };
-    unsafe {
-        MessageBoxW(Some(owner), &wide(&text), w!("Import passwords — Nea"), MB_OK | MB_ICONINFORMATION);
+    match chosen {
+        0 => None,
+        MENU_CSV => pick_csv(owner).map(Source::Csv),
+        i => found.get(i - 1).cloned().map(Source::Browser),
     }
 }
 
-fn import_csv(store: &Store, path: &Path) -> String {
-    let Ok(bytes) = std::fs::read(path) else { return "Cannot read the file.".to_string() };
+impl Source {
+    /// "Brave", "passwords.csv": what the progress line names.
+    pub fn name(&self) -> String {
+        match self {
+            Source::Browser(browser) => browser.name.to_string(),
+            Source::Csv(path) => {
+                path.file_name().map_or_else(|| "the file".to_string(), |n| n.to_string_lossy().into())
+            }
+        }
+    }
+}
+
+/// How far an import is: `total` is 0 while the source is still read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub name: String,
+    pub done: usize,
+    pub total: usize,
+}
+
+impl Progress {
+    /// The line the passwords panel shows while it runs.
+    pub fn line(&self) -> String {
+        if self.total == 0 {
+            format!("Reading the passwords of {}…", self.name)
+        } else {
+            format!("Importing from {}: {} of {}…", self.name, self.done, self.total)
+        }
+    }
+}
+
+/// Reads a source and saves what it holds: the slow part (each password
+/// written to Credential Manager takes about a fifth of a second), so it
+/// runs off the UI thread. `progress` hears of each step; `stop` ends it
+/// early. Returns what the person reads afterwards.
+pub fn import_from(store: &Store, source: &Source, stop: &AtomicBool, mut progress: impl FnMut(Progress)) -> String {
+    let name = source.name();
+    progress(Progress { name: name.clone(), done: 0, total: 0 });
+    let (logins, outcome, skipped) = match source {
+        Source::Csv(path) => match read_csv(path) {
+            Ok((logins, skipped)) => (logins, None, skipped),
+            Err(message) => return message,
+        },
+        Source::Browser(browser) => {
+            let mut outcome = read_browser(browser);
+            (std::mem::take(&mut outcome.logins), Some(outcome), 0)
+        }
+    };
+    let total = logins.len();
+    let imported = import_with(store, &logins, stop, |done| progress(Progress { name: name.clone(), done, total }));
+    let outcomes: Vec<Outcome> = outcome.into_iter().collect();
+    let mut message = report(&outcomes, imported.added, imported.existing, imported.failed);
+    if imported.left > 0 {
+        message = format!(
+            "Import stopped. {} not imported.\n\n{message}",
+            count(imported.left, "password was", "passwords were")
+        );
+    }
+    if skipped > 0 {
+        message.push_str(&format!("\n\nSkipped {} with no web address or no password.", count(skipped, "row", "rows")));
+    }
+    if matches!(source, Source::Csv(_)) {
+        message.push_str("\n\nDelete the CSV file. It keeps the passwords without encryption.");
+    }
+    message
+}
+
+static RUNNING: AtomicBool = AtomicBool::new(false);
+static STOP: AtomicBool = AtomicBool::new(false);
+static RESULT: Mutex<Option<String>> = Mutex::new(None);
+static PROGRESS: Mutex<Option<Progress>> = Mutex::new(None);
+
+/// Whether an import is under way.
+pub fn running() -> bool {
+    RUNNING.load(Ordering::SeqCst)
+}
+
+/// Asks the running import to stop after the password it is saving.
+pub fn stop() {
+    STOP.store(true, Ordering::SeqCst);
+}
+
+/// How far the running import is.
+pub fn progress() -> Option<Progress> {
+    PROGRESS.lock().ok().and_then(|p| p.clone()).filter(|_| running())
+}
+
+/// Runs `import_from` on a thread of its own. It posts `step` (message,
+/// wparam) to `owner` as it goes (`progress` has where it is) and `done`
+/// when it ends (`take_result` has the report). False when another import
+/// is still running.
+pub fn start(owner: HWND, store: Store, source: Source, step: (u32, usize), done: (u32, usize)) -> bool {
+    if RUNNING.swap(true, Ordering::SeqCst) {
+        return false;
+    }
+    STOP.store(false, Ordering::SeqCst);
+    let owner = owner.0 as isize;
+    let post = move |(message, wparam): (u32, usize)| unsafe {
+        let _ = PostMessageW(Some(HWND(owner as _)), message, WPARAM(wparam), LPARAM(0));
+    };
+    let spawned = std::thread::Builder::new().name("nea-import".to_string()).spawn(move || {
+        let text = import_from(&store, &source, &STOP, |now| {
+            if let Ok(mut progress) = PROGRESS.lock() {
+                *progress = Some(now);
+            }
+            post(step);
+        });
+        if let Ok(mut result) = RESULT.lock() {
+            *result = Some(text);
+        }
+        RUNNING.store(false, Ordering::SeqCst);
+        post(done);
+    });
+    if spawned.is_err() {
+        RUNNING.store(false, Ordering::SeqCst);
+    }
+    spawned.is_ok()
+}
+
+/// The report of the import that ended, once.
+pub fn take_result() -> Option<String> {
+    RESULT.lock().ok().and_then(|mut r| r.take())
+}
+
+/// Shows what an import did.
+pub fn show_result(owner: HWND, text: &str) {
+    unsafe {
+        MessageBoxW(Some(owner), &wide(text), w!("Import passwords — Nea"), MB_OK | MB_ICONINFORMATION);
+    }
+}
+
+/// The logins of a CSV file and how many rows were skipped, or what to say
+/// when it can't be used.
+fn read_csv(path: &Path) -> Result<(Vec<Login>, usize), String> {
+    let Ok(bytes) = std::fs::read(path) else { return Err("Cannot read the file.".to_string()) };
     let text = Secret::new(String::from_utf8(bytes).unwrap_or_else(|e| {
         let mut bytes = e.into_bytes();
         let lossy = String::from_utf8_lossy(&bytes).into_owned();
         vault::wipe(&mut bytes);
         lossy
     }));
-    let Some((logins, skipped)) = logins_from_csv(text.expose()) else {
-        return "The file is not a password export. It has no url and password columns.".to_string();
-    };
-    let (added, existing, failed) = import(store, &logins);
-    let mut message = report(&[], added, existing, failed);
-    if skipped > 0 {
-        message.push_str(&format!("\n\nSkipped {} with no web address or no password.", count(skipped, "row", "rows")));
-    }
-    message.push_str("\n\nDelete the CSV file. It keeps the passwords without encryption.");
-    message
+    logins_from_csv(text.expose())
+        .ok_or_else(|| "The file is not a password export. It has no url and password columns.".to_string())
 }
 
 /// The open dialog; comdlg32.dll is loaded only while it is shown.

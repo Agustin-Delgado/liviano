@@ -1,11 +1,22 @@
 //! Saved passwords in the app: what the page script reports turns
-//! into an offer to save after a login that worked, a menu of accounts when
-//! a login field is clicked, and the passwords panel (Ctrl+Alt+L) in the
-//! single field. Nothing is ever filled without the person choosing it.
+//! into an offer to save after a login that worked, a list of accounts
+//! under a login field that was clicked, and the passwords panel
+//! (Ctrl+Alt+L) in the single field. Nothing is ever filled without the
+//! person choosing it.
 //!
-//! Modal steps (the account menu, the Windows identity prompt, the import
-//! menu) never run inside the app's borrow: they are posted to the window
-//! and run from `on_deferred`, so engine events keep flowing meanwhile.
+//! The UI thread never waits on Credential Manager: a read can take a fifth
+//! of a second (the first one after a while, or after writes) and every
+//! write does. Reads, writes and deletes go to a worker thread
+//! (`vault_worker`) and come back as `Done`; an import runs on a thread of
+//! its own and reports its progress in the panel. The account names are
+//! kept in memory, so the list under a field opens at once; the passwords
+//! of that list are read ahead while it shows, so a choice fills at once.
+//!
+//! The account list never takes focus: the caret stays in the page, which
+//! hands it the arrow keys, Enter and Esc while it shows (`vault.js`).
+//! Modal steps (the Windows identity prompt, the import menu) never run
+//! inside the app's borrow: they are posted to the window and run from
+//! `on_deferred`, so engine events keep flowing meanwhile.
 
 use std::time::{Duration, Instant};
 
@@ -30,33 +41,34 @@ use windows::{
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
             Threading::{GetCurrentProcess, OpenProcessToken},
         },
-        UI::WindowsAndMessaging::{
-            AppendMenuW, CreatePopupMenu, DestroyMenu, KillTimer, MB_ICONWARNING, MB_OK, MF_GRAYED, MF_SEPARATOR,
-            MF_STRING, MessageBoxW, PostMessageW, SetTimer, TPM_LEFTALIGN, TPM_RETURNCMD, TPM_TOPALIGN, TrackPopupMenu,
-            WM_APP,
-        },
+        UI::WindowsAndMessaging::{KillTimer, MB_ICONWARNING, MB_OK, MessageBoxW, PostMessageW, SetTimer, WM_APP},
     },
     core::{BOOL, HSTRING, PCSTR, PCWSTR, PWSTR, w},
 };
 
 use super::{App, Mode, Row, panel_ui::Item, with_app};
 use crate::{
+    autofill::{self, Dropdown, Input, Menu},
     omnibox,
     panels::PanelKind,
     shortcuts::Command,
+    tabbar::Rect,
     tabs::Live,
     vault::{Account, Secret, Store, wipe},
     vault_bar::{Choice, VaultBar},
     vault_import,
-    vault_watch::{self, Message},
+    vault_watch::{self, MenuKey, Message},
+    vault_worker::Worker,
 };
 
-/// Posted to the main window; `wparam` says which modal step to run.
+/// Posted to the main window; `wparam` says which step to run.
 pub(super) const WM_APP_VAULT: u32 = WM_APP + 20;
-const DEFERRED_MENU: usize = 1;
+const DEFERRED_DONE: usize = 1;
 const DEFERRED_REVEAL: usize = 2;
 const DEFERRED_IMPORT: usize = 3;
 const DEFERRED_SAVE_FAILED: usize = 4;
+const DEFERRED_IMPORT_DONE: usize = 5;
+const DEFERRED_IMPORT_STEP: usize = 6;
 
 const TIMER_OFFER: usize = 31;
 const TIMER_CLIPBOARD: usize = 32;
@@ -66,7 +78,6 @@ const PENDING_FOR: Duration = Duration::from_secs(180);
 const OFFER_MS: u32 = 60_000;
 /// A copied password leaves the clipboard after this (if nothing replaced it).
 const CLIPBOARD_MS: u32 = 30_000;
-const MENU_MANAGE: usize = 1000;
 
 thread_local! {
     static CLIPBOARD_SEQUENCE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
@@ -87,20 +98,83 @@ struct Offer {
     password: Secret,
 }
 
-struct MenuRequest {
+/// What the worker thread did, back on the UI thread.
+enum Done {
+    /// Every account name, for the cache.
+    Names(Vec<Account>),
+    /// The passwords of a list's accounts (in its order), read ahead.
+    Secrets {
+        seq: u64,
+        secrets: Vec<Option<Secret>>,
+    },
+    /// The password saved for what was just sent, to word the offer.
+    OfferChecked {
+        pending: Pending,
+        saved: Option<Secret>,
+    },
+    Saved(bool),
+    Copied {
+        account: Account,
+        secret: Option<Secret>,
+    },
+    Revealed {
+        account: Account,
+        secret: Option<Secret>,
+    },
+    Deleted {
+        account: Account,
+        deleted: bool,
+        row: usize,
+    },
+}
+
+/// The account list under a login field, while it shows (or while a choice
+/// waits for its password).
+struct Autofill {
+    seq: u64,
     tab: u64,
     origin: String,
     accounts: Vec<Account>,
-    at: POINT,
+    menu: Menu,
+    /// The field's box on screen.
+    field: Rect,
+    /// Where the page's corner was on screen: the list goes when it moves.
+    corner: POINT,
+    /// The passwords, once the worker has read them (wiped when dropped).
+    secrets: Option<Vec<Option<Secret>>>,
+}
+
+/// A field clicked before the account names were in memory.
+struct Asked {
+    seq: u64,
+    tab: u64,
+    origin: String,
+    field: Rect,
+    corner: POINT,
+    typed: String,
 }
 
 #[derive(Default)]
 pub(super) struct Vault {
     store: Store,
+    worker: Option<Worker<Done>>,
+    /// Every account name (no password), refreshed after each change.
+    names: Option<Vec<Account>>,
+    /// The first read of the names is on its way.
+    names_asked: bool,
     pending: Option<Pending>,
     offer: Option<Offer>,
     bar: Option<VaultBar>,
-    menu: Option<MenuRequest>,
+    autofill: Option<Autofill>,
+    /// A chosen account whose password the worker had not read yet: filled
+    /// the moment it arrives.
+    choice: Option<(Autofill, usize)>,
+    asked: Option<Asked>,
+    dropdown: Option<Dropdown>,
+    /// Counts the field clicks: what comes back for an older one is dropped.
+    seq: u64,
+    /// Where the import menu opens: under the field it was chosen in.
+    import_at: Option<POINT>,
     reveal: Option<Account>,
 }
 
@@ -109,6 +183,8 @@ pub(super) struct Vault {
 #[derive(Default)]
 pub(super) struct PasswordPanel {
     accounts: Vec<Account>,
+    /// The names are being read for the first time.
+    loading: bool,
     confirm_delete: Option<Account>,
     shown: Option<(Account, Secret)>,
     notice: Option<String>,
@@ -131,6 +207,20 @@ fn user_label(username: &str) -> &str {
 /// "ana    ejemplo.com", the way a panel row reads.
 fn account_label(account: &Account) -> String {
     format!("{}    {}", user_label(&account.username), host_of(&account.origin))
+}
+
+/// The accounts of one origin among all the names, in store order.
+fn accounts_of(names: &[Account], origin: &str) -> Vec<Account> {
+    names.iter().filter(|a| a.origin == origin).cloned().collect()
+}
+
+/// A report of several paragraphs on one panel row.
+fn one_line(text: &str) -> String {
+    text.split('\n').map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join("  ")
+}
+
+fn on_dropdown(input: Input) {
+    with_app(|app| app.autofill_input(input));
 }
 
 fn on_bar_choice(choice: Choice) {
@@ -355,13 +445,32 @@ fn logon_is_current_user(user: &[u16], domain: &[u16], password: &[u16]) -> bool
     }
 }
 
-/// Runs a modal step posted by the app (see `WM_APP_VAULT`).
+/// Starts importing from `source` on a thread of its own (`main` is the
+/// main window) and opens the passwords panel, which shows how far it is
+/// and has the row that stops it.
+pub(crate) fn start_import(main: HWND, source: vault_import::Source) {
+    let Some(store) = with_app(|app| app.vault.store.clone()) else { return };
+    let started = vault_import::start(
+        main,
+        store,
+        source,
+        (WM_APP_VAULT, DEFERRED_IMPORT_STEP),
+        (WM_APP_VAULT, DEFERRED_IMPORT_DONE),
+    );
+    with_app(|app| {
+        app.run(Command::Passwords);
+        if !started {
+            app.vault_import_notice("Nea is already importing passwords".to_string());
+        }
+    });
+}
+
+/// Runs a step posted by the app or its threads (see `WM_APP_VAULT`).
 pub(super) fn on_deferred(hwnd: HWND, what: usize) {
+    let _doing = crate::diag::doing(&"vault:step", what as u64);
     match what {
-        DEFERRED_MENU => {
-            let Some(request) = with_app(|app| app.vault.menu.take()).flatten() else { return };
-            let chosen = account_menu(hwnd, &request);
-            with_app(|app| app.vault_menu_chosen(request, chosen));
+        DEFERRED_DONE => {
+            with_app(|app| app.vault_done());
         }
         DEFERRED_REVEAL => {
             let Some(account) = with_app(|app| app.vault.reveal.take()).flatten() else { return };
@@ -369,10 +478,23 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
             with_app(|app| app.vault_reveal(account, confirmed));
         }
         DEFERRED_IMPORT => {
-            // Under the field the panel is drawn in, not wherever the mouse is.
-            let at = with_app(|app| app.omnibar.menu_anchor());
-            vault_import::run(hwnd, at);
-            with_app(|app| app.vault_reload_panel());
+            let at = with_app(|app| app.vault.import_at.take()).flatten();
+            crate::diag::trace(|| "vault: import menu".to_string());
+            if let Some(source) = vault_import::choose(hwnd, at) {
+                crate::diag::trace(|| "vault: import chosen".to_string());
+                start_import(hwnd, source);
+                crate::diag::trace(|| "vault: import started".to_string());
+            }
+        }
+        DEFERRED_IMPORT_STEP => {
+            with_app(|app| app.vault_import_step());
+        }
+        DEFERRED_IMPORT_DONE => {
+            let Some(text) = vault_import::take_result() else { return };
+            let shown = with_app(|app| app.vault_import_done(&text)).unwrap_or(false);
+            if !shown {
+                vault_import::show_result(hwnd, &text);
+            }
         }
         DEFERRED_SAVE_FAILED => unsafe {
             MessageBoxW(
@@ -386,43 +508,111 @@ pub(super) fn on_deferred(hwnd: HWND, what: usize) {
     }
 }
 
-/// The accounts of the site, beside the field that was clicked.
-fn account_menu(hwnd: HWND, request: &MenuRequest) -> usize {
-    unsafe {
-        let Ok(menu) = CreatePopupMenu() else { return 0 };
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_GRAYED,
-            0,
-            &HSTRING::from(format!("Passwords for {}", host_of(&request.origin))),
-        );
-        for (i, account) in request.accounts.iter().enumerate() {
-            let _ = AppendMenuW(menu, MF_STRING, i + 1, &HSTRING::from(user_label(&account.username)));
-        }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_MANAGE, w!("Manage passwords…"));
-        let chosen = TrackPopupMenu(
-            menu,
-            TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-            request.at.x,
-            request.at.y,
-            None,
-            hwnd,
-            None,
-        )
-        .0 as usize;
-        let _ = DestroyMenu(menu);
-        chosen
-    }
-}
-
 impl App {
     /// A tab whose page may use saved passwords (a private tab may not).
     fn vault_tab(&self, tab: u64) -> bool {
         self.tabs.get(tab).is_some_and(|t| matches!(&t.live, Live::Ready(web) if web.passwords))
     }
 
+    /// Hands a Credential Manager job to the worker thread; its result
+    /// comes back to `vault_done`.
+    fn vault_job(&mut self, job: impl FnOnce(&Store) -> Done + Send + 'static) {
+        if self.vault.worker.is_none() {
+            let hwnd = self.hwnd.0 as isize;
+            self.vault.worker = Worker::new("nea-vault", move || post_deferred(HWND(hwnd as _), DEFERRED_DONE));
+        }
+        let store = self.vault.store.clone();
+        match &self.vault.worker {
+            Some(worker) => worker.run(move || job(&store)),
+            // No thread: the job runs here rather than not at all.
+            None => {
+                let done = job(&store);
+                self.vault_apply(done);
+            }
+        }
+    }
+
+    /// Reads every account name again (after a change, or the first time).
+    fn vault_refresh_names(&mut self) {
+        self.vault_job(|store| Done::Names(store.accounts(None)));
+    }
+
+    fn vault_done(&mut self) {
+        let results = self.vault.worker.as_ref().map(Worker::take).unwrap_or_default();
+        for done in results {
+            self.vault_apply(done);
+        }
+    }
+
+    fn vault_apply(&mut self, done: Done) {
+        match done {
+            Done::Names(names) => {
+                self.vault.names = Some(names.clone());
+                if let Some(asked) = self.vault.asked.take() {
+                    self.autofill_open(asked);
+                }
+                if let Some(panel) = &mut self.panels.passwords {
+                    panel.loading = false;
+                    panel.accounts = names;
+                    self.refresh_password_panel(None);
+                }
+            }
+            Done::Secrets { seq, secrets } => {
+                if let Some(autofill) = self.vault.autofill.as_mut().filter(|a| a.seq == seq) {
+                    autofill.secrets = Some(secrets);
+                } else if let Some((mut autofill, index)) = self.vault.choice.take().filter(|(a, _)| a.seq == seq) {
+                    autofill.secrets = Some(secrets);
+                    self.autofill_fill(&autofill, index);
+                }
+            }
+            Done::OfferChecked { pending, saved } => self.vault_offer(pending, saved),
+            Done::Saved(saved) => {
+                if !saved {
+                    post_deferred(self.hwnd, DEFERRED_SAVE_FAILED);
+                }
+            }
+            Done::Copied { account, secret } => {
+                let text = match secret {
+                    Some(secret) if copy_secret(self.hwnd, &secret) => format!(
+                        "Password of {} copied. Nea clears the clipboard in {} s",
+                        account_label(&account),
+                        CLIPBOARD_MS / 1000
+                    ),
+                    Some(_) => "Cannot use the clipboard".to_string(),
+                    None => "That password is not in Credential Manager now".to_string(),
+                };
+                self.panel_notice(text);
+                self.refresh_password_panel(Some(0));
+            }
+            Done::Revealed { account, secret } => {
+                if self.mode != Some(Mode::Panel(PanelKind::Passwords)) {
+                    return;
+                }
+                match secret {
+                    Some(secret) => {
+                        if let Some(panel) = &mut self.panels.passwords {
+                            panel.notice = None;
+                            panel.shown = Some((account, secret));
+                        }
+                    }
+                    None => self.panel_notice("That password is not in Credential Manager now".to_string()),
+                }
+                self.refresh_password_panel(Some(0));
+            }
+            Done::Deleted { account, deleted, row } => {
+                let text = if deleted {
+                    format!("Deleted the password of {}", account_label(&account))
+                } else {
+                    "Cannot delete it".to_string()
+                };
+                self.panel_notice(text);
+                self.refresh_password_panel(Some(row));
+            }
+        }
+    }
+
     pub(super) fn on_vault_message(&mut self, tab: u64, message: Message) {
+        let _doing = crate::diag::doing(&"vault:message", tab);
         if !self.vault_tab(tab) {
             return;
         }
@@ -433,36 +623,219 @@ impl App {
                 }
             }
             Message::Page { origin, has_password } => {
+                // A page that asks for a password: the names are read now,
+                // so a click on its field opens the list at once.
+                if has_password && self.vault.names.is_none() && !self.vault.names_asked {
+                    self.vault.names_asked = true;
+                    self.vault_refresh_names();
+                }
+                // And the list's window is made now, not on the click.
+                if has_password && self.vault.dropdown.is_none() {
+                    self.vault.dropdown = Dropdown::create(self.hwnd, on_dropdown).ok();
+                }
                 let Some(pending) = self.vault.pending.take_if(|p| p.tab == tab) else { return };
                 // The same site asking for a password again: the login failed.
                 let failed = has_password && origin == pending.origin;
                 if !failed && pending.at.elapsed() < PENDING_FOR {
-                    self.vault_offer(pending);
+                    self.vault_job(move |store| {
+                        let account = Account { origin: pending.origin.clone(), username: pending.username.clone() };
+                        let saved = store.password(&account);
+                        Done::OfferChecked { pending, saved }
+                    });
                 }
             }
-            Message::Field { origin, left, bottom } => {
-                if self.tabs.active != Some(tab) || self.vault.menu.is_some() || self.mode.is_some() {
+            Message::Field { origin, rect, typed } => {
+                crate::diag::trace(|| "vault: field message".to_string());
+                if self.tabs.active != Some(tab) || self.mode.is_some() {
                     return;
                 }
-                let accounts = self.vault.store.accounts(Some(&origin));
-                if accounts.is_empty() {
-                    return;
+                let corner = self.page_corner();
+                let field = Rect::new(corner.x + rect[0], corner.y + rect[1], corner.x + rect[2], corner.y + rect[3]);
+                self.vault.seq += 1;
+                let asked = Asked { seq: self.vault.seq, tab, origin, field, corner, typed };
+                if self.vault.names.is_some() {
+                    self.autofill_open(asked);
+                } else {
+                    // The first field of the session: the names come first.
+                    self.vault.asked = Some(asked);
+                    self.vault_refresh_names();
                 }
-                let content = self.layout.content;
-                let mut at = POINT { x: content.left + left, y: content.top + bottom };
-                unsafe {
-                    let _ = ClientToScreen(self.hwnd, &mut at);
+            }
+            Message::Key(key) => self.autofill_key(tab, key),
+            Message::Typed(typed) => {
+                let Some(autofill) = self.vault.autofill.as_mut().filter(|a| a.tab == tab) else { return };
+                if autofill.menu.filter(&typed) {
+                    self.autofill_draw();
+                } else {
+                    self.autofill_close();
                 }
-                self.vault.menu = Some(MenuRequest { tab, origin, accounts, at });
-                post_deferred(self.hwnd, DEFERRED_MENU);
+            }
+            Message::Dismiss => {
+                if self.vault.autofill.as_ref().is_none_or(|a| a.tab == tab) {
+                    self.autofill_close();
+                }
             }
         }
     }
 
+    // ---------- the account list under a login field ----------
+
+    /// The page's top left corner on screen.
+    fn page_corner(&self) -> POINT {
+        let content = self.layout.content;
+        let mut corner = POINT { x: content.left, y: content.top };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut corner);
+        }
+        corner
+    }
+
+    fn autofill_open(&mut self, asked: Asked) {
+        if asked.seq != self.vault.seq || self.tabs.active != Some(asked.tab) || self.mode.is_some() {
+            return;
+        }
+        let accounts = accounts_of(self.vault.names.as_deref().unwrap_or_default(), &asked.origin);
+        let names = accounts.iter().map(|a| a.username.clone()).collect();
+        let Some(menu) = Menu::new(names, &asked.typed) else {
+            self.autofill_close();
+            return;
+        };
+        let wanted = accounts.clone();
+        let seq = asked.seq;
+        self.vault.autofill = Some(Autofill {
+            seq,
+            tab: asked.tab,
+            origin: asked.origin,
+            accounts,
+            menu,
+            field: asked.field,
+            corner: asked.corner,
+            secrets: None,
+        });
+        if self.vault.dropdown.is_none() {
+            self.vault.dropdown = Dropdown::create(self.hwnd, on_dropdown).ok();
+        }
+        self.autofill_draw();
+        crate::diag::trace(|| "vault: list shown".to_string());
+        // Read ahead: a choice then fills without waiting on Credential Manager.
+        self.vault_job(move |store| Done::Secrets {
+            seq,
+            secrets: wanted.iter().map(|account| store.password(account)).collect(),
+        });
+    }
+
+    /// Draws the list as the model says and tells the page what it shows.
+    fn autofill_draw(&self) {
+        let (Some(autofill), Some(dropdown)) = (&self.vault.autofill, &self.vault.dropdown) else { return };
+        let header = format!("Passwords for {}", host_of(&autofill.origin));
+        dropdown.show(&autofill.menu, &header, autofill.field, &self.palette, self.scale);
+        self.autofill_tell_page(autofill.tab, true, autofill.menu.picked().is_some());
+    }
+
+    fn autofill_tell_page(&self, tab: u64, open: bool, picked: bool) {
+        if let Some(Live::Ready(web)) = self.tabs.get(tab).map(|t| &t.live) {
+            vault_watch::set_menu(&web.webview, open, picked);
+        }
+    }
+
+    /// Closes the list (if it shows) and forgets a lookup on its way.
+    pub(super) fn autofill_close(&mut self) {
+        self.vault.seq += 1;
+        self.vault.asked = None;
+        let Some(autofill) = self.vault.autofill.take() else { return };
+        if let Some(dropdown) = &self.vault.dropdown {
+            dropdown.hide();
+        }
+        self.autofill_tell_page(autofill.tab, false, false);
+    }
+
+    /// The list goes when its page is no longer where it was: another tab,
+    /// the window moved or resized, the page moved in it.
+    pub(super) fn autofill_follow(&mut self) {
+        let Some(autofill) = &self.vault.autofill else { return };
+        let corner = self.page_corner();
+        if self.tabs.active != Some(autofill.tab) || (corner.x, corner.y) != (autofill.corner.x, autofill.corner.y) {
+            self.autofill_close();
+        }
+    }
+
+    fn autofill_input(&mut self, input: Input) {
+        match input {
+            Input::Click(row) => self.autofill_choose(row),
+            Input::Wheel(lines) => {
+                if let Some(autofill) = &mut self.vault.autofill {
+                    autofill.menu.scroll(lines);
+                    self.autofill_draw();
+                }
+            }
+        }
+    }
+
+    fn autofill_key(&mut self, tab: u64, key: MenuKey) {
+        let Some(autofill) = self.vault.autofill.as_mut().filter(|a| a.tab == tab) else { return };
+        match key {
+            MenuKey::Down | MenuKey::Up => {
+                autofill.menu.step(key == MenuKey::Down);
+                self.autofill_draw();
+            }
+            MenuKey::Enter => {
+                if let Some(row) = autofill.menu.picked() {
+                    self.autofill_choose(row);
+                }
+            }
+            MenuKey::Escape => self.autofill_close(),
+        }
+    }
+
+    /// A row was chosen (clicked, or Enter): the form is filled first, the
+    /// list's fade after.
+    fn autofill_choose(&mut self, row: usize) {
+        let Some(autofill) = self.vault.autofill.take() else { return };
+        crate::diag::trace(|| format!("vault: chosen {row}"));
+        let chosen = autofill.menu.rows().get(row).copied();
+        let tab = autofill.tab;
+        match chosen {
+            Some(autofill::Row::Account(index)) if autofill.secrets.is_some() => self.autofill_fill(&autofill, index),
+            // Chosen before the read ahead came back: it fills on arrival.
+            Some(autofill::Row::Account(index)) => self.vault.choice = Some((autofill, index)),
+            Some(autofill::Row::Manage) => {}
+            None => {
+                self.vault.autofill = Some(autofill);
+                return;
+            }
+        }
+        if let Some(dropdown) = &self.vault.dropdown {
+            dropdown.hide();
+        }
+        self.autofill_tell_page(tab, false, false);
+        if chosen == Some(autofill::Row::Manage) {
+            self.run(Command::Passwords);
+        }
+    }
+
+    fn autofill_fill(&self, autofill: &Autofill, index: usize) {
+        let (Some(account), Some(Some(password))) =
+            (autofill.accounts.get(index), autofill.secrets.as_ref().and_then(|s| s.get(index)))
+        else {
+            return;
+        };
+        if self.tabs.active != Some(autofill.tab) {
+            return;
+        }
+        let Some(tab) = self.tabs.get(autofill.tab) else { return };
+        if let Live::Ready(web) = &tab.live {
+            // The page may have moved on while the list was open.
+            if crate::vault::origin_of(&web.source()).as_deref() == Some(autofill.origin.as_str()) {
+                vault_watch::fill(&web.webview, &autofill.origin, &account.username, password);
+                crate::diag::trace(|| "vault: fill sent".to_string());
+            }
+        }
+    }
+
+    // ---------- the offer to save ----------
+
     /// Offers to save (or update) what was sent, unless it is saved already.
-    fn vault_offer(&mut self, pending: Pending) {
-        let account = Account { origin: pending.origin.clone(), username: pending.username.clone() };
-        let saved = self.vault.store.password(&account);
+    fn vault_offer(&mut self, pending: Pending, saved: Option<Secret>) {
         if saved.as_ref() == Some(&pending.password) {
             return;
         }
@@ -520,9 +893,10 @@ impl App {
         let Some(offer) = self.vault.offer.take() else { return };
         match choice {
             Choice::Save => {
-                if self.vault.store.save(&offer.origin, &offer.username, offer.password.expose()).is_err() {
-                    post_deferred(self.hwnd, DEFERRED_SAVE_FAILED);
-                }
+                self.vault_job(move |store| {
+                    Done::Saved(store.save(&offer.origin, &offer.username, offer.password.expose()).is_ok())
+                });
+                self.vault_refresh_names();
             }
             Choice::Never => {
                 self.settings.passwords_never.insert(offer.origin);
@@ -534,39 +908,23 @@ impl App {
         self.focus_page();
     }
 
-    fn vault_menu_chosen(&mut self, request: MenuRequest, chosen: usize) {
-        if chosen == MENU_MANAGE {
-            self.run(Command::Passwords);
-            return;
-        }
-        let Some(account) = chosen.checked_sub(1).and_then(|i| request.accounts.get(i)) else {
-            self.focus_page();
-            return;
-        };
-        if self.tabs.active != Some(request.tab) {
-            return;
-        }
-        let Some(password) = self.vault.store.password(account) else { return };
-        self.focus_page();
-        let Some(tab) = self.tabs.get(request.tab) else { return };
-        if let Live::Ready(web) = &tab.live {
-            // The page may have moved on while the menu was open.
-            if crate::vault::origin_of(&web.source()).as_deref() == Some(request.origin.as_str()) {
-                vault_watch::fill(&web.webview, &request.origin, &account.username, &password);
-            }
-        }
-    }
-
     // ---------- the passwords panel ----------
 
+    /// Opens with the names in memory (read again behind it): no wait.
     pub(super) fn password_panel_load(&mut self) -> PasswordPanel {
-        PasswordPanel { accounts: self.vault.store.accounts(None), ..Default::default() }
+        let names = self.vault.names.clone();
+        self.vault_refresh_names();
+        PasswordPanel { loading: names.is_none(), accounts: names.unwrap_or_default(), ..Default::default() }
     }
 
     pub(super) fn password_rows(&self, query: &str) -> Vec<(String, Row)> {
         let mut rows = Vec::new();
         let Some(panel) = &self.panels.passwords else { return rows };
         let info = |text: String| (text, Row::Info);
+        let importing = vault_import::progress();
+        if let Some(progress) = &importing {
+            rows.push(info(progress.line()));
+        }
         if let Some((account, secret)) = &panel.shown {
             rows.push(info(format!("{}: {}    hidden when the panel closes", account_label(account), secret.expose())));
         } else if let Some(notice) = &panel.notice {
@@ -577,7 +935,9 @@ impl App {
             .iter()
             .filter(|a| crate::panels::matches(query, &[&a.username, host_of(&a.origin)]))
             .collect();
-        if panel.accounts.is_empty() {
+        if panel.loading {
+            rows.push(info("Reading the saved passwords…".to_string()));
+        } else if panel.accounts.is_empty() {
             rows.push(info("No saved passwords yet. Nea offers to save a password when you sign in.".to_string()));
         } else if found.is_empty() {
             rows.push(info("No results".to_string()));
@@ -598,7 +958,9 @@ impl App {
                     )
                 }),
         );
-        rows.push(("Import passwords from another browser or a CSV…".to_string(), Row::Panel(Item::ImportPasswords)));
+        let import =
+            if importing.is_some() { "Stop the import" } else { "Import passwords from another browser or a CSV…" };
+        rows.push((import.to_string(), Row::Panel(Item::ImportPasswords)));
         rows
     }
 
@@ -616,19 +978,24 @@ impl App {
                 post_deferred(self.hwnd, DEFERRED_REVEAL);
             }
             Item::Account(account) => {
-                let text = match self.vault.store.password(&account) {
-                    Some(secret) if copy_secret(self.hwnd, &secret) => format!(
-                        "Password of {} copied. Nea clears the clipboard in {} s",
-                        account_label(&account),
-                        CLIPBOARD_MS / 1000
-                    ),
-                    Some(_) => "Cannot use the clipboard".to_string(),
-                    None => "That password is not in Credential Manager now".to_string(),
-                };
-                self.panel_notice(text);
-                self.refresh_password_panel(Some(0));
+                self.vault_job(move |store| {
+                    let secret = store.password(&account);
+                    Done::Copied { account, secret }
+                });
             }
-            Item::ImportPasswords => post_deferred(self.hwnd, DEFERRED_IMPORT),
+            Item::ImportPasswords if vault_import::running() => {
+                vault_import::stop();
+                self.panel_notice("Stopping the import after the password it is saving…".to_string());
+                self.refresh_password_panel(None);
+            }
+            Item::ImportPasswords => {
+                crate::diag::trace(|| "vault: import row".to_string());
+                // The field closes first: the menu and the file dialog never
+                // fight it for the keyboard.
+                self.vault.import_at = Some(self.omnibar.menu_anchor());
+                self.close_omnibar();
+                post_deferred(self.hwnd, DEFERRED_IMPORT);
+            }
             _ => {}
         }
     }
@@ -640,24 +1007,30 @@ impl App {
             Item::Account(account) => {
                 let confirmed =
                     self.panels.passwords.as_ref().is_some_and(|p| p.confirm_delete.as_ref() == Some(&account));
-                let text = if confirmed {
-                    if self.vault.store.delete(&account) {
-                        format!("Deleted the password of {}", account_label(&account))
-                    } else {
-                        "Cannot delete it".to_string()
+                if confirmed {
+                    // Off the list at once; the worker deletes it and says so.
+                    if let Some(panel) = &mut self.panels.passwords {
+                        panel.confirm_delete = None;
+                        panel.accounts.retain(|a| *a != account);
                     }
-                } else {
-                    format!("Press Delete again to delete the password of {} · Esc cancels", account_label(&account))
-                };
-                let accounts = confirmed.then(|| self.vault.store.accounts(None));
+                    if let Some(names) = &mut self.vault.names {
+                        names.retain(|a| *a != account);
+                    }
+                    self.vault_job(move |store| {
+                        let deleted = store.delete(&account);
+                        Done::Deleted { account, deleted, row }
+                    });
+                    self.vault_refresh_names();
+                    self.refresh_password_panel(Some(row));
+                    return;
+                }
+                let text =
+                    format!("Press Delete again to delete the password of {} · Esc cancels", account_label(&account));
                 self.panel_notice(text);
                 if let Some(panel) = &mut self.panels.passwords {
-                    panel.confirm_delete = (!confirmed).then_some(account);
-                    if let Some(accounts) = accounts {
-                        panel.accounts = accounts;
-                    }
+                    panel.confirm_delete = Some(account);
                 }
-                self.refresh_password_panel(Some(if confirmed { row } else { 0 }));
+                self.refresh_password_panel(Some(0));
             }
             Item::NeverSite(origin) => {
                 self.settings.passwords_never.remove(&origin);
@@ -674,34 +1047,46 @@ impl App {
         if self.mode != Some(Mode::Panel(PanelKind::Passwords)) {
             return;
         }
-        let secret = if confirmed { self.vault.store.password(&account) } else { None };
-        match secret {
-            Some(secret) => {
-                if let Some(panel) = &mut self.panels.passwords {
-                    panel.notice = None;
-                    panel.shown = Some((account, secret));
-                }
-            }
-            None if confirmed => self.panel_notice("That password is not in Credential Manager now".to_string()),
-            None => self.panel_notice(
+        if confirmed {
+            self.vault_job(move |store| {
+                let secret = store.password(&account);
+                Done::Revealed { account, secret }
+            });
+        } else {
+            self.panel_notice(
                 "Windows did not confirm your identity. The password stays hidden (Enter copies it)".to_string(),
-            ),
+            );
+            self.refresh_password_panel(Some(0));
         }
-        self.refresh_password_panel(Some(0));
         self.restore_focus();
     }
 
-    /// After an import: the open panel lists what came in.
-    fn vault_reload_panel(&mut self) {
+    // ---------- importing ----------
+
+    fn vault_import_notice(&mut self, text: String) {
+        self.panel_notice(text);
+        if self.mode == Some(Mode::Panel(PanelKind::Passwords)) {
+            self.refresh_password_panel(None);
+        }
+    }
+
+    /// The import moved on: the panel's first row says how far.
+    fn vault_import_step(&mut self) {
+        if self.mode == Some(Mode::Panel(PanelKind::Passwords)) {
+            self.refresh_password_panel(None);
+        }
+    }
+
+    /// The import ended: the names are read again and the panel, when it is
+    /// open, says what came in. False when it is not (a message says it).
+    fn vault_import_done(&mut self, text: &str) -> bool {
+        self.vault_refresh_names();
         if self.mode != Some(Mode::Panel(PanelKind::Passwords)) {
-            return;
+            return false;
         }
-        let accounts = self.vault.store.accounts(None);
-        if let Some(panel) = &mut self.panels.passwords {
-            panel.accounts = accounts;
-        }
+        self.panel_notice(one_line(text));
         self.refresh_password_panel(None);
-        self.restore_focus();
+        true
     }
 
     fn refresh_password_panel(&mut self, keep: Option<usize>) {

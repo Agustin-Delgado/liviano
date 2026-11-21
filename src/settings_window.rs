@@ -1497,7 +1497,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 _ => {}
             }
             if with_state(|st| std::mem::take(&mut st.status_after_import)) == Some(true) {
-                crate::vault_import::run(hwnd, None);
+                // The menu belongs to this window; the import itself runs
+                // in the main window, which shows how far it is.
+                if let Some(source) = crate::vault_import::choose(hwnd, None)
+                    && let Ok(main) = unsafe { GetWindow(hwnd, GW_OWNER) }
+                {
+                    crate::app::start_import(main, source);
+                }
             }
             if let Some((vertical, collapsed)) = layout {
                 emit_layout(vertical, collapsed);
