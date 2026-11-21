@@ -1,6 +1,6 @@
 //! The window's own frame: no title bar, the tab strip in its place and the
-//! three window buttons drawn here, at the strip's left end as macOS puts
-//! its traffic lights. This is the geometry (where the buttons and the
+//! three window buttons drawn here: Windows' own glyphs, smaller, at the
+//! strip's left end. This is the geometry (where the buttons and the
 //! caption are, and what the pointer is over: tested) and how the buttons
 //! are drawn.
 
@@ -18,17 +18,19 @@ pub enum WindowButton {
 }
 
 impl WindowButton {
-    /// Left to right, as macOS orders them: close, minimize, zoom.
-    pub const ALL: [WindowButton; 3] = [WindowButton::Close, WindowButton::Minimize, WindowButton::Maximize];
+    /// Left to right, in Windows' order.
+    pub const ALL: [WindowButton; 3] = [WindowButton::Minimize, WindowButton::Maximize, WindowButton::Close];
 }
 
-/// Width each button answers to: the 12 px light with 4 px either side, so
-/// the three touch and a near miss still lands on one.
-pub const BUTTON_W: i32 = 20;
-/// The light itself (macOS draws its traffic lights 12 px across).
-const LIGHT: f32 = 12.0;
+/// Width each button answers to: Windows 11's are 46, these 30.
+pub const BUTTON_W: i32 = 30;
+/// The ground a button wears under the pointer, centred in its area.
+const GROUND_W: f32 = 26.0;
+const GROUND_H: f32 = 24.0;
+/// The glyphs' box: Windows draws 10 px, these 9.
+const GLYPH: f32 = 9.0;
 /// From the window's left edge to the first button's area.
-pub const LEAD: i32 = 8;
+pub const LEAD: i32 = 4;
 /// Height of the caption row when the tabs are hidden (collapsed column).
 pub const ROW: i32 = 32;
 /// The band along the top edge that resizes the window while it is not
@@ -42,7 +44,7 @@ const CORNER: i32 = 16;
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Frame {
     pub caption: Rect,
-    /// Close, minimize and maximize, left to right.
+    /// Minimize, maximize and close, left to right.
     pub buttons: [Rect; 3],
 }
 
@@ -127,26 +129,15 @@ pub fn client_top(window_top: i32, maximized: bool, frame: i32) -> i32 {
     if maximized { window_top + frame } else { window_top }
 }
 
-/// One traffic light: its fill, its rim and the glyph that shows on it
-/// while the pointer is over the three (macOS's own colours).
-struct Light {
-    fill: Rgb,
-    rim: Rgb,
-    glyph: Rgb,
-}
+/// Windows' red under the close button, and its ink there.
+const CLOSE_HOVER: Rgb = Rgb(0xC4, 0x2B, 0x1C);
+const CLOSE_PRESSED: Rgb = Rgb(0xC8, 0x40, 0x31);
+const CLOSE_INK: Rgb = Rgb(0xFF, 0xFF, 0xFF);
 
-fn light(button: WindowButton) -> Light {
-    match button {
-        WindowButton::Close => Light { fill: Rgb(0xFF, 0x5F, 0x57), rim: Rgb(0xE2, 0x46, 0x3F), glyph: Rgb(0x4D, 0x00, 0x00) },
-        WindowButton::Minimize => Light { fill: Rgb(0xFE, 0xBC, 0x2E), rim: Rgb(0xE1, 0xA1, 0x16), glyph: Rgb(0x99, 0x57, 0x00) },
-        WindowButton::Maximize => Light { fill: Rgb(0x28, 0xC8, 0x40), rim: Rgb(0x14, 0xAE, 0x2E), glyph: Rgb(0x00, 0x65, 0x00) },
-    }
-}
-
-/// Draws the three lights. `hover` gives each one's fade (0..1): over any
-/// of them all three show their glyphs, as on macOS. In a window that is
-/// not the active one they go grey, and get their colour back under the
-/// pointer.
+/// Draws the three buttons: thin glyphs on nothing, a soft rounded ground
+/// under the pointer (red under close, as Windows does). `hover` gives each
+/// one's fade (0..1). In a window that is not the active one the glyphs go
+/// quieter.
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
     g: &Painter,
@@ -158,57 +149,61 @@ pub fn paint(
     pressed: Option<WindowButton>,
     hover: impl Fn(WindowButton) -> f32,
 ) {
-    let over = WindowButton::ALL.iter().map(|b| hover(*b)).fold(0.0f32, f32::max);
-    let colour = if active { 1.0 } else { over };
-    let (idle_fill, idle_rim) = if pal.dark { (Rgb::grey(0x4A), Rgb::grey(0x40)) } else { (Rgb::grey(0xD6), Rgb::grey(0xC6)) };
+    let rest = if active { pal.ink_muted } else { pal.ink_asleep };
+    let radius = crate::design::size::RADIUS_CONTROL * scale;
     for button in WindowButton::ALL {
         let area: RectF = frame.rect_of(button).into();
         if area.width() <= 0.0 {
             continue;
         }
+        let over = hover(button);
+        let down = pressed == Some(button) && over > 0.0;
         let (cx, cy) = area.center();
-        let r = LIGHT * scale / 2.0;
-        let disc = RectF::new(cx - r, cy - r, cx + r, cy + r);
-        let l = light(button);
-        let mut fill = idle_fill.mix(l.fill, colour);
-        if pressed == Some(button) && hover(button) > 0.0 {
-            fill = fill.mix(Rgb::grey(0x00), 0.2);
-        }
-        g.round(disc, r, idle_rim.mix(l.rim, colour));
-        let rim = 0.5 * scale.max(1.0);
-        g.round(disc.inset(rim, rim), r - rim, fill);
+        let (hw, hh) = (GROUND_W * scale / 2.0, GROUND_H * scale / 2.0);
+        let ground = RectF::new(cx - hw, cy - hh, cx + hw, cy + hh);
+        let (fill, lit) = match (button, down) {
+            (WindowButton::Close, false) => (CLOSE_HOVER, CLOSE_INK),
+            (WindowButton::Close, true) => (CLOSE_PRESSED, CLOSE_INK),
+            (_, false) => (pal.tab_hover, pal.ink),
+            (_, true) => (pal.pin_live, pal.ink),
+        };
         if over > 0.0 {
-            draw_glyph(g, (cx, cy), button, maximized, Color::from(l.glyph).with_alpha(over), scale);
+            g.round(ground, radius, Color::from(fill).with_alpha(over));
+        }
+        draw_glyph(g, (cx, cy), button, maximized, Color::from(rest.mix(lit, over)), scale);
+    }
+}
+
+/// Windows' glyphs, hairline: a dash, a square (two offset ones once
+/// maximized) and a cross.
+fn draw_glyph(g: &Painter, (cx, cy): (f32, f32), button: WindowButton, maximized: bool, ink: Color, scale: f32) {
+    let w = scale.max(1.0);
+    let h = (GLYPH * scale / 2.0).round();
+    // Hairlines on pixel centres stay crisp.
+    let (cx, cy) = (cx.floor() + 0.5, cy.floor() + 0.5);
+    match button {
+        WindowButton::Minimize => g.line((cx - h, cy), (cx + h, cy), w, ink),
+        WindowButton::Maximize if maximized => {
+            let o = (2.0 * scale).round();
+            // The window behind: only its top and right edges show.
+            g.line((cx - h + o, cy - h + o), (cx - h + o, cy - h), w, ink);
+            g.line((cx - h + o, cy - h), (cx + h, cy - h), w, ink);
+            g.line((cx + h, cy - h), (cx + h, cy + h - o), w, ink);
+            g.line((cx + h, cy + h - o), (cx + h - o, cy + h - o), w, ink);
+            stroke_box(g, RectF::new(cx - h, cy - h + o, cx + h - o, cy + h), w, ink);
+        }
+        WindowButton::Maximize => stroke_box(g, RectF::new(cx - h, cy - h, cx + h, cy + h), w, ink),
+        WindowButton::Close => {
+            g.line((cx - h, cy - h), (cx + h, cy + h), w, ink);
+            g.line((cx - h, cy + h), (cx + h, cy - h), w, ink);
         }
     }
 }
 
-/// The glyph a light shows under the pointer: a cross, a dash, and two
-/// arrowheads pointing out (maximize) or in (restore).
-fn draw_glyph(g: &Painter, (cx, cy): (f32, f32), button: WindowButton, maximized: bool, ink: Color, scale: f32) {
-    let s = |v: f32| v * scale;
-    let w = s(1.1);
-    match button {
-        WindowButton::Close => {
-            let a = s(2.5);
-            g.line((cx - a, cy - a), (cx + a, cy + a), w, ink);
-            g.line((cx - a, cy + a), (cx + a, cy - a), w, ink);
-        }
-        WindowButton::Minimize => g.line((cx - s(3.0), cy), (cx + s(3.0), cy), w, ink),
-        WindowButton::Maximize => {
-            // Two right triangles on the diagonal, their square corners
-            // away from the centre to grow and toward it to shrink back.
-            let leg = s(3.6);
-            if maximized {
-                let n = s(0.7);
-                g.polygon(&[(cx - n, cy - n), (cx - n - leg, cy - n), (cx - n, cy - n - leg)], ink);
-                g.polygon(&[(cx + n, cy + n), (cx + n + leg, cy + n), (cx + n, cy + n + leg)], ink);
-            } else {
-                let f = s(3.4);
-                g.polygon(&[(cx - f, cy - f), (cx - f + leg, cy - f), (cx - f, cy - f + leg)], ink);
-                g.polygon(&[(cx + f, cy + f), (cx + f - leg, cy + f), (cx + f, cy + f - leg)], ink);
-            }
-        }
-    }
+fn stroke_box(g: &Painter, r: RectF, w: f32, ink: Color) {
+    g.line((r.left, r.top), (r.right, r.top), w, ink);
+    g.line((r.right, r.top), (r.right, r.bottom), w, ink);
+    g.line((r.right, r.bottom), (r.left, r.bottom), w, ink);
+    g.line((r.left, r.bottom), (r.left, r.top), w, ink);
 }
 

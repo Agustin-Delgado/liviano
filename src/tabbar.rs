@@ -580,7 +580,7 @@ pub struct Paint<'a> {
     pub maximized: bool,
     /// A window button held down.
     pub pressed: Option<WindowButton>,
-    /// The window is the active one: its lights wear their colours.
+    /// The window is the active one: its buttons wear their full ink.
     pub window_active: bool,
     /// Which of back, forward and reload can act.
     pub nav: NavState,

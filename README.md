@@ -41,18 +41,15 @@ entrada. En reposo no hay timer: 0 % de CPU. Si Windows tiene las
 animaciones apagadas, todo llega de una.
 
 No hay barra de título: las pestañas ocupan su lugar y los botones de la
-ventana son tres semáforos de 12 px, como en macOS, al principio de la fila:
-cerrar (rojo), minimizar (amarillo) y maximizar (verde). Con las pestañas
-arriba van antes de las pestañas; al costado, arriba a la izquierda de la
-columna; ocultas, a la izquierda de la fila de la ventana. Su glifo aparece al
-pasar el puntero por cualquiera de los tres, y con la ventana inactiva se ven
-grises. El espacio libre de la fila mueve la ventana, con doble clic la
-maximiza y con clic derecho abre el menú de la ventana; pasar el mouse por
-el verde muestra los diseños de ajuste de Windows 11. La sombra, los bordes
-para cambiar el tamaño (también el de arriba) y las esquinas siguen siendo
-los de Windows.
+ventana son los de Windows en chico, al principio de la fila: minimizar,
+maximizar y cerrar, con glifos finos de 9 px en zonas de 30 px (los de
+Windows 11 miden 46). Con las pestañas arriba van antes de las pestañas; al
+costado, arriba a la izquierda de la columna; ocultas, a la izquierda de la
+fila de la ventana. Al pasar el puntero se les pone un fondo suave, rojo bajo
+cerrar, y con la ventana inactiva sus glifos se apagan. Sobre maximizar
+aparecen los diseños de ajuste de Windows.
 
-Al lado de los semáforos están **Atrás, Adelante y Recargar** (al costado, a la
+Al lado de esos botones están **Atrás, Adelante y Recargar** (al costado, a la
 derecha de esa misma fila, como en Arc). Siguen a la pestaña activa: una
 flecha sin adónde ir se ve apagada y no responde. Clic derecho, o mantener
 apretada una flecha, abre el historial de la pestaña hacia ese lado (hasta
@@ -81,7 +78,7 @@ queda).
 |---|---|
 | ![Pestañas arriba, tema claro](docs/capturas/tira-arriba-claro.png) | ![Pestañas arriba, tema oscuro](docs/capturas/tira-arriba-oscuro.png) |
 | ![Pestañas al costado, tema claro](docs/capturas/tira-costado-claro.png) | ![Pestañas al costado, tema oscuro](docs/capturas/tira-costado-oscuro.png) |
-| ![Semáforos con el puntero encima](docs/capturas/tira-arriba-claro-semaforo.png) | ![Semáforos al costado, tema oscuro](docs/capturas/tira-costado-oscuro-semaforo.png) |
+| ![Botones de la ventana con el puntero encima](docs/capturas/tira-arriba-claro-botones.png) | ![Botones de la ventana al costado, tema oscuro](docs/capturas/tira-costado-oscuro-botones.png) |
 | ![El engranaje con su tooltip](docs/capturas/engranaje-claro.png) | ![El engranaje con su tooltip, tema oscuro](docs/capturas/engranaje-oscuro.png) |
 | ![Campo único abierto](docs/capturas/campo-claro.png) | ![Campo único, tema oscuro](docs/capturas/campo-oscuro.png) |
 | ![Ajustes, tema claro](docs/capturas/ajustes-claro.png) | ![Ajustes, tema oscuro](docs/capturas/ajustes-oscuro.png) |

@@ -603,7 +603,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_NCACTIVATE => {
             // Keep the title bar looking active while our own popup has focus.
             let omnibar_open = with_app(|app| app.mode.is_some()).unwrap_or(false);
-            // The traffic lights go grey in a window in the background.
+            // The window buttons go quieter in a window in the background.
             with_app(|app| app.set_window_active(wparam.0 != 0 || omnibar_open));
             if omnibar_open && wparam.0 == 0 {
                 return unsafe { DefWindowProcW(hwnd, msg, WPARAM(1), lparam) };

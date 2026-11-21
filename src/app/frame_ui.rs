@@ -47,7 +47,7 @@ pub(super) struct FrameUi {
     pub(super) pressed: Option<WindowButton>,
     /// Leaving the non-client maximize button is being watched.
     nc_tracking: bool,
-    /// The window is in the background (its lights go grey).
+    /// The window is in the background (its buttons go quieter).
     pub(super) inactive: bool,
 }
 
