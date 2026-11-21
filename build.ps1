@@ -148,7 +148,8 @@ if ($UpdateKey) {
 $sums = Get-ChildItem $OutDir -File | Where-Object { $_.Name -ne 'SHA256SUMS.txt' } | Sort-Object Name | ForEach-Object {
     '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
 }
-[System.IO.File]::WriteAllLines((Join-Path (Resolve-Path $OutDir) 'SHA256SUMS.txt'), [string[]]$sums)
+# LF line ends, so that `sha256sum -c` also reads the file.
+[System.IO.File]::WriteAllText((Join-Path (Resolve-Path $OutDir) 'SHA256SUMS.txt'), (([string[]]$sums -join "`n") + "`n"))
 
 Write-Host "== Done in $OutDir\"
 Get-ChildItem $OutDir -File | Sort-Object Name | ForEach-Object { '{0,12:N0}  {1}' -f $_.Length, $_.Name }
