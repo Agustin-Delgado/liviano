@@ -57,6 +57,9 @@ const MENU_INSTALL_HERE: usize = 900;
 const MENU_LOAD_UNPACKED: usize = 901;
 const MENU_SETTINGS: usize = 902;
 const MENU_NOTE: usize = 903;
+const MENU_WEB_STORE: usize = 904;
+/// Where "Get extensions" goes.
+const WEB_STORE_URL: &str = "https://chromewebstore.google.com";
 /// Used when the runtime's version can't be read.
 const FALLBACK_BROWSER_VERSION: &str = "157.0.0.0";
 
@@ -196,6 +199,38 @@ fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
     }
 }
 
+/// One line of the menu that shows when no extension is installed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EmptyLine {
+    /// Text that only informs: it is greyed and does nothing.
+    Note(&'static str),
+    Separator,
+    /// A command: its menu id and its text.
+    Command(usize, &'static str),
+}
+
+/// The menu with no extension installed: it says so and tells how to get
+/// one. `store_here`: the page in view is the Web Store page of an extension.
+fn empty_menu_lines(store_here: bool) -> Vec<EmptyLine> {
+    let mut lines = vec![EmptyLine::Note("No extensions installed"), EmptyLine::Separator];
+    if store_here {
+        lines.push(EmptyLine::Command(MENU_INSTALL_HERE, "Install extension from this page"));
+    }
+    lines.push(EmptyLine::Command(MENU_WEB_STORE, "Get extensions from the Chrome Web Store…"));
+    lines.push(EmptyLine::Command(MENU_SETTINGS, "Manage extensions…"));
+    lines
+}
+
+fn append_empty_lines(menu: HMENU, lines: &[EmptyLine]) {
+    for line in lines {
+        match *line {
+            EmptyLine::Note(text) => append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, text),
+            EmptyLine::Separator => append(menu, MF_SEPARATOR, 0, ""),
+            EmptyLine::Command(id, text) => append(menu, MF_STRING, id, text),
+        }
+    }
+}
+
 fn source_label(extension: &Extension) -> &'static str {
     if extension.unpacked() { "Unpacked" } else { "Chrome Web Store" }
 }
@@ -211,10 +246,10 @@ impl App {
         on
     }
 
-    /// For the strip: `Some(pinned)` when the button shows.
+    /// For the strip: the button always shows (with no extension, its menu
+    /// tells how to get one), with this many pinned ones beside it.
     pub(super) fn extension_slots(&self) -> Option<usize> {
-        let registry = &self.extensions.registry;
-        (!registry.extensions.is_empty()).then(|| registry.pinned().len())
+        Some(self.extensions.registry.pinned().len())
     }
 
     pub(super) fn extension_initials(&self) -> Vec<char> {
@@ -520,7 +555,8 @@ impl App {
     }
 
     /// The puzzle button's menu: every extension with what can be done with
-    /// it, then installing and Settings.
+    /// it, then installing and Settings. With no extension: a short menu
+    /// that tells how to get one.
     pub(super) fn extensions_menu(&mut self) {
         let store_here = self
             .tabs
@@ -539,6 +575,9 @@ impl App {
                 }
                 append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, &short);
                 append(menu, MF_SEPARATOR, 0, "");
+            }
+            if self.extensions.registry.extensions.is_empty() {
+                append_empty_lines(menu, &empty_menu_lines(store_here.is_some()));
             }
             for (i, extension) in self.extensions.registry.extensions.iter().enumerate() {
                 let Ok(sub) = CreatePopupMenu() else { continue };
@@ -572,19 +611,19 @@ impl App {
             }
             if !self.extensions.registry.extensions.is_empty() {
                 append(menu, MF_SEPARATOR, 0, "");
+                if store_here.is_some() {
+                    append(menu, MF_STRING, MENU_INSTALL_HERE, "Install extension from this page");
+                }
+                append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Load unpacked extension…");
+                append(menu, MF_STRING, MENU_SETTINGS, "Extensions in Settings…");
+                append(menu, MF_SEPARATOR, 0, "");
+                let note = if self.restart_needed() {
+                    "Restart Nea to apply the extension changes"
+                } else {
+                    "Each enabled extension adds processes and memory"
+                };
+                append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, note);
             }
-            if store_here.is_some() {
-                append(menu, MF_STRING, MENU_INSTALL_HERE, "Install extension from this page");
-            }
-            append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Load unpacked extension…");
-            append(menu, MF_STRING, MENU_SETTINGS, "Extensions in Settings…");
-            append(menu, MF_SEPARATOR, 0, "");
-            let note = if self.restart_needed() {
-                "Restart Nea to apply the extension changes"
-            } else {
-                "Each enabled extension adds processes and memory"
-            };
-            append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, note);
 
             let button = self.layout.extensions;
             let mut point = POINT { x: button.left, y: button.bottom };
@@ -613,6 +652,10 @@ impl App {
                 }
             }
             MENU_LOAD_UNPACKED => post_action(self.hwnd, ACTION_LOAD_UNPACKED, 0),
+            MENU_WEB_STORE => {
+                let at = self.tabs.after_active();
+                self.open_tab(WEB_STORE_URL, at);
+            }
             MENU_SETTINGS => self.open_settings(),
             id if id >= MENU_BASE => {
                 let (index, item) = ((id - MENU_BASE) / MENU_STRIDE, (id - MENU_BASE) % MENU_STRIDE);
@@ -681,3 +724,8 @@ impl App {
         }
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/extensions_ui.rs"]
+#[rustfmt::skip]
+mod tests;

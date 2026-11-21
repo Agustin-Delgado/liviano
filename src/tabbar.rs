@@ -161,9 +161,45 @@ const LABEL_MAX_W: i32 = 140;
 const CHIP_H: f32 = 22.0;
 /// The group's mark: a dot a little over half a mark's letter.
 const DOT: f32 = 6.0;
-/// The header of a group in the column: shorter than a tab's row, so it
-/// reads as a heading over them rather than one more row.
-const GROUP_ROW: i32 = 26;
+/// The header of a group in the column: shorter than a tab's row (32), so
+/// it reads as a heading over the tabs rather than one more row.
+const GROUP_ROW: i32 = 22;
+/// The header's dot: a little under the name's x-height.
+const HEADER_DOT: f32 = 5.0;
+
+/// The header's name: the caption step, regular (medium looks too heavy at
+/// 11 px). Its ink is muted; only the dot and the guide line carry the
+/// group's colour.
+fn header_font(scale: f32) -> Font {
+    Font::new(size::CAPTION * scale, size::REGULAR, Align::Leading)
+}
+
+/// The y of the middle of the name's lowercase letters in a header: the dot
+/// sits on the letters, not on the middle of the row (the font's ascent
+/// keeps room over the capitals, so the two are about 2 px apart).
+fn header_mark_y(rect: RectF, scale: f32) -> f32 {
+    crate::gfx::line_marks(header_font(scale)).x_middle_in(rect.top, rect.bottom)
+}
+
+/// The guide line's left edge and width: one device pixel per 100 %, on
+/// whole pixels, so it stays sharp at every scale. The dot is centred on it.
+fn guide_line(left: f32, scale: f32) -> (f32, f32) {
+    let w = scale.round().max(1.0);
+    ((left + GUIDE_X * scale - w / 2.0).round(), w)
+}
+
+/// The centre x of a header's chevron: the centre of the close buttons of
+/// the tabs under it, so the two marks share one axis.
+fn chevron_center_x(right: f32, scale: f32) -> f32 {
+    let m = Metrics { scale };
+    let size = m.px(CLOSE_SIZE);
+    right - (m.px(CLOSE_INSET) + size) as f32 + size as f32 / 2.0
+}
+
+/// The close button of a row in the column: its size and its inset from
+/// the row's right end.
+const CLOSE_SIZE: i32 = 20;
+const CLOSE_INSET: i32 = 6;
 /// How far a group's tabs sit in from the column's edge, under its header:
 /// clear of the guide line that hangs from the header's dot.
 const GROUP_INDENT: i32 = 12;
@@ -185,7 +221,7 @@ pub struct Layout {
     pub vertical: bool,
     /// Back, forward and reload, after the window's buttons.
     pub nav: [Rect; 3],
-    /// The extensions button; empty when no extension is installed.
+    /// The extensions button, beside the gear; empty only on the slim caption.
     pub extensions: Rect,
     /// The pinned extensions beside it, in order.
     pub extension_marks: Vec<Rect>,
@@ -205,10 +241,6 @@ impl Default for Rect {
 pub struct Metrics {
     pub scale: f32,
 }
-
-/// Height of the strip across the top: 28 px tabs with 6 above and below,
-/// a strip rather than a toolbar.
-const BAR: i32 = 40;
 
 impl Metrics {
     fn px(&self, v: i32) -> i32 {
@@ -237,12 +269,15 @@ pub fn layout_with(
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
         // be dragged from: a slim caption row over the page.
-        let row = m.px(frame::ROW);
+        // One margin on every side of its controls: the window's edges,
+        // above and under them.
+        let edge = m.px(frame::LEAD);
+        let row = 2 * edge + m.px(CONTROL_H);
         let caption = Rect::new(0, 0, width, row);
-        let frame = Frame::new(caption, m.scale);
-        let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), m.px(2), row - m.px(2), m);
-        let right = width - m.px(8);
-        let settings = Rect::new(right - m.px(SETTINGS_W), m.px(2), right, row - m.px(2));
+        let frame = Frame::new(caption, edge, m.scale);
+        let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), edge, row - edge, m);
+        let right = width - edge;
+        let settings = Rect::new(right - m.px(SETTINGS_W), edge, right, row - edge);
         return Layout {
             content: Rect::new(0, row, width, height.max(row)),
             vertical,
@@ -265,6 +300,9 @@ pub fn layout_with(
 
 /// The gear's width (the extensions button's).
 const SETTINGS_W: i32 = 30;
+/// The height of the controls in a caption row: the window's capsule,
+/// back, forward, reload, the gear (a tab's height).
+const CONTROL_H: i32 = 28;
 /// Back, forward and reload: a pinned tab's width, a hair narrower.
 const NAV_W: i32 = 28;
 
@@ -297,31 +335,19 @@ fn shown_marks(pinned: usize, room: i32, m: &Metrics) -> usize {
     pinned.min((room / (m.px(28) + m.px(2))).max(0) as usize)
 }
 
-/// Horizontal: the button at the right end, pinned ones to its left.
-/// Vertical: the button at the bottom left, pinned ones to its right.
+/// The button just left of the gear, its twin: the same size, on the same
+/// row, with the gap that separates back, forward and reload. Pinned ones go
+/// to its left. In the column they stop at its pad.
 fn place_extensions(layout: &mut Layout, pinned: usize, m: &Metrics) {
-    let strip = layout.strip;
-    let (button_w, mark_w, gap) = (m.px(30), m.px(28), m.px(2));
-    if layout.vertical {
-        let pad = m.px(8);
-        let row = m.px(32);
-        let top = strip.bottom - pad - row;
-        layout.extensions = Rect::new(pad, top, pad + button_w, top + row);
-        let room = layout.settings.left - gap - layout.extensions.right;
-        let mut x = layout.extensions.right + gap;
-        for _ in 0..shown_marks(pinned, room, m) {
-            layout.extension_marks.push(Rect::new(x, top, x + mark_w, top + row));
-            x += mark_w + gap;
-        }
-    } else {
-        let (top, bottom) = (m.px(6), strip.bottom - m.px(6));
-        let right = layout.settings.left - gap;
-        layout.extensions = Rect::new(right - button_w, top, right, bottom);
-        let mut x = layout.extensions.left - gap;
-        for _ in 0..shown_marks(pinned, strip.width() / 4, m) {
-            layout.extension_marks.insert(0, Rect::new(x - mark_w, top, x, bottom));
-            x -= mark_w + gap;
-        }
+    let (mark_w, gap) = (m.px(28), m.px(2));
+    let gear = layout.settings;
+    let right = gear.left - gap;
+    layout.extensions = Rect::new(right - gear.width(), gear.top, right, gear.bottom);
+    let room = if layout.vertical { layout.extensions.left - m.px(8) } else { layout.strip.width() / 4 };
+    let mut x = layout.extensions.left - gap;
+    for _ in 0..shown_marks(pinned, room, m) {
+        layout.extension_marks.insert(0, Rect::new(x - mark_w, gear.top, x, gear.bottom));
+        x -= mark_w + gap;
     }
 }
 
@@ -341,13 +367,17 @@ fn layout_horizontal(
     m: &Metrics,
     extensions: Option<usize>,
 ) -> Layout {
-    let bar = m.px(BAR);
+    // The strip's edge margin: the air above and under its controls, also
+    // left of the capsule and right of the gear. The strip is the controls
+    // and that air (40 at 100 %), so it stays even at every scale.
+    let edge = m.px(frame::LEAD);
+    let bar = 2 * edge + m.px(CONTROL_H);
     let pad = m.px(8);
     let gap = m.px(2);
     let pinned_w = m.px(30);
     let plus_w = m.px(30);
-    let item_top = m.px(6);
-    let item_bottom = bar - m.px(6);
+    let item_top = edge;
+    let item_bottom = bar - edge;
 
     let pinned = tabs.iter().filter(|t| t.pinned).count() as i32;
     let folded = |t: &TabInfo| group_of(t, groups).is_some_and(|g| g.collapsed);
@@ -364,12 +394,12 @@ fn layout_horizontal(
     }
     // The window's buttons lead, the page's follow, then the tabs; the gear
     // (and the extensions) close the strip at the right.
-    let frame = Frame::new(Rect::new(0, 0, width, bar), m.scale);
+    let frame = Frame::new(Rect::new(0, 0, width, bar), edge, m.scale);
     let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
     let start = nav[2].right + pad;
-    let settings = Rect::new(width - pad - m.px(SETTINGS_W), item_top, width - pad, item_bottom);
+    let settings = Rect::new(width - edge - m.px(SETTINGS_W), item_top, width - edge, item_bottom);
     let reserved =
-        extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + pad + m.px(DRAG_ROOM);
+        extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + edge + m.px(DRAG_ROOM);
     let available = width - start - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
@@ -432,12 +462,15 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
     // The top row is the caption: the window's buttons at its left, back,
     // forward and reload at its right (Arc's column), the rest of it moves
     // the window.
-    let caption = Rect::new(0, 0, side, m.px(BAR));
-    let frame = Frame::new(caption, m.scale);
-    let nav = nav_row(side - pad - nav_width(m), m.px(6), caption.bottom - m.px(6), m);
+    // The column's pad is its margin on every side of that row: left of the
+    // capsule, right of reload, above the row and under it (the first row
+    // starts at the caption's bottom).
+    let caption = Rect::new(0, 0, side, 2 * pad + m.px(CONTROL_H));
+    let frame = Frame::new(caption, pad, m.scale);
+    let nav = nav_row(side - pad - nav_width(m), pad, caption.bottom - pad, m);
     // Pinned tabs: a grid of squares under it.
     let per_row = ((side - 2 * pad + gap) / (cell + gap)).max(1);
-    let start = caption.bottom + m.px(2);
+    let start = caption.bottom;
     let mut y = start;
     let mut col = 0;
     for tab in tabs.iter().filter(|t| t.pinned) {
@@ -493,9 +526,9 @@ fn layout_vertical(tabs: &[TabInfo], groups: &[GroupInfo], width: i32, height: i
             continue;
         }
         let rect = Rect::new(left, y, side - pad, y + row);
-        let size = m.px(20);
+        let (size, inset) = (m.px(CLOSE_SIZE), m.px(CLOSE_INSET));
         let cy = (rect.top + rect.bottom) / 2;
-        let close = Some(Rect::new(rect.right - m.px(6) - size, cy - size / 2, rect.right - m.px(6), cy + size / 2));
+        let close = Some(Rect::new(rect.right - inset - size, cy - size / 2, rect.right - inset, cy + size / 2));
         items.push(Item { id: tab.id, rect, close, pinned: false, group: id, hidden: false });
         y += row + gap;
     }
@@ -708,7 +741,8 @@ fn paint_tabs(g: &Painter, p: &Paint, shown_partner: Option<u64>) {
         let opacity = p.motion.opacity_of(item.id) * p.motion.live_opacity();
         let rect = p.motion.live_rect(p.motion.rect_of(item));
         if opacity > 0.0 && !item.hidden {
-            g.card(rect, radius, Color::from(ground).with_alpha(opacity), pal.dark, opacity, p.scale);
+            let fill = Color::from(ground).with_alpha(opacity);
+            g.ring_card(rect, radius, fill, pal.dark, opacity, p.scale);
         }
     }
 
@@ -837,10 +871,12 @@ fn paint_group_lines(g: &Painter, p: &Paint) {
         if p.layout.vertical {
             let bottom = members.map(|r| r.bottom).fold(at.bottom, f32::max);
             if bottom - at.bottom > px(6.0) {
-                let w = px(1.0).max(1.0);
-                let x = (at.left + px(GUIDE_X)).round() - w / 2.0;
-                let line = Color::from(tone.fill).with_alpha(0.45 * opacity);
-                g.round(RectF::new(x, at.bottom - px(4.0), x + w, bottom - px(4.0)), w / 2.0, line);
+                // The group's own colour, opaque (it fades only while the
+                // group folds), square and on whole pixels.
+                let (x, w) = guide_line(at.left, p.scale);
+                let line = Color::from(tone.fill).with_alpha(opacity);
+                let start = (header_mark_y(at, p.scale) + px(6.0)).round();
+                g.fill(RectF::new(x, start, x + w, (bottom - px(4.0)).round()), line);
             }
         } else {
             let right = members.map(|r| r.right).fold(at.right, f32::max);
@@ -878,26 +914,7 @@ fn paint_labels(g: &Painter, p: &Paint) {
         let named = !info.name.trim().is_empty();
         let name_ink = Color::from(tone.ink).with_alpha(opacity);
         if p.layout.vertical {
-            ghost_ground(g, rect, px(size::RADIUS_CONTROL), over, 0.0, pal);
-            let dx = rect.left + px(GUIDE_X);
-            g.round(
-                RectF::new(dx - dot / 2.0, cy - dot / 2.0, dx + dot / 2.0, cy + dot / 2.0),
-                dot / 2.0,
-                Color::from(tone.fill).with_alpha(opacity),
-            );
-            let chevron_x = rect.right - px(12.0);
-            let mut room = chevron_x - px(10.0);
-            if fold > 0.0 {
-                let count = info.count.to_string();
-                let font = Font::new(px(size::TEXT_SMALL), size::REGULAR, Align::Trailing);
-                let ink = Color::from(pal.ink_asleep).with_alpha(opacity * fold);
-                g.text(&count, RectF::new(room - px(24.0), rect.top, room, rect.bottom), font, ink);
-                room -= px(28.0) * fold;
-            }
-            let text = RectF::new(dx + px(10.0), rect.top, room, rect.bottom);
-            g.text(&info.title, text, Font::new(px(size::TEXT_SMALL), size::MEDIUM, Align::Leading), name_ink);
-            let ink = Color::from(pal.ink_asleep.mix(pal.ink_muted, over)).with_alpha(opacity);
-            draw_chevron(g, (chevron_x, cy), fold, ink, p.scale);
+            paint_header(g, p, info, rect, opacity, over, fold);
         } else {
             let h = px(CHIP_H);
             let chip = RectF::new(rect.left, cy - h / 2.0, rect.right, cy + h / 2.0);
@@ -917,6 +934,37 @@ fn paint_labels(g: &Painter, p: &Paint) {
             }
         }
     }
+}
+
+/// A group's header in the column: the dot the guide line hangs from, the
+/// name in muted ink, the count while folded and a chevron that turns as it
+/// folds. No ground, at rest or under the pointer: a hover only lifts the
+/// ink. The dot, the count and the chevron are centred on the name's
+/// lowercase letters (from the font's metrics), not on the row.
+fn paint_header(g: &Painter, p: &Paint, info: &GroupInfo, rect: RectF, opacity: f32, over: f32, fold: f32) {
+    let pal = p.palette;
+    let px = |v: f32| v * p.scale;
+    let tone = group_tone(info.color, pal.dark);
+    let font = header_font(p.scale);
+    let mid = header_mark_y(rect, p.scale);
+    let (line_x, line_w) = guide_line(rect.left, p.scale);
+    let dx = line_x + line_w / 2.0;
+    let chevron_x = chevron_center_x(rect.right, p.scale);
+    let mut room = chevron_x - px(10.0);
+    if fold > 0.0 {
+        let count = info.count.to_string();
+        let font = Font { align: Align::Trailing, ..font };
+        let ink = Color::from(pal.ink_asleep).with_alpha(opacity * fold);
+        g.text(&count, RectF::new(room - px(24.0), rect.top, room, rect.bottom), font, ink);
+        room -= px(28.0) * fold;
+    }
+    let d = px(HEADER_DOT);
+    let fill = Color::from(tone.fill).with_alpha(opacity);
+    g.round(RectF::new(dx - d / 2.0, mid - d / 2.0, dx + d / 2.0, mid + d / 2.0), d / 2.0, fill);
+    let name_ink = Color::from(pal.ink_muted.mix(pal.ink, over)).with_alpha(opacity);
+    g.text(&info.title, RectF::new(dx + px(10.0), rect.top, room, rect.bottom), font, name_ink);
+    let ink = Color::from(pal.ink_asleep.mix(pal.ink_muted, over)).with_alpha(opacity);
+    draw_chevron(g, (chevron_x, mid), fold, ink, p.scale);
 }
 
 /// A small chevron, turning from pointing down (open) to pointing right

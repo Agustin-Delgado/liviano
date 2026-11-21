@@ -1594,6 +1594,7 @@ impl App {
             }
             Some(Hit::Extensions) => {
                 self.motion.press(tabbar::HoverKey::Extensions);
+                self.invalidate();
                 self.close_omnibar();
                 self.extensions_menu();
             }

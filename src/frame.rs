@@ -25,7 +25,9 @@ impl WindowButton {
 /// Width of each segment, which is also what each button answers to:
 /// Windows 11's are 46, these 28.
 pub const BUTTON_W: i32 = 28;
-/// From the window's left edge to the capsule.
+/// From the window's edges to the capsule on a top strip (and the
+/// collapsed column's row): the air above and under the strip's 28 px
+/// controls, so the capsule has the same margin on its three outer sides.
 pub const LEAD: i32 = 6;
 /// From the capsule to back: more than between the segments, so the window's
 /// buttons and the page's read as two groups.
@@ -40,8 +42,6 @@ const GLYPH: f32 = 8.0;
 const CAPSULE_TINT: f32 = 0.05;
 const SEGMENT_HOVER: f32 = 0.06;
 const SEGMENT_PRESSED: f32 = 0.11;
-/// Height of the caption row when the tabs are hidden (collapsed column).
-pub const ROW: i32 = 32;
 
 /// The band along the top edge that resizes the window while it is not
 /// maximized: the frame Windows had there is gone with the title bar.
@@ -59,10 +59,11 @@ pub struct Frame {
 }
 
 impl Frame {
-    /// The buttons from the caption's left end, across its full height.
-    pub fn new(caption: Rect, scale: f32) -> Self {
+    /// The buttons from `lead` (device pixels) in from the caption's left
+    /// end, across its full height.
+    pub fn new(caption: Rect, lead: i32, scale: f32) -> Self {
         let w = px(BUTTON_W, scale);
-        let left = caption.left + px(LEAD, scale);
+        let left = caption.left + lead;
         let mut buttons = [Rect::default(); 3];
         for (i, slot) in buttons.iter_mut().enumerate() {
             let l = left + i as i32 * w;

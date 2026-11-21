@@ -34,9 +34,10 @@ use windows::{
                 ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
             },
             DirectWrite::{
-                DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT,
-                DWRITE_MEASURING_MODE_NATURAL, DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER,
-                DWRITE_TEXT_ALIGNMENT_LEADING, DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
+                DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_METRICS, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_WEIGHT, DWRITE_LINE_METRICS, DWRITE_MEASURING_MODE_NATURAL,
+                DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_LEADING,
+                DWRITE_TEXT_ALIGNMENT_TRAILING, DWRITE_TEXT_METRICS, DWRITE_TRIMMING,
                 DWRITE_TRIMMING_GRANULARITY_CHARACTER, DWRITE_WORD_WRAPPING_NO_WRAP, DWriteCreateFactory,
                 IDWriteFactory, IDWriteInlineObject, IDWriteTextFormat,
             },
@@ -151,6 +152,7 @@ struct Shared {
     round: ID2D1StrokeStyle,
     family: HSTRING,
     formats: RefCell<Formats>,
+    marks: RefCell<HashMap<(u32, u16, Align), LineMarks>>,
 }
 
 thread_local! {
@@ -190,6 +192,112 @@ pub fn measure(text: &str, font: Font) -> f32 {
     }
 }
 
+/// erfc(x), Abramowitz and Stegun 7.1.26 (error under 1.5e-7).
+pub fn erfc(x: f32) -> f32 {
+    let z = x.abs();
+    let t = 1.0 / (1.0 + 0.327_591_1 * z);
+    let poly = t * (0.254_829_6 + t * (-0.284_496_74 + t * (1.421_413_7 + t * (-1.453_152 + t * 1.061_405_4))));
+    let y = poly * (-z * z).exp();
+    if x >= 0.0 { y } else { 2.0 - y }
+}
+
+/// A CSS blur of `blur` device pixels (two sigmas) as bands of a shape
+/// grown by `outset`, each with its share of the shadow's opacity. Stacked,
+/// the bands give the blurred edge: at a distance `d` past the shape, the
+/// shares of the bands that reach it add up to the Gaussian's tail there.
+pub fn drop_bands(blur: f32) -> Vec<(f32, f32)> {
+    let sigma = (blur / 2.0).max(0.25);
+    let tail = |d: f32| 0.5 * erfc(d / (sigma * std::f32::consts::SQRT_2));
+    // Half a pixel apart, from 2.5 sigmas out to the edge (the card covers
+    // what is inside it).
+    let steps = (2.5 * sigma / 0.5).ceil() as i32;
+    let mut bands = Vec::new();
+    let mut reached = 0.0;
+    for k in (0..=steps).rev() {
+        let d = k as f32 * 0.5;
+        let share = tail(d - 0.25) - reached;
+        reached += share;
+        bands.push((d, share));
+    }
+    bands
+}
+
+/// Where a line of text sits in the box `Painter::text` centres it in,
+/// from the font's own metrics: to set a mark on the letters, not on the box.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LineMarks {
+    /// The line's height (ascent, descent and gap, as DirectWrite lays it).
+    pub height: f32,
+    /// From the line's top down to its baseline.
+    pub baseline: f32,
+    /// The height of a lowercase letter over the baseline.
+    pub x_height: f32,
+    /// The height of a capital over the baseline.
+    pub cap_height: f32,
+}
+
+impl LineMarks {
+    /// The baseline's y when the line is centred in a box from `top` to `bottom`.
+    pub fn baseline_in(&self, top: f32, bottom: f32) -> f32 {
+        top + (bottom - top - self.height) / 2.0 + self.baseline
+    }
+
+    /// The y of the middle of the lowercase letters, in that box.
+    pub fn x_middle_in(&self, top: f32, bottom: f32) -> f32 {
+        self.baseline_in(top, bottom) - self.x_height / 2.0
+    }
+}
+
+/// The line metrics of `font` (see `LineMarks`); zero when DirectWrite fails.
+pub fn line_marks(font: Font) -> LineMarks {
+    let Some(shared) = shared() else { return LineMarks::default() };
+    let key = ((font.size * 4.0).round() as u32, font.weight, font.align);
+    if let Some(found) = shared.marks.borrow().get(&key) {
+        return *found;
+    }
+    let Some((format, _)) = shared.format(font) else { return LineMarks::default() };
+    let marks = unsafe {
+        let wide: Vec<u16> = "x".encode_utf16().collect();
+        let mut line = [DWRITE_LINE_METRICS::default()];
+        let mut count = 0u32;
+        let laid = shared
+            .dwrite
+            .CreateTextLayout(&wide, &format, MEASURE_WIDTH, 1000.0)
+            .ok()
+            .and_then(|layout| layout.GetLineMetrics(Some(&mut line), &mut count).ok());
+        let mut face = DWRITE_FONT_METRICS::default();
+        let mut collection = None;
+        let found = shared.dwrite.GetSystemFontCollection(&mut collection, false).is_ok()
+            && collection.is_some_and(|c| {
+                let (mut index, mut exists) = (0u32, windows::core::BOOL(0));
+                c.FindFamilyName(&shared.family, &mut index, &mut exists).is_ok()
+                    && exists.as_bool()
+                    && c.GetFontFamily(index)
+                        .and_then(|f| {
+                            f.GetFirstMatchingFont(
+                                DWRITE_FONT_WEIGHT(font.weight as i32),
+                                DWRITE_FONT_STRETCH_NORMAL,
+                                DWRITE_FONT_STYLE_NORMAL,
+                            )
+                        })
+                        .map(|f| f.GetMetrics(&mut face))
+                        .is_ok()
+            });
+        if laid.is_none() || count == 0 || !found || face.designUnitsPerEm == 0 {
+            return LineMarks::default();
+        }
+        let unit = font.size / face.designUnitsPerEm as f32;
+        LineMarks {
+            height: line[0].height,
+            baseline: line[0].baseline,
+            x_height: face.xHeight as f32 * unit,
+            cap_height: face.capHeight as f32 * unit,
+        }
+    };
+    shared.marks.borrow_mut().insert(key, marks);
+    marks
+}
+
 impl Shared {
     fn create() -> windows::core::Result<Self> {
         unsafe {
@@ -206,7 +314,14 @@ impl Shared {
                 None,
             )?;
             let family = HSTRING::from(pick_family(&dwrite));
-            Ok(Self { d2d, dwrite, round, family, formats: RefCell::new(HashMap::new()) })
+            Ok(Self {
+                d2d,
+                dwrite,
+                round,
+                family,
+                formats: RefCell::new(HashMap::new()),
+                marks: RefCell::new(HashMap::new()),
+            })
         }
     }
 
@@ -411,36 +526,35 @@ impl Painter<'_> {
         unsafe { self.rt().PopAxisAlignedClip() };
     }
 
-    /// A card on the ground (brand.css `shadow-card`): a soft drop under
-    /// it, the 1 px ring around it, then its fill. `lift` 0..1 scales the
-    /// shadow, so a card can fade in or out of the ground.
-    pub fn card(&self, rect: RectF, radius: f32, fill: impl Into<Color>, dark: bool, lift: f32, scale: f32) {
-        use crate::design::lift as l;
-        let shade = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
-        if lift > 0.0 {
-            // 0 2px 6px -2px: a few widening layers below, each fainter.
-            for (grow, alpha) in [(0.0, 0.5), (1.0, 0.3), (2.0, 0.2)] {
-                let g = grow * scale;
-                let drop = RectF::new(
-                    rect.left - g + 2.0 * scale,
-                    rect.top + 2.0 * scale,
-                    rect.right + g - 2.0 * scale,
-                    rect.bottom + (1.0 + grow) * scale,
-                );
-                self.round(
-                    drop,
-                    radius + g,
-                    shade.with_alpha(l::CARD_DROP * alpha * lift * if dark { 2.0 } else { 1.0 }),
-                );
-            }
-        }
-        self.round(rect, radius, fill);
-        let ring = if dark {
-            Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.with_alpha(0.06)
+    /// The live tab's card (brand.css `shadow-ring`, as the active entry of
+    /// a sidebar): a small drop under it (0 1px 2px), a 1 px ring just
+    /// outside its edge, then its fill. On a dark ground the ring turns
+    /// light and the drop deepens, so it reads the same. `opacity` fades
+    /// all of it.
+    pub fn ring_card(&self, rect: RectF, radius: f32, fill: impl Into<Color>, dark: bool, opacity: f32, scale: f32) {
+        use crate::design::lift;
+        let black = Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 };
+        let (ring, drop) = if dark {
+            (Color { r: 1.0, g: 1.0, b: 1.0, a: 1.0 }.with_alpha(lift::RING_DARK), lift::RING_DROP_DARK)
         } else {
-            shade.with_alpha(l::CARD_RING)
+            (black.with_alpha(lift::RING), lift::RING_DROP)
         };
-        self.outline(rect, radius, 1.0, ring.with_alpha(lift.clamp(0.0, 1.0)));
+        let down = (lift::RING_DROP_Y * scale).round();
+        for (outset, share) in drop_bands(lift::RING_DROP_BLUR * scale) {
+            let band = RectF::new(
+                rect.left - outset,
+                rect.top + down - outset,
+                rect.right + outset,
+                rect.bottom + down + outset,
+            );
+            self.round(band, (radius + outset).max(0.0), black.with_alpha(drop * share * opacity));
+        }
+        // The ring: a whole device pixel per 100 %, outside the edge.
+        let w = scale.round().max(1.0);
+        let around = rect.inset(-w / 2.0, -w / 2.0);
+        let rounded = D2D1_ROUNDED_RECT { rect: around.d2d(), radiusX: radius + w / 2.0, radiusY: radius + w / 2.0 };
+        unsafe { self.rt().DrawRoundedRectangle(&rounded, self.ink(ring.with_alpha(opacity)), w, None) };
+        self.round(rect, radius, fill);
     }
 
     pub fn fill(&self, rect: RectF, color: impl Into<Color>) {
