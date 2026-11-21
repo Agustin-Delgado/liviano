@@ -437,6 +437,35 @@ impl BackdropLook {
     }
 }
 
+/// Backdrops kept: the field alone, a panel and the field with its
+/// suggestions are each opened again and again.
+const BACKDROPS_KEPT: usize = 3;
+
+thread_local! {
+    /// The last backdrops worked out and what each was worked out from,
+    /// the most recent first: opening, closing and settling draw the same
+    /// one, and its shadow costs 15 to 30 ms on a large panel. A few
+    /// megabytes at most.
+    static BACKDROP_CACHE: RefCell<Vec<(Painted, Vec<u32>)>> = const { RefCell::new(Vec::new()) };
+}
+
+/// Copies the backdrop for `painted` into `pixels` (`painted.size`), worked
+/// out again only when none of the kept ones matches it.
+fn backdrop_pixels(pixels: &mut [u32], painted: Painted) {
+    BACKDROP_CACHE.with(|c| {
+        let mut c = c.borrow_mut();
+        if let Some(at) = c.iter().position(|(key, cached)| *key == painted && cached.len() == pixels.len()) {
+            let hit = c.remove(at);
+            pixels.copy_from_slice(&hit.1);
+            c.insert(0, hit);
+            return;
+        }
+        render_backdrop(pixels, painted.size.0 as usize, painted.shape, painted.look, painted.scale);
+        c.insert(0, (painted, pixels.to_vec()));
+        c.truncate(BACKDROPS_KEPT);
+    });
+}
+
 /// erfc(x), Abramowitz and Stegun 7.1.26 (error under 1.5e-7).
 fn erfc(x: f32) -> f32 {
     let z = x.abs();
@@ -843,7 +872,7 @@ unsafe extern "system" fn backdrop_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lp
             if let Some(p) = PAINTED.with(|p| p.get()).filter(|_| !framed)
                 && let Some(mut canvas) = Canvas::new(p.size.0, p.size.1)
             {
-                render_backdrop(canvas.pixels_mut(), p.size.0 as usize, p.shape, p.look, p.scale);
+                backdrop_pixels(canvas.pixels_mut(), p);
                 unsafe {
                     let _ = BitBlt(hdc, 0, 0, p.size.0, p.size.1, Some(canvas.dc), 0, 0, SRCCOPY);
                 }
@@ -1221,6 +1250,7 @@ impl Omnibar {
     /// Draws the backdrop for `layout` when its size, corners, colours or
     /// the part in sight changed; otherwise `mirror` only moves it.
     fn draw_backdrop(&self, layout: &Layout) {
+        let _doing = crate::diag::doing(&"field:backdrop", 0);
         let Some((clip, shape, look)) = self.backdrop_frame(layout) else { return };
         let drawn = Drawn { size: (layout.width(), layout.height()), radii: layout.radii, look, clip };
         if self.drawn.get() == Some(drawn) {
@@ -1229,7 +1259,7 @@ impl Omnibar {
         let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
         let painted = Painted { size: (bw, bh), shape, look, scale: self.scale };
         let Some(mut canvas) = Canvas::new(bw, bh) else { return };
-        render_backdrop(canvas.pixels_mut(), bw as usize, shape, look, self.scale);
+        backdrop_pixels(canvas.pixels_mut(), painted);
         let at = POINT { x: layout.panel.left + clip.left, y: layout.panel.top + clip.top };
         let size = SIZE { cx: bw, cy: bh };
         let zero = POINT::default();
@@ -1266,7 +1296,7 @@ impl Omnibar {
         let (clip, shape, look) = self.backdrop_frame(&layout)?;
         let (bw, bh) = (clip.right - clip.left, clip.bottom - clip.top);
         let mut pixels = vec![0u32; (bw * bh) as usize];
-        render_backdrop(&mut pixels, bw as usize, shape, look, self.scale);
+        backdrop_pixels(&mut pixels, Painted { size: (bw, bh), shape, look, scale: self.scale });
         let (w, h) = (layout.width(), layout.height());
         let mut content = Canvas::new(w, h)?;
         let rect = RECT { left: 0, top: 0, right: w, bottom: h };
@@ -1374,7 +1404,11 @@ impl Omnibar {
         let now = std::time::Instant::now();
         if motion.stale || motion.still.is_none() {
             motion.stale = false;
-            if let Some(still) = self.take_still() {
+            let still = {
+                let _doing = crate::diag::doing(&"field:still", 0);
+                self.take_still()
+            };
+            if let Some(still) = still {
                 let size = (still.width, still.height);
                 if motion.still.as_ref().is_none_or(|s| (s.width, s.height) != size) || motion.frame.is_none() {
                     motion.frame = Canvas::new(size.0, size.1);
