@@ -26,6 +26,7 @@ mod installer;
 mod legacy;
 mod omnibar;
 mod omnibox;
+mod pacer;
 mod panels;
 mod pip;
 mod reader;

@@ -39,6 +39,8 @@ const KEEP_SPARE: Duration = Duration::from_secs(30);
 const REPLENISH_AFTER: Duration = Duration::from_millis(1500);
 const TIMER_WARM: usize = 0x42;
 const WARM_CHECK_EVERY: Duration = Duration::from_secs(5);
+/// A spare wanted while something moves is looked at again this soon.
+const SPARE_AFTER_MOTION_MS: u64 = 300;
 /// Engine restarts allowed within `RESTART_WINDOW` before giving up.
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(120);
@@ -108,9 +110,16 @@ impl App {
     /// again.
     fn make_spare(&mut self) {
         let mut next = WARM_CHECK_EVERY;
+        // Making a view holds the UI thread for 50 ms or more inside the
+        // engine: never while something moves on screen.
+        let moving = crate::anim::stats().running;
+        if moving {
+            next = Duration::from_millis(SPARE_AFTER_MOTION_MS);
+        }
         if let Some(env) = self.env.clone()
             && self.engine.spare.is_none()
             && !self.engine.making
+            && !moving
         {
             match self.engine.hold_until.and_then(|until| until.checked_duration_since(Instant::now())) {
                 Some(wait) => next = wait.max(Duration::from_millis(50)),

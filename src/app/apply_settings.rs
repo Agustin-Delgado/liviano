@@ -4,8 +4,12 @@
 use super::{App, with_app};
 use crate::{settings::Settings, settings_window};
 
-fn on_settings_changed(settings: Settings) {
+pub(super) fn on_settings_changed(settings: Settings) {
     with_app(|app| app.apply_settings(settings));
+}
+
+fn on_settings_closed() {
+    with_app(|app| app.settings_closed());
 }
 
 fn on_tab_layout_changed(vertical: bool, collapsed: bool) {
@@ -16,6 +20,7 @@ impl App {
     pub(super) fn open_settings(&mut self) {
         self.close_omnibar();
         settings_window::set_layout_handler(on_tab_layout_changed);
+        settings_window::set_closed_handler(on_settings_closed);
         settings_window::set_tab_layout(self.vertical, self.collapsed);
         settings_window::open(self.hwnd, &self.settings, &self.palette, on_settings_changed);
         self.attach_settings_extensions();

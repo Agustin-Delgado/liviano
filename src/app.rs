@@ -13,7 +13,7 @@ use windows::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
-            LOGFONTW, PAINTSTRUCT,
+            LOGFONTW, PAINTSTRUCT, UpdateWindow,
         },
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
@@ -74,10 +74,18 @@ const DISCARDS_PER_TICK: usize = 3;
 const SLEEP_AGAIN_MS: u32 = 1_000;
 const TIMER_SAVE: usize = 2;
 const TIMER_RETRY: usize = 3;
+/// Work done ahead of time while the person is away (see `idle_work`).
+const TIMER_IDLE: usize = 4;
+/// How long after startup, or after Settings closed, that work is tried.
+const IDLE_WORK_AFTER_MS: u32 = 3_000;
+/// The person is away when no key or click came for this long.
+const AWAY_AFTER_MS: u32 = 1_500;
 /// Losing this much history to a crash is fine; rewriting it every 5 s is not.
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
 const WM_APP_REPAINT: u32 = WM_APP + 3;
+/// Gives the page the keyboard after a switch (see `select`).
+const WM_APP_FOCUS: u32 = WM_APP + 4;
 const MENU_PIN: usize = 10;
 const MENU_DUPLICATE: usize = 11;
 const MENU_KEEP_AWAKE: usize = 12;
@@ -156,6 +164,12 @@ struct App {
     nav: nav_ui::NavUi,
     /// The strip was moving at the last paint (for the frame gaps).
     motion_was_running: bool,
+    /// The time a frame of the strip's motion is drawn for, set by the
+    /// frame clock just before it paints.
+    frame_now: Option<Instant>,
+    /// What the strip shows on screen, when all of it is known (see
+    /// `tabbar::changed_area`).
+    painted_sheet: Option<tabbar::Sheet>,
     engine: engine_ui::EngineUi,
 }
 
@@ -168,6 +182,25 @@ thread_local! {
 /// The app is busy — a menu's modal loop runs inside it, and dispatches
 /// our messages meanwhile —: the message comes back shortly. Posting it
 /// again at once spun the loop at full CPU for as long as the menu was open.
+/// Whether `dirty` holds all of `r`.
+/// Whether `dirty` holds all of `r` that is inside a `width` × `height` client area.
+fn covers(dirty: RECT, r: crate::gfx::RectF, width: i32, height: i32) -> bool {
+    let (left, top) = (r.left.max(0.0), r.top.max(0.0));
+    let (right, bottom) = (r.right.min(width as f32), r.bottom.min(height as f32));
+    right <= left
+        || bottom <= top
+        || (dirty.left as f32 <= left
+            && dirty.top as f32 <= top
+            && dirty.right as f32 >= right
+            && dirty.bottom as f32 >= bottom)
+}
+
+/// The frame clock asks what the strip's next frame draws (see
+/// `App::frame_area`); with the app busy, all of it.
+fn strip_frame_area(_: HWND, now: Instant) -> Option<RECT> {
+    with_app(|app| app.frame_area(now)).flatten()
+}
+
 fn retry_later(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) {
     RETRY.with(|pending| {
         let mut pending = pending.borrow_mut();
@@ -294,6 +327,8 @@ pub fn run() -> windows::core::Result<()> {
         frame: Default::default(),
         nav: Default::default(),
         motion_was_running: false,
+        frame_now: None,
+        painted_sheet: None,
         engine: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
@@ -312,6 +347,7 @@ pub fn run() -> windows::core::Result<()> {
         let _ = ShowWindow(hwnd, show);
         SetTimer(Some(hwnd), TIMER_SLEEP, SLEEP_EVERY_MS, None);
         SetTimer(Some(hwnd), TIMER_SAVE, 5_000, None);
+        SetTimer(Some(hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
     }
     with_app(|app| {
         app.relayout();
@@ -495,6 +531,19 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(0)
         }
+        WM_APP_FOCUS => {
+            // Only if the switch it was posted for still holds.
+            with_app(|app| {
+                if app.tabs.active == Some(wparam.0 as u64) {
+                    app.focus_page();
+                }
+            });
+            LRESULT(0)
+        }
+        hovercard_ui::WM_APP_THUMB => {
+            with_app(|app| app.thumbs_shrunk());
+            LRESULT(0)
+        }
         WM_APP_REPAINT => {
             unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
@@ -572,6 +621,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
+                TIMER_IDLE => {
+                    let _doing = crate::diag::doing(&"timer:idle", 0);
+                    with_app(|app| app.idle_work());
+                }
 
                 _ => {}
             }
@@ -707,9 +760,11 @@ impl App {
         let (width, height) = self.client_size();
         let loading = self.tabs.tabs.iter().any(|t| t.loading);
         let started = Instant::now();
+        let frame = self.frame_now.take();
+        let now = frame.unwrap_or(started);
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
-        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, started);
+        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
@@ -747,6 +802,12 @@ impl App {
             }
         }
         self.surface = surface;
+        // What is on screen now is known when this paint drew every change
+        // (a frame of the motion) or the whole strip; after any other paint
+        // the next frame draws the strip whole.
+        let sheet = self.strip_sheet();
+        let whole = sheet.values().all(|p| covers(dirty, p.bounds, width, height));
+        self.painted_sheet = (frame.is_some() || whole).then_some(sheet);
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
         if next.is_some() || self.motion_was_running {
@@ -759,7 +820,45 @@ impl App {
         self.motion_was_running = next.is_some();
         if let Some(ms) = next {
             crate::anim::report_frame(started.elapsed());
-            crate::anim::repaint_after(self.hwnd, self.moving_area(&fills), ms);
+            crate::anim::repaint_area(self.hwnd, strip_frame_area, ms);
+        }
+    }
+
+    fn strip_sheet(&self) -> tabbar::Sheet {
+        let loading: Vec<u64> = self.tabs.tabs.iter().filter(|t| t.loading).map(|t| t.id).collect();
+        self.motion.sheet(&self.layout, self.tabs.active, &loading, self.scale)
+    }
+
+    /// The part of the window the next frame of the strip's motion draws:
+    /// only what changes since the frame on screen. None: all of it.
+    fn frame_area(&mut self, now: Instant) -> Option<RECT> {
+        let loading = self.tabs.tabs.iter().any(|t| t.loading);
+        let fills = self.split_fills();
+        self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
+        let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
+        self.frame_now = Some(now);
+        let old = self.painted_sheet.as_ref()?;
+        if self.motion.rail_moving() || self.motion.indicator_moving() {
+            return self.moving_area(&fills);
+        }
+        match tabbar::changed_area(old, &self.strip_sheet()) {
+            Some(area) => {
+                let (width, height) = self.client_size();
+                Some(RECT {
+                    left: (area.left.floor() as i32).max(0),
+                    top: (area.top.floor() as i32).max(0),
+                    right: (area.right.ceil() as i32).min(width),
+                    bottom: (area.bottom.ceil() as i32).min(height),
+                })
+            }
+            None => {
+                // Nothing to draw this frame; the motion goes on.
+                self.frame_now = None;
+                if let Some(ms) = next {
+                    crate::anim::repaint_area(self.hwnd, strip_frame_area, ms);
+                }
+                Some(RECT::default())
+            }
         }
     }
 
@@ -915,9 +1014,15 @@ impl App {
             }
             self.show_active();
             self.warm_up_if_asleep();
-            self.focus_page();
             self.session_dirty = true;
             self.invalidate();
+            // Moving the keyboard into the page waits on the engine's process
+            // (90-170 ms measured for a page that just woke): the strip shows
+            // the switch first, and the keyboard follows in a message of its own.
+            unsafe {
+                let _ = UpdateWindow(self.hwnd);
+                let _ = PostMessageW(Some(self.hwnd), WM_APP_FOCUS, WPARAM(id as usize), LPARAM(0));
+            }
         }
     }
 
@@ -1010,6 +1115,43 @@ impl App {
     /// Background tabs: suspended after a while, then destroyed down to their
     /// metadata. Pinned and private tabs may be suspended but never destroyed;
     /// kept-awake sites are left alone; a tab playing audio is never destroyed.
+    /// Work that would make a click wait, done ahead while the person is
+    /// away: the Settings window is made hidden, so opening it only shows
+    /// it. Tried again later while the person is busy or something moves.
+    fn idle_work(&mut self) {
+        let away = unsafe {
+            let mut info = windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO {
+                cbSize: std::mem::size_of::<windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO>() as u32,
+                dwTime: 0,
+            };
+            windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo(&mut info).as_bool()
+                && windows::Win32::System::SystemInformation::GetTickCount().wrapping_sub(info.dwTime) >= AWAY_AFTER_MS
+        };
+        let busy = crate::anim::stats().running || self.mode.is_some();
+        unsafe {
+            if !away || busy {
+                SetTimer(Some(self.hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
+                return;
+            }
+            let _ = KillTimer(Some(self.hwnd), TIMER_IDLE);
+        }
+        if !crate::settings_window::prepared() {
+            crate::settings_window::prepare(
+                self.hwnd,
+                &self.settings,
+                &self.palette,
+                apply_settings::on_settings_changed,
+            );
+        }
+    }
+
+    /// Settings closed: its window is made again ahead of the next time.
+    pub(super) fn settings_closed(&self) {
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
+        }
+    }
+
     fn sleep_tick(&mut self) {
         let now = Instant::now();
         let suspend_after = Duration::from_secs(self.settings.suspend_after_secs);
@@ -1537,8 +1679,11 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Close other tabs"));
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
+            // Its time is the person reading the menu.
+            let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
                 .0 as usize;
+            drop(modal);
             let _ = DestroyMenu(menu);
             if chosen == MENU_TAB_LAYOUT {
                 self.run(Command::ToggleTabLayout);

@@ -717,7 +717,7 @@ fn paint_tabs(g: &Painter, p: &Paint, shown_partner: Option<u64>) {
         let rect = p.motion.rect_of(item);
         // Folded into its group's label, or on its way there: cut to what
         // is left of it.
-        if rect.width() < 1.0 || rect.height() < 1.0 {
+        if rect.width() < 1.0 || rect.height() < 1.0 || !g.visible(rect.inset(-row / 4.0, -row / 4.0)) {
             continue;
         }
         let folding = item.hidden
@@ -1458,6 +1458,138 @@ impl Motion {
     pub fn spin(&self) -> f32 {
         self.spin
     }
+
+    /// The split's focus line slides between the pages.
+    pub fn indicator_moving(&self) -> bool {
+        self.indicator_slide.is_some()
+    }
+
+    /// The column slides in from its edge: everything in it moves.
+    pub fn rail_moving(&self) -> bool {
+        self.rail.is_some()
+    }
+
+    /// What this frame draws that motion can change, for `changed_area`.
+    /// `loading` are the tabs that show the loading ring.
+    pub fn sheet(&self, layout: &Layout, active: Option<u64>, loading: &[u64], scale: f32) -> Sheet {
+        let mut sheet = Sheet::with_capacity(layout.items.len() + layout.labels.len() + 16);
+        // A card's drop shadow and a ground's ring reach past their rect.
+        let margin = (4.0 * scale).ceil();
+        let grow = |r: RectF| RectF::new(r.left - margin, r.top - margin, r.right + margin, r.bottom + margin);
+        for item in &layout.items {
+            let rect = self.rect_of(item);
+            let spin = if loading.contains(&item.id) { self.spin } else { -1.0 };
+            let look = [
+                self.opacity_of(item.id),
+                self.hover(HoverKey::Tab(item.id)),
+                self.hover(HoverKey::Close(item.id)),
+                spin + if active == Some(item.id) { 10.0 } else { 0.0 },
+            ];
+            sheet.insert(SheetKey::Item(item.id), Piece { bounds: grow(rect), look });
+        }
+        if let Some(item) = active.and_then(|id| layout.items.iter().find(|i| i.id == id)) {
+            let rect = self.live_rect(self.rect_of(item));
+            let look = [self.live_opacity() * self.opacity_of(item.id), 0.0, 0.0, 0.0];
+            sheet.insert(SheetKey::Live, Piece { bounds: grow(rect), look });
+        }
+        for label in &layout.labels {
+            let rect = self.rect_of_label(label);
+            let look = [self.opacity_of(label.id), self.hover(HoverKey::Group(label.id)), self.fold_of(label.id), 0.0];
+            sheet.insert(SheetKey::Item(label.id), Piece { bounds: grow(rect), look });
+            // The group's line runs from its label past its last tab.
+            let mut line = rect;
+            for member in layout.items.iter().filter(|i| i.group == Some(label.id)) {
+                let r = self.rect_of(member);
+                line = RectF::new(
+                    line.left.min(r.left),
+                    line.top.min(r.top),
+                    line.right.max(r.right),
+                    line.bottom.max(r.bottom),
+                );
+            }
+            sheet.insert(SheetKey::Line(label.id), Piece { bounds: grow(line), look });
+        }
+        let plus = self.rect_of_new_tab(layout);
+        let look = [self.hover(HoverKey::NewTab), self.pressed(HoverKey::NewTab), 0.0, 0.0];
+        sheet.insert(SheetKey::Item(NEW_TAB_KEY), Piece { bounds: grow(plus), look });
+        let mut control = |key: HoverKey, rect: Rect| {
+            if rect.width() > 0 {
+                let look = [self.hover(key), self.pressed(key), 0.0, 0.0];
+                sheet.insert(SheetKey::Hover(key), Piece { bounds: grow(rect.into()), look });
+            }
+        };
+        control(HoverKey::Extensions, layout.extensions);
+        for (i, mark) in layout.extension_marks.iter().enumerate() {
+            control(HoverKey::PinnedExtension(i), *mark);
+        }
+        control(HoverKey::Settings, layout.settings);
+        for (button, rect) in NavButton::ALL.into_iter().zip(layout.nav) {
+            control(HoverKey::Nav(button), rect);
+        }
+        let buttons = layout.frame.buttons;
+        let all = buttons.iter().skip(1).fold(buttons[0], |a, b| {
+            Rect::new(a.left.min(b.left), a.top.min(b.top), a.right.max(b.right), a.bottom.max(b.bottom))
+        });
+        for button in [WindowButton::Close, WindowButton::Minimize, WindowButton::Maximize] {
+            control(HoverKey::Window(button), all);
+        }
+        sheet
+    }
+}
+
+/// What a piece of the strip is in a sheet.
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum SheetKey {
+    /// A tab, a group label or the + button, by id.
+    Item(u64),
+    /// The live tab's card.
+    Live,
+    /// A group's line.
+    Line(u64),
+    /// A control of the strip and the caption row.
+    Hover(HoverKey),
+}
+
+/// Where a piece is drawn (with the reach of its shadow) and the numbers
+/// that decide its look this frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Piece {
+    pub bounds: RectF,
+    pub look: [f32; 4],
+}
+
+pub type Sheet = HashMap<SheetKey, Piece>;
+
+/// The part of the strip a frame has to draw again: the old and the new
+/// place of every piece that moved, changed its look, came or went. None
+/// when nothing changed.
+pub fn changed_area(old: &Sheet, new: &Sheet) -> Option<RectF> {
+    let mut area: Option<RectF> = None;
+    let mut add = |r: RectF| {
+        if r.width() <= 0.0 || r.height() <= 0.0 {
+            return;
+        }
+        area = Some(match area {
+            Some(a) => RectF::new(a.left.min(r.left), a.top.min(r.top), a.right.max(r.right), a.bottom.max(r.bottom)),
+            None => r,
+        });
+    };
+    for (key, piece) in new {
+        match old.get(key) {
+            Some(was) if was == piece => {}
+            Some(was) => {
+                add(was.bounds);
+                add(piece.bounds);
+            }
+            None => add(piece.bounds),
+        }
+    }
+    for (key, was) in old {
+        if !new.contains_key(key) {
+            add(was.bounds);
+        }
+    }
+    area
 }
 
 #[cfg(all(test, nea_tests))]

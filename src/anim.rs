@@ -24,7 +24,7 @@ use std::{
 
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    Graphics::Gdi::InvalidateRect,
+    Graphics::Gdi::{InvalidateRect, UpdateWindow},
     UI::WindowsAndMessaging::{KillTimer, SetTimer},
 };
 
@@ -456,13 +456,99 @@ impl<K: Eq + Hash + Copy> Levels<K> {
 
 // ---------- the frame clock ----------
 
-/// About 60 frames a second. 15 rather than 16: the system timer ticks
-/// every 15.6 ms, and asking for 16 waits for the second tick.
+/// "On the next frame": what a window that is still moving asks for. The
+/// frame itself comes from the compositor (see `pacer`), not from a timer.
 pub const FRAME_MS: u32 = 15;
+
+/// The time between two compositor frames before one was measured (60 Hz).
+pub const DEFAULT_PERIOD_US: u64 = 16_667;
+
+/// A request this far off (the loading ring) waits on a plain timer, not on
+/// every compositor frame.
+const SLOW_REQUEST: Duration = Duration::from_millis(24);
+
+/// The pacer's own timer id on the clock's window.
+const SLOW_TIMER: usize = 1;
+
+/// The longest span: below a quarter of the screen's rate a motion is a
+/// stutter anyway, and waiting longer only adds lag.
+const MAX_SPAN: u32 = 4;
+
+/// Time a frame leaves for the compositor and for what else the UI thread
+/// has to do, besides its own cost.
+const FRAME_MARGIN_US: u64 = 1_500;
+
+/// How many compositor frames one frame of the motion spans: the fewest
+/// that hold what a frame costs. A frame that costs more than one period
+/// then comes every second (or third) compositor frame, always the same
+/// number, instead of now one and now two, which the eye sees as a stutter.
+pub fn span_for(period_us: u64, cost_us: u64) -> u32 {
+    let period = period_us.max(1);
+    let need = cost_us + FRAME_MARGIN_US;
+    (need.div_ceil(period) as u32).clamp(1, MAX_SPAN)
+}
+
+/// Whether the compositor frame that came `since_us` after the last frame
+/// drawn is the one to draw. Half a period of slack: the beats themselves
+/// come a little early or late.
+pub fn frame_is_due(since_us: u64, period_us: u64, span: u32) -> bool {
+    let wanted = period_us * span as u64;
+    since_us + period_us / 2 >= wanted
+}
+
+/// The period, followed from one more measured interval. An interval far
+/// off the period (a frame missed, the thread woken late) says nothing
+/// about the screen and is left out; the rest move the estimate an eighth
+/// of the way, so a monitor change is followed within a few frames.
+pub fn next_period(period_us: u64, measured_us: u64) -> u64 {
+    if !(2_000..=50_000).contains(&measured_us) {
+        return period_us;
+    }
+    if measured_us > period_us + period_us / 2 || measured_us + period_us / 3 < period_us {
+        // A doubled interval or a far shorter one: only a run of them (a
+        // new monitor) moves the estimate, slowly.
+        return (period_us * 31 + measured_us) / 32;
+    }
+    (period_us * 7 + measured_us) / 8
+}
+
+/// The cost of the last frames, for the span: the third worst of the last
+/// `COSTS` frames. A frame that costs more once (the first of a motion
+/// takes its snapshot, a page shows up) does not slow down the next ones,
+/// but a motion whose frames keep costing more gets the span it needs.
+const COSTS: usize = 12;
+/// The worst frames left out of the estimate.
+const COST_SPIKES: usize = 2;
+
+#[derive(Default)]
+pub struct Costs {
+    recent: [u64; COSTS],
+    next: usize,
+}
+
+impl Costs {
+    pub fn push(&mut self, us: u64) {
+        self.recent[self.next] = us;
+        self.next = (self.next + 1) % COSTS;
+    }
+
+    pub fn typical(&self) -> u64 {
+        let mut sorted = self.recent;
+        sorted.sort_unstable();
+        sorted[COSTS - 1 - COST_SPIKES]
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Job {
     Paint(isize, Option<RECT>),
+    /// Paints the part of the window the function names at the frame's
+    /// time: None is all of it, an empty rect nothing.
+    Area(isize, fn(HWND, Instant) -> Option<RECT>),
     Drive(fn() -> bool),
 }
 
@@ -474,43 +560,15 @@ struct Entry {
 #[derive(Default)]
 struct Clock {
     entries: Vec<Entry>,
-    timer: usize,
-    timer_ms: u32,
-    /// The system timer is at 1 ms while something moves (see `fine_timer`).
-    fine: bool,
+    /// The pacer runs: every compositor frame comes as a beat.
+    pacing: bool,
+    /// The slow timer is set, and for when.
+    slow_due: Option<Instant>,
+    /// When the last frame was drawn (microseconds from start), and what
+    /// recent frames cost.
+    last_drawn_us: Option<u64>,
+    costs: Costs,
     stats: Stats,
-}
-
-/// While something moves, Windows' timer runs at 1 ms instead of its usual
-/// 15.6: a 15 ms `SetTimer` otherwise fires on the 15.6 ms tick or, when it
-/// just misses one, on the next at 31.2, and measured frames came 20 ms
-/// apart on average with every other one doubled, which reads as a stutter.
-/// Since Windows 10 2004 the resolution is the process's own, and it goes
-/// back the moment the clock stops, so a still window costs nothing.
-/// winmm is loaded the first time something moves, never at startup.
-fn fine_timer(on: bool) {
-    type Period = unsafe extern "system" fn(u32) -> u32;
-    thread_local! {
-        static WINMM: Option<(crate::system_dll::Library, Period, Period)> = {
-            let library = crate::system_dll::Library::load(windows::core::w!("winmm.dll"));
-            library.and_then(|l| unsafe {
-                let begin = l.function::<Period>(c"timeBeginPeriod")?;
-                let end = l.function::<Period>(c"timeEndPeriod")?;
-                Some((l, begin, end))
-            })
-        };
-    }
-    WINMM.with(|w| {
-        if let Some((_, begin, end)) = w {
-            unsafe {
-                if on {
-                    begin(1)
-                } else {
-                    end(1)
-                };
-            }
-        }
-    });
 }
 
 /// What the clock has done, for the script control.
@@ -588,6 +646,7 @@ fn schedule(job: Job, after_ms: u32) {
         let mut c = c.borrow_mut();
         let found = c.entries.iter_mut().find(|e| match (e.job, job) {
             (Job::Paint(a, _), Job::Paint(b, _)) => a == b,
+            (Job::Area(a, f), Job::Area(b, g)) => a == b && std::ptr::fn_addr_eq(f, g),
             (Job::Drive(a), Job::Drive(b)) => std::ptr::fn_addr_eq(a, b),
             _ => false,
         });
@@ -604,49 +663,84 @@ fn schedule(job: Job, after_ms: u32) {
     });
 }
 
+/// Puts the clock in the state its requests ask for: compositor frames for
+/// a request due soon, a plain timer for one due later, nothing at all for
+/// none.
 fn arm(c: &mut Clock) {
-    if c.entries.is_empty() {
-        if c.timer != 0 {
-            unsafe {
-                let _ = KillTimer(None, c.timer);
-            }
-            c.timer = 0;
-            c.timer_ms = 0;
-        }
-        if c.fine {
-            fine_timer(false);
-            c.fine = false;
-        }
+    let Some(window) = crate::pacer::window(beat) else {
         c.stats.running = false;
         return;
-    }
-    // A slow request (the loading ring) lets the timer tick slower.
+    };
     let now = Instant::now();
-    let soonest = c.entries.iter().map(|e| e.due.saturating_duration_since(now)).min().unwrap_or_default();
-    let ms = (soonest.as_millis() as u32).max(FRAME_MS);
-    let ms = if ms <= FRAME_MS + 2 { FRAME_MS } else { ms };
-    // Only a frame-rate request needs the fine timer; the loading ring's
-    // slow ticks are fine on the system's own.
-    let fine = ms == FRAME_MS;
-    if fine != c.fine {
-        fine_timer(fine);
-        c.fine = fine;
+    let soonest = c.entries.iter().map(|e| e.due).min();
+    let pace = soonest.is_some_and(|due| due.saturating_duration_since(now) < SLOW_REQUEST);
+    if pace != c.pacing {
+        crate::pacer::run(pace);
+        c.pacing = pace;
+        if !pace {
+            c.last_drawn_us = None;
+            c.costs.clear();
+        }
     }
-    if c.timer == 0 || c.timer_ms != ms {
-        c.timer = unsafe { SetTimer(None, c.timer, ms, Some(tick)) };
-        c.timer_ms = ms;
+    let slow = soonest.filter(|_| !pace);
+    if slow != c.slow_due {
+        unsafe {
+            match slow {
+                // Woken a frame early: from there the compositor frames take over.
+                Some(due) => {
+                    let wait = due.saturating_duration_since(now).saturating_sub(SLOW_REQUEST / 2);
+                    SetTimer(Some(window), SLOW_TIMER, (wait.as_millis() as u32).max(1), None);
+                }
+                None => {
+                    let _ = KillTimer(Some(window), SLOW_TIMER);
+                }
+            }
+        }
+        c.slow_due = slow;
     }
-    c.stats.running = c.timer != 0;
+    c.stats.running = soonest.is_some();
 }
 
-unsafe extern "system" fn tick(_: HWND, _: u32, _: usize, _: u32) {
+/// A compositor frame or the slow timer.
+fn beat(beat: crate::pacer::Beat) {
+    if let crate::pacer::Beat::Timer = beat {
+        // The slow request is close now: compositor frames from here.
+        CLOCK.with(|c| {
+            let mut c = c.borrow_mut();
+            c.slow_due = None;
+            if let Some(window) = crate::pacer::window(self::beat) {
+                unsafe {
+                    let _ = KillTimer(Some(window), SLOW_TIMER);
+                }
+            }
+            arm(&mut c);
+        });
+        return;
+    }
+    let frame_us = crate::pacer::last_frame_us();
+    let period = crate::pacer::period_us();
+    let draw = CLOCK.with(|c| {
+        let c = c.borrow();
+        let span = span_for(period, c.costs.typical());
+        c.last_drawn_us.is_none_or(|last| frame_is_due(frame_us.saturating_sub(last), period, span))
+    });
+    if draw {
+        tick(frame_us);
+    }
+}
+
+/// One frame: everything due is drawn now, right after the vertical blank,
+/// the windows painted at once rather than when their WM_PAINT comes.
+fn tick(frame_us: u64) {
     let started = Instant::now();
+    // A beat counts as now for whatever is due within half a frame of it.
+    let horizon = started + Duration::from_micros(crate::pacer::period_us() / 2);
     let due: Vec<Job> = CLOCK.with(|c| {
         let mut c = c.borrow_mut();
         c.stats.ticks += 1;
         let mut due = Vec::new();
         c.entries.retain(|e| {
-            if e.due <= started + Duration::from_millis(2) {
+            if e.due <= horizon {
                 due.push(e.job);
                 false
             } else {
@@ -655,11 +749,27 @@ unsafe extern "system" fn tick(_: HWND, _: u32, _: usize, _: u32) {
         });
         due
     });
+    let mut painted: Vec<isize> = Vec::new();
     for job in due {
         match job {
             Job::Paint(hwnd, rect) => unsafe {
                 let _ = InvalidateRect(Some(HWND(hwnd as _)), rect.as_ref().map(|r| r as *const RECT), false);
+                if !painted.contains(&hwnd) {
+                    painted.push(hwnd);
+                }
             },
+            Job::Area(hwnd, f) => {
+                let area = f(HWND(hwnd as _), started);
+                let empty = area.is_some_and(|r| r.right <= r.left || r.bottom <= r.top);
+                if !empty {
+                    unsafe {
+                        let _ = InvalidateRect(Some(HWND(hwnd as _)), area.as_ref().map(|r| r as *const RECT), false);
+                    }
+                    if !painted.contains(&hwnd) {
+                        painted.push(hwnd);
+                    }
+                }
+            }
             Job::Drive(f) => {
                 if f() {
                     schedule(job, FRAME_MS);
@@ -667,8 +777,19 @@ unsafe extern "system" fn tick(_: HWND, _: u32, _: usize, _: u32) {
             }
         }
     }
-    report_frame(started.elapsed());
-    CLOCK.with(|c| arm(&mut c.borrow_mut()));
+    for hwnd in painted {
+        unsafe {
+            let _ = UpdateWindow(HWND(hwnd as _));
+        }
+    }
+    let took = started.elapsed();
+    report_frame(took);
+    CLOCK.with(|c| {
+        let mut c = c.borrow_mut();
+        c.last_drawn_us = Some(frame_us);
+        c.costs.push(took.as_micros() as u64);
+        arm(&mut c);
+    });
 }
 
 /// Repaints `hwnd` (or `rect` of it) on the next frame. A window that is
@@ -677,9 +798,10 @@ pub fn repaint(hwnd: HWND, rect: Option<RECT>) {
     schedule(Job::Paint(hwnd.0 as isize, rect), FRAME_MS);
 }
 
-/// Repaints after `ms` rather than on the next frame (the loading ring).
-pub fn repaint_after(hwnd: HWND, rect: Option<RECT>, ms: u32) {
-    schedule(Job::Paint(hwnd.0 as isize, rect), ms);
+/// Repaints what `area` names at the next frame's time (or after `ms`):
+/// a window that knows which part of it moves.
+pub fn repaint_area(hwnd: HWND, area: fn(HWND, Instant) -> Option<RECT>, ms: u32) {
+    schedule(Job::Area(hwnd.0 as isize, area), ms);
 }
 
 /// Calls `f` every frame for as long as it returns true.

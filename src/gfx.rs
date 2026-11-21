@@ -305,7 +305,14 @@ impl Surface {
             target.BeginDraw();
             let offset = windows_numerics::Matrix3x2::translation(-rect.left as f32, -rect.top as f32);
             target.SetTransform(&offset);
-            let painter = Painter { target: &target, brush: &brush, shared: &shared, bitmaps: &self.bitmaps };
+            let bounds = RectF::new(rect.left as f32, rect.top as f32, rect.right as f32, rect.bottom as f32);
+            let painter = Painter {
+                target: &target,
+                brush: &brush,
+                shared: &shared,
+                bitmaps: &self.bitmaps,
+                bounds: std::cell::Cell::new(bounds),
+            };
             draw(&painter);
             target.EndDraw(None, None)
         };
@@ -350,9 +357,19 @@ pub struct Painter<'a> {
     brush: &'a ID2D1SolidColorBrush,
     shared: &'a Shared,
     bitmaps: &'a RefCell<HashMap<u64, (ID2D1Bitmap, bool)>>,
+    /// The part of the target this paint draws, in the coordinates the
+    /// drawing code sees (an `offset` moves it the other way).
+    bounds: std::cell::Cell<RectF>,
 }
 
 impl Painter<'_> {
+    /// Whether anything drawn in `r` shows in this paint: what does not is
+    /// skipped (a frame of a hover redraws two tabs, not the whole strip).
+    pub fn visible(&self, r: RectF) -> bool {
+        let b = self.bounds.get();
+        r.right > b.left && r.left < b.right && r.bottom > b.top && r.top < b.bottom
+    }
+
     fn rt(&self) -> &ID2D1RenderTarget {
         self.target
     }
@@ -379,7 +396,10 @@ impl Painter<'_> {
             self.rt().GetTransform(&mut before);
             let moved = windows_numerics::Matrix3x2 { M31: before.M31 + dx, M32: before.M32 + dy, ..before };
             self.rt().SetTransform(&moved);
+            let bounds = self.bounds.get();
+            self.bounds.set(RectF::new(bounds.left - dx, bounds.top - dy, bounds.right - dx, bounds.bottom - dy));
             draw(self);
+            self.bounds.set(bounds);
             self.rt().SetTransform(&before);
         }
     }
@@ -573,7 +593,7 @@ impl Painter<'_> {
     /// One line of text in `rect`, centred vertically, cut with an
     /// ellipsis when it does not fit.
     pub fn text(&self, text: &str, rect: RectF, font: Font, color: impl Into<Color>) {
-        if text.is_empty() || rect.width() <= 0.0 {
+        if text.is_empty() || rect.width() <= 0.0 || !self.visible(rect) {
             return;
         }
         let Some((format, _)) = self.shared.format(font) else { return };

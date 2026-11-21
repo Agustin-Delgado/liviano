@@ -10,16 +10,16 @@
 //! asleep keeps the last one. The tab on screen gets no picture: its page
 //! is right there.
 
-use std::cell::RefCell;
+use std::{cell::RefCell, sync::Mutex};
 
 use webview2_com::{
     CapturePreviewCompletedHandler, Microsoft::Web::WebView2::Win32::COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG,
 };
 use windows::Win32::{
-    Foundation::{HWND, POINT},
+    Foundation::{HWND, LPARAM, POINT, WPARAM},
     Graphics::Gdi::ClientToScreen,
-    System::Com::StructuredStorage::CreateStreamOnHGlobal,
-    UI::WindowsAndMessaging::{KillTimer, SetTimer},
+    System::Com::{COINIT_MULTITHREADED, CoInitializeEx, CoUninitialize, StructuredStorage::CreateStreamOnHGlobal},
+    UI::WindowsAndMessaging::{KillTimer, PostMessageW, SetTimer, WM_APP},
 };
 
 use super::{App, with_app};
@@ -36,6 +36,11 @@ const DELAY_MS: u32 = 400;
 /// Bytes every tab's picture may take together.
 const THUMBS_CAP: usize = 3 * 1024 * 1024;
 const JPEG_QUALITY: f32 = 0.72;
+/// Posted when a picture shrunk away from the UI thread is ready.
+pub(super) const WM_APP_THUMB: u32 = WM_APP + 0x52;
+
+/// Pictures shrunk by a worker, waiting for the UI thread: tab, JPEG.
+static SHRUNK: Mutex<Vec<(u64, Vec<u8>)>> = Mutex::new(Vec::new());
 
 #[derive(Default)]
 struct CardState {
@@ -170,18 +175,39 @@ impl App {
         let Ok(stream) = (unsafe { CreateStreamOnHGlobal(Default::default(), true) }) else { return };
         let width = (hovercard::THUMB_WIDTH as f32 * self.scale).round() as u32;
         let kept = stream.clone();
+        let window = self.hwnd.0 as isize;
         let handler = CapturePreviewCompletedHandler::create(Box::new(move |result| {
-            let jpeg = result
-                .ok()
-                .and_then(|_| image::stream_bytes(&kept))
-                .and_then(|full| image::shrink_to_jpeg(&full, width, JPEG_QUALITY));
-            if let Some(jpeg) = jpeg {
-                THUMBS.with(|t| t.borrow_mut().put(id, jpeg));
-            }
+            let Some(full) = result.ok().and_then(|_| image::stream_bytes(&kept)) else { return Ok(()) };
+            // Decoding the whole page and encoding it again takes tens of
+            // milliseconds: never on the UI thread, which may be drawing.
+            let _ = std::thread::Builder::new().name("thumb".into()).spawn(move || {
+                let com = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.is_ok();
+                let jpeg = image::shrink_to_jpeg(&full, width, JPEG_QUALITY);
+                if com {
+                    unsafe { CoUninitialize() };
+                }
+                let Some(jpeg) = jpeg else { return };
+                if let Ok(mut shrunk) = SHRUNK.lock() {
+                    shrunk.push((id, jpeg));
+                }
+                unsafe {
+                    let _ = PostMessageW(Some(HWND(window as *mut _)), WM_APP_THUMB, WPARAM(0), LPARAM(0));
+                }
+            });
             Ok(())
         }));
         unsafe {
             let _ = web.webview.CapturePreview(COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_JPEG, &stream, &handler);
+        }
+    }
+
+    /// Keeps the pictures a worker shrunk (`WM_APP_THUMB`), for tabs still open.
+    pub(super) fn thumbs_shrunk(&self) {
+        let shrunk = SHRUNK.lock().map(|mut s| std::mem::take(&mut *s)).unwrap_or_default();
+        for (id, jpeg) in shrunk {
+            if self.tabs.get(id).is_some() {
+                THUMBS.with(|t| t.borrow_mut().put(id, jpeg));
+            }
         }
     }
 

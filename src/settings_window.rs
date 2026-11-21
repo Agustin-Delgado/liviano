@@ -172,6 +172,7 @@ type LayoutHandler = fn(bool, bool);
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static HANDLER: Cell<Option<fn(Settings)>> = const { Cell::new(None) };
+    static CLOSED: Cell<Option<fn()>> = const { Cell::new(None) };
     static EXTENSION_HANDLER: Cell<Option<ExtensionHandler>> = const { Cell::new(None) };
     /// Who applies the tab layout (vertical, collapsed): the app, which keeps
     /// it in the session rather than in the settings.
@@ -241,25 +242,117 @@ fn list_fill(list: HWND, rows: &[String], select: Option<usize>) {
     }
 }
 
-/// Opens the window, or brings it forward if it is already open.
-pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Settings)) {
-    let existing = STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| st.hwnd)));
-    if let Some(hwnd) = existing {
-        unsafe {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
-            if crate::omnibar::owns_foreground() {
-                let _ = SetForegroundWindow(hwnd);
-            }
-        }
+thread_local! {
+    /// The window was made ahead of time and waits hidden: the settings
+    /// (as JSON) and the palette (as text) it was filled with.
+    static PREPARED: RefCell<Option<(String, String)>> = const { RefCell::new(None) };
+}
+
+fn settings_key(settings: &Settings) -> String {
+    serde_json::to_string(settings).unwrap_or_default()
+}
+
+fn palette_key(palette: &Palette) -> String {
+    format!("{palette:?}")
+}
+
+/// Makes the window ahead of time, hidden, so that opening it later only
+/// shows it: its sixty controls take more than 100 ms to make, which a
+/// click must not wait for. The app calls this while the person is away.
+pub fn prepare(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Settings)) {
+    if STATE.with(|s| s.try_borrow().map_or(true, |g| g.is_some())) {
         return;
     }
     HANDLER.with(|h| h.set(Some(on_change)));
-    let Ok(state) = create(owner, current) else { return };
+    let made = {
+        let _doing = crate::diag::doing(&"settings:prepare", 0);
+        create(owner, current)
+    };
+    let Ok(state) = made else { return };
+    STATE.with(|s| *s.borrow_mut() = Some(state));
+    set_palette(palette);
+    with_state(fill_all);
+    PREPARED.with(|p| *p.borrow_mut() = Some((settings_key(current), palette_key(palette))));
+}
+
+/// Whether a window made ahead waits hidden.
+pub fn prepared() -> bool {
+    PREPARED.with(|p| p.borrow().is_some())
+}
+
+/// Lets go of a window made ahead that can no longer be used as it is
+/// (the screen's scale changed).
+fn discard_prepared() {
+    PREPARED.with(|p| p.borrow_mut().take());
+    let Some(state) = STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut g| g.take())) else { return };
+    unsafe {
+        let _ = DestroyWindow(state.hwnd);
+        let _ = DeleteObject(state.font.into());
+        let _ = DeleteObject(state.heading_font.into());
+    }
+}
+
+/// Where the window goes: centred on its owner, a third of the way down.
+fn place(owner: HWND, hwnd: HWND) {
+    unsafe {
+        let (mut owner_rect, mut own) = (RECT::default(), RECT::default());
+        let _ = GetWindowRect(owner, &mut owner_rect);
+        let _ = GetWindowRect(hwnd, &mut own);
+        let (width, height) = (own.right - own.left, own.bottom - own.top);
+        let x = owner_rect.left + ((owner_rect.right - owner_rect.left) - width) / 2;
+        let y = owner_rect.top + ((owner_rect.bottom - owner_rect.top) - height) / 3;
+        let _ = SetWindowPos(hwnd, None, x.max(0), y.max(0), 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+/// Opens the window, or brings it forward if it is already open.
+pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Settings)) {
+    let prepared = PREPARED.with(|p| p.borrow_mut().take());
+    let existing = STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.theme, st.scale))));
+    if let Some((hwnd, first, scale)) = existing {
+        let Some((settings_was, palette_was)) = prepared else {
+            unsafe {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+                if crate::omnibar::owns_foreground() {
+                    let _ = SetForegroundWindow(hwnd);
+                }
+            }
+            return;
+        };
+        let dpi = unsafe { GetDpiForWindow(owner) }.max(96);
+        if (dpi as f32 / 96.0 - scale).abs() < 0.01 {
+            HANDLER.with(|h| h.set(Some(on_change)));
+            if palette_was != palette_key(palette) {
+                set_palette(palette);
+            }
+            if settings_was != settings_key(current) {
+                with_state(|st| {
+                    st.settings = current.clone();
+                    fill_all(st);
+                });
+            }
+            place(owner, hwnd);
+            show(hwnd, first);
+            return;
+        }
+        PREPARED.with(|p| *p.borrow_mut() = Some((settings_was, palette_was)));
+        discard_prepared();
+    }
+    HANDLER.with(|h| h.set(Some(on_change)));
+    let made = {
+        let _doing = crate::diag::doing(&"settings:create", 0);
+        create(owner, current)
+    };
+    let Ok(state) = made else { return };
     let hwnd = state.hwnd;
     let first = state.theme;
     STATE.with(|s| *s.borrow_mut() = Some(state));
     set_palette(palette);
     with_state(fill_all);
+    show(hwnd, first);
+}
+
+fn show(hwnd: HWND, first: HWND) {
     // A dialog appearing: 100 ms of fade.
     crate::fade::fade_in_window(hwnd, crate::anim::specs::DIALOG);
     unsafe {
@@ -1308,6 +1401,14 @@ fn close() {
             }
         }
     }
+    if let Some(closed) = CLOSED.with(|c| c.get()) {
+        closed();
+    }
+}
+
+/// Who hears that the window closed (the app makes the next one ahead).
+pub fn set_closed_handler(handler: fn()) {
+    CLOSED.with(|c| c.set(Some(handler)));
 }
 
 fn destroy(hwnd: HWND) {

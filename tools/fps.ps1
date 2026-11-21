@@ -30,10 +30,16 @@ param(
     [int]$Tabs = 40,
     [double]$TargetMs = 16.667,
     [string]$Report = '',
-    [switch]$KeepData
+    # Only the animations whose names match (wildcards); the mouse and
+    # click passes run only without it.
+    [string[]]$Only = @(),
+    [switch]$KeepData,
+    # Exit with code 1 when hang.log has a handler of 50 ms or more.
+    [switch]$FailOnStall
 )
 
 $ErrorActionPreference = 'Stop'
+$script:exitCode = 0
 . (Join-Path $PSScriptRoot 'bench.ps1')
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 if (-not $Exe) { $Exe = Join-Path $root 'target\release\nea.exe' }
@@ -84,6 +90,11 @@ public static class NeaWin {
     }
 
     public static bool Visible(IntPtr hwnd) { return IsWindowVisible(hwnd); }
+
+    [DllImport("user32.dll")] static extern uint GetGuiResources(IntPtr process, uint flags);
+    // GDI (0) and USER (1) objects of a process.
+    public static uint Gdi(IntPtr process) { return GetGuiResources(process, 0); }
+    public static uint User(IntPtr process) { return GetGuiResources(process, 1); }
 
     public static IntPtr Point(int x, int y) { return (IntPtr)(((y & 0xFFFF) << 16) | (x & 0xFFFF)); }
 }
@@ -139,11 +150,14 @@ try {
     }
     if (-not $main) { throw 'The main window of Nea is not there.' }
     Start-Sleep -Seconds 4
+    $gdiBefore = [NeaWin]::Gdi($process.Handle)
+    $userBefore = [NeaWin]::User($process.Handle)
 
     $results = New-Object System.Collections.Generic.List[object]
     $moves = New-Object System.Collections.Generic.List[double]
 
     function Measure-Animation([string]$name, [scriptblock]$trigger, [int]$settleMs = 700, [scriptblock]$after = $null) {
+        if ($Only.Count -and -not ($Only | Where-Object { $name -like $_ })) { return }
         $intervals = New-Object System.Collections.Generic.List[double]
         $byLabel = @{}
         for ($r = 0; $r -lt $Repeat; $r++) {
@@ -236,6 +250,11 @@ try {
         foreach ($w in [NeaWin]::TopLevel([uint32]$process.Id, 'NeaSettings')) { [void][NeaWin]::PostMessage($w, 0x10, [IntPtr]0, [IntPtr]0) }
     }
 
+    if ($Only.Count) {
+        $results | Format-Table -AutoSize | Out-String | Write-Host
+        Write-Host ("Handles: GDI {0} -> {1}, USER {2} -> {3}" -f $gdiBefore, [NeaWin]::Gdi($process.Handle), $userBefore, [NeaWin]::User($process.Handle))
+        return
+    }
     # --- mouse moves, as the real WM_MOUSEMOVE path ---
     Write-Host 'Mouse moves over the strip:'
     $traceBefore = 0
@@ -291,10 +310,33 @@ try {
     $s = Stats $clickIntervals.ToArray()
     if ($s) { Write-Host ("  live card after a click: p50 {0:N2} ms, p95 {1:N2} ms, max {2:N2} ms over {3} intervals" -f $s.p50, $s.p95, $s.max, $s.count) }
     $hang = Join-Path $data 'hang.log'
-    if (Test-Path $hang) { Write-Host 'hang.log:'; Get-Content -LiteralPath $hang | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" } }
+    $stalls = @()
+    if (Test-Path $hang) {
+        $stalls = @(Get-Content -LiteralPath $hang | Where-Object { $_ -match ' slow: ' })
+        Write-Host 'hang.log:'; Get-Content -LiteralPath $hang | Select-Object -Last 20 | ForEach-Object { Write-Host "  $_" }
+    }
+
+    # --- the window at rest: CPU, memory and handles after the whole run ---
+    $engine = { @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($data) } | ForEach-Object { Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue }) }
+    Start-Sleep -Seconds 5
+    $process.Refresh()
+    $appCpu = $process.TotalProcessorTime.TotalMilliseconds
+    $engineCpu = (& $engine | ForEach-Object { $_.TotalProcessorTime.TotalMilliseconds } | Measure-Object -Sum).Sum
+    $idleSec = 10
+    Start-Sleep -Seconds $idleSec
+    $process.Refresh()
+    $appIdle = ($process.TotalProcessorTime.TotalMilliseconds - $appCpu) / ($idleSec * 10.0)
+    $engineIdle = ((& $engine | ForEach-Object { $_.TotalProcessorTime.TotalMilliseconds } | Measure-Object -Sum).Sum - $engineCpu) / ($idleSec * 10.0)
+    $engineMb = ((& $engine | Measure-Object -Property PrivateMemorySize64 -Sum).Sum) / 1MB
+    $live = @((Invoke-Nea state).tabs | Where-Object { $_.live -ne 'asleep' }).Count
+    Write-Host 'At rest:'
+    Write-Host ("  CPU over {0} s: app {1:N2} %, engine {2:N2} % (of one core)" -f $idleSec, $appIdle, $engineIdle)
+    Write-Host ("  memory: app {0:N1} MB private, engine {1:N1} MB private, {2} tabs awake" -f ($process.PrivateMemorySize64 / 1MB), $engineMb, $live)
+    Write-Host ("  handles: GDI {0} -> {1}, USER {2} -> {3} (after startup -> after the run)" -f $gdiBefore, [NeaWin]::Gdi($process.Handle), $userBefore, [NeaWin]::User($process.Handle))
 
     if ($Report) { $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $Report -Encoding utf8 }
     $results | Format-Table -AutoSize | Out-String | Write-Host
+    if ($FailOnStall -and $stalls.Count) { $script:exitCode = 1; Write-Host "$($stalls.Count) handlers took 50 ms or more." }
 } finally {
     try { Invoke-Nea quit | Out-Null } catch { }
     Disconnect-Nea
@@ -306,3 +348,4 @@ try {
     Remove-Item Env:NEA_DATA_DIR, Env:NEA_BENCH, Env:NEA_BENCH_PIPE, Env:NEA_TRACE, Env:NEA_SCALE, Env:NEA_CREDENTIAL_PREFIX -ErrorAction SilentlyContinue
     if (-not $KeepData) { Remove-Item -Recurse -Force -LiteralPath $data -ErrorAction SilentlyContinue } else { Write-Host "Data: $data" }
 }
+if ($script:exitCode) { exit $script:exitCode }
