@@ -81,7 +81,7 @@ Or install it with [winget](https://learn.microsoft.com/windows/package-manager/
 (after the package is accepted):
 
 ```powershell
-winget install AgustinDelgado.Nea
+winget install nea
 ```
 
 Nea runs from where it is, as a portable app. It does not change the
@@ -197,7 +197,7 @@ update check are the only network traffic. [Privacy](#privacy) and
 - **Code signing certificate.** Nea has none yet. Thus SmartScreen shows a
   warning when you open the installer or the program. The application to the
   SignPath Foundation is in review (see [Code signing policy](#code-signing-policy)).
-- **winget.** The package `AgustinDelgado.Nea` is in review in
+- **winget.** The package `Nea.Browser` is in review in
   [microsoft/winget-pkgs#486029](https://github.com/microsoft/winget-pkgs/pull/486029).
   `packaging/winget/` holds the submitted manifest.
 

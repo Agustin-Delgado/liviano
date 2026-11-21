@@ -1,10 +1,10 @@
 # yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.28.0.schema.json
 
-PackageIdentifier: AgustinDelgado.Nea
+PackageIdentifier: Nea.Browser
 PackageVersion: 0.1.0
 PackageLocale: en-US
-Publisher: Agustin Delgado
-PublisherUrl: https://github.com/Agustin-Delgado
+Publisher: Nea
+PublisherUrl: https://github.com/Agustin-Delgado/nea
 PublisherSupportUrl: https://github.com/Agustin-Delgado/nea/issues
 PackageName: Nea
 PackageUrl: https://github.com/Agustin-Delgado/nea
