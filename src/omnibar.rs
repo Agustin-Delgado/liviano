@@ -14,7 +14,7 @@ use std::cell::{Cell, RefCell};
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, InvalidateRect, PAINTSTRUCT,
             SetBkColor, SetTextColor,
@@ -26,8 +26,8 @@ use windows::{
                 WM_MOUSELEAVE,
             },
             Input::KeyboardAndMouse::{
-                GetKeyState, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE, VK_DOWN, VK_ESCAPE,
-                VK_RETURN, VK_SHIFT, VK_UP,
+                GetAsyncKeyState, GetKeyState, SetFocus, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_DELETE,
+                VK_DOWN, VK_ESCAPE, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON, VK_RETURN, VK_SHIFT, VK_UP,
             },
             Shell::{DefSubclassProc, SetWindowSubclass},
             WindowsAndMessaging::*,
@@ -89,6 +89,27 @@ thread_local! {
 const LIST_PAD: f32 = 6.0;
 /// The glass's column at the field's left.
 const GLASS_COLUMN: f32 = 44.0;
+
+/// Posted to the panel when a click outside it took activation away.
+const WM_CLICKED_OUTSIDE: u32 = WM_APP + 60;
+
+/// Whether a mouse button is down with the pointer outside the panel: what
+/// a deactivation looks like when a click caused it.
+fn clicked_outside(panel: HWND) -> bool {
+    let down = [VK_LBUTTON, VK_RBUTTON, VK_MBUTTON].iter().any(|k| unsafe { GetAsyncKeyState(k.0 as i32) } as u16 & 0x8000 != 0);
+    let mut cursor = POINT::default();
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetCursorPos(&mut cursor);
+        let _ = GetWindowRect(panel, &mut rect);
+    }
+    is_outside_click(down, cursor, rect)
+}
+
+fn is_outside_click(button_down: bool, cursor: POINT, panel: RECT) -> bool {
+    let inside = cursor.x >= panel.left && cursor.x < panel.right && cursor.y >= panel.top && cursor.y < panel.bottom;
+    button_down && !inside
+}
 
 fn signal(s: Signal) {
     if let Some(handler) = HANDLER.with(|h| h.get()) {
@@ -505,11 +526,27 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
             }
             LRESULT(1)
         }
-        // Losing activation does not close the field: the main window taking
-        // focus back (first launch, Alt+Tab, a click on the title bar) would
-        // otherwise close it. It closes on Esc, on Enter, or on a click on
-        // the page or the tab strip, which the app handles.
-        WM_ACTIVATE => LRESULT(0),
+        // Losing activation alone does not close the field: the main window
+        // taking focus back (first launch, Alt+Tab) would otherwise close it.
+        // A click is what closes it: on the page or the strip (the app sees
+        // those), and also any other click outside it that takes activation
+        // away — the page's own focus event does not always arrive, and a
+        // click on another program left the field floating.
+        WM_ACTIVATE => {
+            if (wparam.0 & 0xFFFF) as u32 == WA_INACTIVE && clicked_outside(hwnd) {
+                // Posted: activation moves while the app may be mid-call.
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_CLICKED_OUTSIDE, WPARAM(0), LPARAM(0));
+                }
+            }
+            LRESULT(0)
+        }
+        WM_CLICKED_OUTSIDE => {
+            if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                signal(Signal::Cancel);
+            }
+            LRESULT(0)
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_ACTIVATE as isize),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
