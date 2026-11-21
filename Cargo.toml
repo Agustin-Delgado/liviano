@@ -64,3 +64,15 @@ strip = true
 [dev-dependencies]
 # Only the key generator needs randomness.
 ed25519-compact = { version = "2.6.1", features = ["random"] }
+
+# The capture tools (examples/encode_mp4.rs) also encode video and GIFs.
+[dev-dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Imaging",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+]

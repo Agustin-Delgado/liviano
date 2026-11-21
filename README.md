@@ -84,6 +84,11 @@ Cuadros intermedios, con el tiempo de cada uno, grabados con
 Las capturas salen de `tools/capture.ps1` (PrintWindow, sin traer la ventana
 al frente); la sombra y el borde que dibuja Windows no aparecen en ellas.
 
+Recorrido completo, con una foto por función y un video:
+[docs/muestra](docs/muestra/README.md).
+
+![Tarjeta al pasar el mouse, cambio de pestaña y reordenar](docs/muestra/animaciones.gif)
+
 ## Qué hace
 
 Estado de cada función de la especificación (sección 3) en esta versión.
