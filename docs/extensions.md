@@ -66,6 +66,10 @@ service worker and shows the report on the page.
     "Options" and "Side panel". Each item opens a normal tab.
   - Pinned extensions show their initial next to the button. Click the
     initial to open the popup.
+  - The puzzle piece button is always next to the gear. With no extension
+    installed, its menu shows "No extensions installed", "Get extensions
+    from the Chrome Web Store…" (it opens the store in a new tab) and
+    "Manage extensions…" (Settings).
   - Result: the popup **sees itself as the active tab**. A popup that acts on
     "the current tab" reports that the tab is not a website. uBlock Origin
     Lite is an example.

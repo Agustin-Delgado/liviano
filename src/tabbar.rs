@@ -221,7 +221,7 @@ pub struct Layout {
     pub vertical: bool,
     /// Back, forward and reload, after the window's buttons.
     pub nav: [Rect; 3],
-    /// The extensions button; empty when no extension is installed.
+    /// The extensions button, beside the gear; empty only on the slim caption.
     pub extensions: Rect,
     /// The pinned extensions beside it, in order.
     pub extension_marks: Vec<Rect>,
@@ -335,31 +335,19 @@ fn shown_marks(pinned: usize, room: i32, m: &Metrics) -> usize {
     pinned.min((room / (m.px(28) + m.px(2))).max(0) as usize)
 }
 
-/// Horizontal: the button at the right end, pinned ones to its left.
-/// Vertical: the button at the bottom left, pinned ones to its right.
+/// The button just left of the gear, its twin: the same size, on the same
+/// row, with the gap that separates back, forward and reload. Pinned ones go
+/// to its left. In the column they stop at its pad.
 fn place_extensions(layout: &mut Layout, pinned: usize, m: &Metrics) {
-    let strip = layout.strip;
-    let (button_w, mark_w, gap) = (m.px(30), m.px(28), m.px(2));
-    if layout.vertical {
-        let pad = m.px(8);
-        let row = m.px(32);
-        let top = strip.bottom - pad - row;
-        layout.extensions = Rect::new(pad, top, pad + button_w, top + row);
-        let room = layout.settings.left - gap - layout.extensions.right;
-        let mut x = layout.extensions.right + gap;
-        for _ in 0..shown_marks(pinned, room, m) {
-            layout.extension_marks.push(Rect::new(x, top, x + mark_w, top + row));
-            x += mark_w + gap;
-        }
-    } else {
-        let (top, bottom) = (m.px(6), strip.bottom - m.px(6));
-        let right = layout.settings.left - gap;
-        layout.extensions = Rect::new(right - button_w, top, right, bottom);
-        let mut x = layout.extensions.left - gap;
-        for _ in 0..shown_marks(pinned, strip.width() / 4, m) {
-            layout.extension_marks.insert(0, Rect::new(x - mark_w, top, x, bottom));
-            x -= mark_w + gap;
-        }
+    let (mark_w, gap) = (m.px(28), m.px(2));
+    let gear = layout.settings;
+    let right = gear.left - gap;
+    layout.extensions = Rect::new(right - gear.width(), gear.top, right, gear.bottom);
+    let room = if layout.vertical { layout.extensions.left - m.px(8) } else { layout.strip.width() / 4 };
+    let mut x = layout.extensions.left - gap;
+    for _ in 0..shown_marks(pinned, room, m) {
+        layout.extension_marks.insert(0, Rect::new(x - mark_w, gear.top, x, gear.bottom));
+        x -= mark_w + gap;
     }
 }
 
