@@ -129,6 +129,8 @@ jobs:
           The files are not signed with a code signing certificate. Windows SmartScreen can show "Windows protected your PC". Select **More info**, then **Run anyway**.
 
           Compare the files with \`SHA256SUMS.txt\`. Installed copies update themselves: they read \`latest.json\` and verify its Ed25519 signature.
+
+          Code signing policy: https://github.com/Agustin-Delgado/nea#code-signing-policy
           EOF
           gh release create "$TAG" --verify-tag --title "Nea $VERSION" --notes-file notes.md \
             dist/nea.exe dist/latest.json "dist/Nea-$VERSION-setup.exe" "dist/Nea-$VERSION-portable.zip" dist/SHA256SUMS.txt

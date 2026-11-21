@@ -52,21 +52,31 @@ pub fn move_dir(old: &Path, new: &Path) -> Moved {
     }
     // A process that is just exiting (the old version that started this
     // one after an update) may hold a handle for a moment.
+    if rename_with_retries(old, new) {
+        return Moved::Renamed;
+    }
+    let staging = staging_path(new);
+    let _ = fs::remove_dir_all(&staging);
+    // A virus scanner can still hold a file that was just copied: retry the
+    // last rename the same way.
+    if copy_tree(old, &staging).is_ok() && rename_with_retries(&staging, new) {
+        return Moved::Copied;
+    }
+    let _ = fs::remove_dir_all(&staging);
+    Moved::Failed
+}
+
+/// Five tries, 200 ms apart.
+fn rename_with_retries(from: &Path, to: &Path) -> bool {
     for attempt in 0..5 {
-        if fs::rename(old, new).is_ok() {
-            return Moved::Renamed;
+        if fs::rename(from, to).is_ok() {
+            return true;
         }
         if attempt < 4 {
             std::thread::sleep(Duration::from_millis(200));
         }
     }
-    let staging = staging_path(new);
-    let _ = fs::remove_dir_all(&staging);
-    if copy_tree(old, &staging).is_ok() && fs::rename(&staging, new).is_ok() {
-        return Moved::Copied;
-    }
-    let _ = fs::remove_dir_all(&staging);
-    Moved::Failed
+    false
 }
 
 fn staging_path(new: &Path) -> PathBuf {

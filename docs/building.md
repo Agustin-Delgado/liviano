@@ -128,7 +128,8 @@ Thus the zip file is the same in each run if the program does not change.
 Without a code signing certificate, the script shows a warning and continues.
 The program works, but SmartScreen shows a warning when you open it.
 
-`packaging/winget/` contains a sample winget manifest. It is not published.
+`packaging/winget/` contains the winget manifest of the last version that was sent to
+[microsoft/winget-pkgs](https://github.com/microsoft/winget-pkgs). For a new version, copy the folder, change the version, the URL and `InstallerSha256` (the hash of `Nea-<version>-setup.exe`), run `winget validate --manifest <folder>` and open a pull request there.
 
 ## Script control
 

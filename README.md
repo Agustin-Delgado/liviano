@@ -77,6 +77,13 @@ Windows 11 and almost all updated Windows 10 installations include it.
    [latest release](https://github.com/Agustin-Delgado/nea/releases/latest).
 2. Run it.
 
+Or install it with [winget](https://learn.microsoft.com/windows/package-manager/)
+(after the package is accepted):
+
+```powershell
+winget install AgustinDelgado.Nea
+```
+
 Nea runs from where it is, as a portable app. It does not change the
 registry. Your data goes to `%APPDATA%\Nea`.
 
@@ -153,6 +160,26 @@ You can allow ads and pop-ups for one site from the tab menu.
 [docs/privacy.md](docs/privacy.md) gives the details and the location of each
 data file.
 
+## Code signing policy
+
+Free code signing provided by [SignPath.io](https://about.signpath.io),
+certificate by [SignPath Foundation](https://signpath.org) (the application
+is in review).
+
+- Committers and reviewers: [Agustin-Delgado](https://github.com/Agustin-Delgado)
+- Approvers: [Agustin-Delgado](https://github.com/Agustin-Delgado)
+
+Only the files that the [Release workflow](.github/workflows/release.yml)
+builds from this repository on GitHub-hosted runners get a signature. A
+person approves each signing request. Each change from outside the team gets
+a review before the merge.
+
+Privacy: this program will not transfer any information to other networked
+systems unless specifically requested by the user or the person installing
+or operating it. The pages that you open, the filter lists and the daily
+update check are the only network traffic. [Privacy](#privacy) and
+[docs/privacy.md](docs/privacy.md) give the details.
+
 ## Documentation
 
 - [Features](docs/features.md): what Nea does, how it looks and what is verified.
@@ -168,9 +195,11 @@ data file.
 ## Status
 
 - **Code signing certificate.** Nea has none yet. Thus SmartScreen shows a
-  warning when you open the installer or the program.
-- **winget.** The manifest in `packaging/winget/` needs the URL and the hash
-  of a release. It is not published.
+  warning when you open the installer or the program. The application to the
+  SignPath Foundation is in review (see [Code signing policy](#code-signing-policy)).
+- **winget.** The package `AgustinDelgado.Nea` is in review in
+  [microsoft/winget-pkgs#486029](https://github.com/microsoft/winget-pkgs/pull/486029).
+  `packaging/winget/` holds the submitted manifest.
 
 ## Contributing
 
