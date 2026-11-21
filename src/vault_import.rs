@@ -402,8 +402,11 @@ pub fn choose(owner: HWND, at: Option<POINT>) -> Option<Source> {
             let _ = GetCursorPos(&mut point);
             point
         });
+        // Its time is the person reading the menu.
+        let modal = crate::diag::modal();
         let chosen =
             TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, owner, None).0 as usize;
+        drop(modal);
         let _ = DestroyMenu(menu);
         chosen
     };
