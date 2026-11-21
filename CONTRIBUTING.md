@@ -9,11 +9,14 @@ project cannot accept.
 You need these items:
 
 - Windows 10 or 11.
-- Stable Rust with the `x86_64-pc-windows-msvc` target.
+- [rustup](https://rustup.rs). `rust-toolchain.toml` selects the Rust version.
+  CI uses the same version.
 - The Visual Studio build tools (MSVC) with the Windows SDK (for `rc.exe`).
 - The WebView2 runtime.
 
 ```powershell
+git clone https://github.com/Agustin-Delgado/nea.git
+cd nea
 cargo build            # development build: "Nea (development)"
 cargo build --release  # the published version
 ```
@@ -21,7 +24,7 @@ cargo build --release  # the published version
 Before you open a PR, run the same checks as CI:
 
 ```powershell
-cargo fmt --check
+cargo fmt --all --check
 cargo clippy -- -D warnings
 cargo build --release
 ```
@@ -43,10 +46,25 @@ diagnostics and packaging.
 
 ## Tests
 
-The tests are not in this repository. They are in a private repository of
-the maintainer, with the code. Thus the maintainer validates each PR before
-the merge. CI here checks only the build, the format and clippy. If your
-change needs a test, tell in the PR how you tested it manually.
+The tests are in a private repository. Pull requests are tested by CI. CI
+mounts the tests as the submodule `tests/` and runs them for each pull
+request from a branch of this repository. A pull request from a fork has no
+access to the tests. For a fork, CI checks the format, clippy and the build,
+and the maintainer runs the tests before the merge. If your change needs a
+test, tell in the PR how you tested it manually.
+
+If you have access to the tests, clone with `--recurse-submodules`:
+
+```powershell
+git clone --recurse-submodules https://github.com/Agustin-Delgado/nea.git
+cd nea
+cargo test
+cargo clippy --all-targets -- -D warnings
+```
+
+Without the submodule, `cargo test` builds and runs 0 tests.
+[docs/building.md](docs/building.md#tests) tells how the tests connect to
+the code.
 
 ## Pull requests
 

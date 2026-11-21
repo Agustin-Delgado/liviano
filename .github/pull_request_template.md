@@ -4,11 +4,11 @@
 
 ## How I tested it
 
-<!-- The tests are in a private repository. The maintainer runs them. Tell how you tested the change manually. -->
+<!-- The tests are in a private repository. Pull requests are tested by CI. Tell how you tested the change manually. -->
 
 ## Before submitting
 
-- [ ] `cargo fmt --check`, `cargo clippy -- -D warnings` and `cargo build --release` pass.
+- [ ] `cargo fmt --all --check`, `cargo clippy -- -D warnings` and `cargo build --release` pass.
 - [ ] Code, comments and interface text are in English.
 - [ ] If the change affects the interface, I added screenshots in light and in dark.
 - [ ] The change adds no memory at rest, or the description gives the measurement.

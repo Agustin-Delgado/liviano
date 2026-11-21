@@ -10,6 +10,11 @@
 
 ## Install
 
+Download the files from the
+[latest release](https://github.com/Agustin-Delgado/nea/releases/latest).
+
+- **Program:** `nea.exe`. Run it. It runs from where it is, as a portable
+  app.
 - **Installer:** `Nea-<version>-setup.exe`. It installs Nea for the current
   user in `%LOCALAPPDATA%\Programs\Nea`. It does not need administrator
   rights. It adds a shortcut to the Start menu and an entry to Settings →
@@ -20,19 +25,81 @@
 `nea.exe` also accepts `--install` and `--uninstall`. Add `--quiet` to skip
 all questions. Winget uses this mode.
 
+The releases are not signed with a code signing certificate. When you open
+`nea.exe` or the installer for the first time, SmartScreen can show "Windows
+protected your PC". Select **More info**, then **Run anyway**. Compare the
+SHA-256 hash of the file with `SHA256SUMS.txt` in the release.
+
 ## Build
 
 You need these items:
 
-- Stable Rust with the `x86_64-pc-windows-msvc` target.
+- [rustup](https://rustup.rs). `rust-toolchain.toml` pins the Rust version
+  and the components. CI uses the same file.
 - The Visual Studio build tools (MSVC) with the Windows SDK. The SDK supplies
   `rc.exe` for the icon and the manifest.
 
 ```powershell
 cargo build            # development build: "Nea (development)"
 cargo build --release  # the published version
+```
+
+## Tests
+
+The tests are in a private repository, `Agustin-Delgado/nea-tests`. This
+repository mounts it as the git submodule `tests/`. Pull requests are tested
+by CI. If you have access to the tests, clone with `--recurse-submodules`:
+
+```powershell
+git clone --recurse-submodules https://github.com/Agustin-Delgado/nea.git
+cd nea
 cargo test
 ```
+
+In a clone without the submodule, run `git submodule update --init tests`.
+
+How the parts connect:
+
+- Each module of `src` that has tests ends with a hook. The hook loads the
+  tests of the module from the submodule:
+
+  ```rust
+  #[cfg(all(test, nea_tests))]
+  #[path = "../tests/unit/omnibox.rs"]
+  #[rustfmt::skip]
+  mod tests;
+  ```
+
+  The `#[path]` is relative to the folder of the source file.
+- `build.rs` sets the `nea_tests` cfg only when `tests/README.md` exists.
+  Without the submodule, the hooks are off. `cargo build`, `cargo clippy` and
+  `cargo test` work, and `cargo test` runs 0 tests.
+- `#[rustfmt::skip]` stops `cargo fmt` from opening the missing files. CI
+  checks the format of the test files with `rustfmt` directly.
+- `autotests = false` in `Cargo.toml` stops Cargo from building the files in
+  `tests/` as integration tests.
+
+Some tests use the real Windows Credential Manager. Each test writes only
+under its own prefix (`NeaTest-…`), unique to the test and to the process,
+and deletes its entries when it ends.
+
+To change a test, commit in `tests/` and push to `nea-tests`. Then commit the
+new submodule pointer here.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on each push to `main`, on each pull request
+and on a manual run, on `windows-latest`:
+
+1. It mounts the tests with the deploy key in the secret `TESTS_DEPLOY_KEY`.
+   If the secret is not available (a pull request from a fork), it shows a
+   warning and continues without the tests.
+2. It installs the toolchain of `rust-toolchain.toml`.
+3. It runs `cargo fmt --all --check`, and `rustfmt --check` on the test files.
+4. It runs `cargo clippy -- -D warnings`, with `--all-targets` when the tests
+   are mounted.
+5. It runs `cargo build --release` and, when the tests are mounted,
+   `cargo test`.
 
 The development build shows its name in the window title, the shortcut and
 Settings. It does not check for updates. The only exception is an explicit
@@ -160,12 +227,43 @@ can supply an old package as a new one.
 
    Keep the private key in a secrets manager. Never commit it. `.gitignore`
    contains `keys/*.key`. Commit the public key (`keys/update-public.hex`),
-   because the build puts it into the program. The current key in the
-   repository is a **development** key. Replace it before the first public
-   release.
+   because the build puts it into the program. The key in the repository is
+   the production key. Its private half is the secret `UPDATE_SIGNING_KEY`
+   of this repository.
 2. The updater reads `latest.json` from the latest release of
    `github.com/Agustin-Delgado/nea` (`RELEASES_OWNER` in `src/updater.rs`).
-3. Run `.\build.ps1 -UpdateKey <private key> -PackageUrl <URL of nea.exe>`.
-   Then upload `nea.exe` and `latest.json` to the release.
+   The release workflow makes and uploads that file.
 
-To sign manually, use `cargo run --example sign -- <package> <private key> [--version x.y.z] [--url url] [--out latest.json]`.
+To sign manually, use `cargo run --example sign -- <package> <private key> [--version x.y.z] [--url url] [--out latest.json] [--check-key]`.
+`--check-key` stops with an error if the key is not the key in
+`keys/update-public.hex`.
+
+### Cut a release
+
+1. Change `version` in `Cargo.toml` (for example `0.2.0`). Run `cargo build`
+   to update `Cargo.lock`. Commit both files to `main`.
+2. Tag the commit and push the tag:
+
+   ```powershell
+   git tag v0.2.0
+   git push origin v0.2.0
+   ```
+
+3. `.github/workflows/release.yml` starts. It does these steps:
+   - It stops if the tag is not `v` + the version in `Cargo.toml`.
+   - It runs `build.ps1` with the toolchain of `rust-toolchain.toml`.
+   - It signs `nea.exe` for the updater with the secret `UPDATE_SIGNING_KEY`
+     and `-RequireEmbeddedKey`. The key is in a temporary file only during
+     this step.
+   - It signs the code only if the secrets `CODE_SIGNING_PFX` (base64) and
+     `CODE_SIGNING_PASSWORD` exist. Without them, SmartScreen shows a warning.
+   - It creates the GitHub release with `nea.exe`, `latest.json`,
+     `Nea-<version>-setup.exe`, `Nea-<version>-portable.zip` and
+     `SHA256SUMS.txt`.
+
+   `latest.json` gives the absolute URL of `nea.exe` in the tagged release.
+   Installed copies find the new version in at most one day.
+
+To test the workflow without a release, run it manually (*Actions* →
+*Release* → *Run workflow*) with `dry_run` on. The run builds and signs, and
+keeps the files as a workflow artifact. It does not create a release.

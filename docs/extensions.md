@@ -36,7 +36,7 @@ memory". Settings shows the same warning.
 
 ## Tested APIs
 
-The test extension is in `tools/extension-probe`: MV3, with a service worker,
+The test extension is in the private test repository (`tests/tools/extension-probe`): MV3, with a service worker,
 a content script, a popup and an options page. It calls each API from the
 service worker and shows the report on the page.
 
@@ -134,8 +134,8 @@ states (enabled, pinned).
 - **Run the API test again:**
 
   ```
-  cargo run --release --example extension_probe -- tools/extension-probe 9335
-  node tools/probe-extension.mjs 9335
+  cargo run --release --manifest-path tests/probes/Cargo.toml --bin extension_probe -- tests/tools/extension-probe 9335
+  node tests/tools/probe-extension.mjs 9335
   ```
 
   - `PROBE_DATA=<folder>` keeps the data folder between runs.

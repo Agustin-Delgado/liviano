@@ -10,7 +10,9 @@
 <p align="center">Nea is a Windows browser that uses little memory. It has one tab strip, one field and the page.</p>
 
 <p align="center">
-  <a href="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml"><img src="https://github.com/Agustin-Delgado/nea/actions/workflows/build.yml/badge.svg" alt="Build"></a>
+  <a href="https://github.com/Agustin-Delgado/nea/actions/workflows/ci.yml"><img src="https://github.com/Agustin-Delgado/nea/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/Agustin-Delgado/nea/actions/workflows/release.yml"><img src="https://github.com/Agustin-Delgado/nea/actions/workflows/release.yml/badge.svg" alt="Release"></a>
+  <a href="https://github.com/Agustin-Delgado/nea/releases/latest"><img src="https://img.shields.io/github/v/release/Agustin-Delgado/nea" alt="Latest release"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4" alt="Windows 10 and 11">
 </p>
@@ -67,16 +69,40 @@ has one screenshot for each feature and a video.
 
 ## Install
 
-There is no published release yet. Build Nea from the source code.
+Requirements: Windows 10 or 11 (x64) and the
+[WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
+Windows 11 and almost all updated Windows 10 installations include it.
 
-Requirements:
+1. Download `nea.exe` from the
+   [latest release](https://github.com/Agustin-Delgado/nea/releases/latest).
+2. Run it.
 
-- Windows 10 or 11 (x64).
-- Stable [Rust](https://rustup.rs), with the `x86_64-pc-windows-msvc` target.
-- The Visual Studio build tools (MSVC) with the Windows SDK. The SDK supplies
-  `rc.exe` for the icon and the manifest.
-- The [WebView2 runtime](https://developer.microsoft.com/microsoft-edge/webview2/).
-  Windows 11 and almost all updated Windows 10 installations include it.
+Nea runs from where it is, as a portable app. It does not change the
+registry. Your data goes to `%APPDATA%\Nea`.
+
+To install Nea for the current user, download `Nea-<version>-setup.exe`
+instead and run it, or run `nea.exe --install`. The installer copies Nea to
+`%LOCALAPPDATA%\Programs\Nea` and adds a Start menu shortcut and an entry in
+Settings → Apps. It does not need administrator rights. Use the entry in
+Settings → Apps to uninstall Nea.
+
+**SmartScreen warning.** The files are not signed with a code signing
+certificate. When you run them for the first time, Windows can show "Windows
+protected your PC". Select **More info**, then **Run anyway**. To make sure
+that the file is the published one, compare its SHA-256 hash with
+`SHA256SUMS.txt` in the release:
+
+```powershell
+Get-FileHash .\nea.exe -Algorithm SHA256
+```
+
+Nea checks for updates once a day. It installs an update only if the Ed25519
+signature of the update is correct.
+
+### Build from the source code
+
+You need the Visual Studio build tools (MSVC) with the Windows SDK, and
+[rustup](https://rustup.rs). `rust-toolchain.toml` selects the Rust version.
 
 ```powershell
 git clone https://github.com/Agustin-Delgado/nea.git
@@ -85,9 +111,10 @@ cargo build --release
 .\target\release\nea.exe
 ```
 
-`nea.exe --install` installs Nea for the current user. It does not need
-administrator rights. [docs/building.md](docs/building.md) explains the
-installer, the portable package and the signature.
+If you have access to the tests, clone with `--recurse-submodules`. The
+tests are in a private repository. CI tests the pull requests.
+[docs/building.md](docs/building.md) explains the build, the tests and the
+release.
 
 ## Shortcuts
 
@@ -140,16 +167,10 @@ data file.
 
 ## Status
 
-The code is complete. Before the first release, a person must do these tasks:
-
-- **Production signing key.** The public key in `keys/update-public.hex` is a
-  development key. Make the production key pair and keep the private key
-  outside the repository ([how](docs/building.md#sign-a-release)).
-- **Code signing certificate.** Without it, SmartScreen shows a warning when
-  you open the installer and the program.
-- **First release and winget.** The updater already uses the releases of this
-  repository. The manifest in `packaging/winget/` needs the URL and the hash
-  of that release.
+- **Code signing certificate.** Nea has none yet. Thus SmartScreen shows a
+  warning when you open the installer or the program.
+- **winget.** The manifest in `packaging/winget/` needs the URL and the hash
+  of a release. It is not published.
 
 ## Contributing
 

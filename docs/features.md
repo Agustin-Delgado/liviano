@@ -116,7 +116,7 @@ table marks the items that this method cannot test.
 | Trackers and cookie banners | Verified. Nea uses the strict tracking prevention of the engine. It hides banners before the first frame (EasyList Cookie List). |
 | Passwords in Credential Manager | Verified. Nea offers to save a password after a sign-in. It never fills in a password without your action. Ctrl+Alt+L opens the panel. |
 | Password import from other browsers | Done for Chrome, Edge, Brave, Vivaldi, Opera, Arc and CSV, all on the local computer. Not verified in this pass, because the tests do not read real profiles. |
-| Passkeys | The engine sends WebAuthn to the Windows Hello dialog (`examples/webauthn_probe`). Not verified in this pass. |
+| Passkeys | The engine sends WebAuthn to the Windows Hello dialog (`tests/probes/webauthn_probe.rs`, in the private test repository). Not verified in this pass. |
 | Light, dark or system theme | Light and dark verified. "System" follows the Windows theme when it changes. |
 | Bookmarks, history and downloads | Verified. |
 | Private tabs | Verified. They have their own InPrivate profile. Nea writes nothing to the history, the session, Ctrl+Shift+T or settings.json. |
