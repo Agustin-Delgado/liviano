@@ -94,6 +94,11 @@ const AWAY_AFTER_MS: u32 = 1_500;
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 /// Engine events left for the next pass (see `drain_events`).
 const TIMER_EVENTS: usize = 5;
+/// After the first paint, the field draws itself once out of sight (refer
+/// to `Omnibar::warm`), when nothing moves.
+const TIMER_FIELD_WARM: usize = 6;
+const FIELD_WARM_AFTER_MS: u32 = 1_500;
+const FIELD_WARM_AGAIN_MS: u32 = 300;
 /// One pass over the engine events stops after this much work: 200 views
 /// made at once queued 200 events, and handling them in one go held the
 /// window for seconds.
@@ -156,6 +161,8 @@ struct App {
     env_requested: bool,
     /// The window painted once (see `request_environment`).
     painted: bool,
+    /// The field opens once the window painted (no tabs at startup).
+    field_after_paint: bool,
     /// The engine was asked for before the first paint.
     env_after_paint: bool,
     tabs: TabList<WebTab>,
@@ -249,6 +256,28 @@ fn covers(dirty: RECT, r: crate::gfx::RectF, width: i32, height: i32) -> bool {
             && dirty.bottom as f32 >= bottom)
 }
 
+/// `rect` without `hole`: the pieces left around it (at most four, none
+/// empty) and the part they share, if any.
+fn split_off(rect: RECT, hole: RECT) -> (Vec<RECT>, Option<RECT>) {
+    let inner = RECT {
+        left: rect.left.max(hole.left),
+        top: rect.top.max(hole.top),
+        right: rect.right.min(hole.right),
+        bottom: rect.bottom.min(hole.bottom),
+    };
+    if inner.right <= inner.left || inner.bottom <= inner.top {
+        return (vec![rect], None);
+    }
+    let pieces = [
+        RECT { bottom: inner.top, ..rect },
+        RECT { top: inner.bottom, ..rect },
+        RECT { top: inner.top, bottom: inner.bottom, right: inner.left, ..rect },
+        RECT { top: inner.top, bottom: inner.bottom, left: inner.right, ..rect },
+    ];
+    let pieces = pieces.into_iter().filter(|r| r.right > r.left && r.bottom > r.top).collect();
+    (pieces, Some(inner))
+}
+
 /// The frame clock asks what the strip's next frame draws (see
 /// `App::frame_area`); with the app busy, all of it.
 fn strip_frame_area(_: HWND, now: Instant) -> Option<RECT> {
@@ -330,7 +359,7 @@ pub fn run() -> windows::core::Result<()> {
     crate::updater::start(&settings);
     let bench_on = crate::bench::wanted(settings.bench_enabled);
 
-    let mut omnibar = Box::new(Omnibar::create(hwnd, on_omnibar)?);
+    let mut omnibar = Box::new(Omnibar::create(hwnd, on_omnibar));
     crate::omnibar::register(&omnibar);
     crate::diag::trace(|| "startup: field created".to_string());
 
@@ -368,6 +397,7 @@ pub fn run() -> windows::core::Result<()> {
         env_requested: false,
         painted: false,
         env_after_paint: false,
+        field_after_paint: false,
         tabs,
         history,
         vertical: session.vertical_tabs,
@@ -428,14 +458,19 @@ pub fn run() -> windows::core::Result<()> {
     crate::memory::watch_low_memory(hwnd, memory_ui::WM_APP_LOW_MEMORY);
     with_app(|app| {
         app.relayout();
-        if app.tabs.tabs.is_empty() {
-            app.open_omnibar(Mode::NewTab);
-        }
+        // With no tabs the field opens at once: after the first paint,
+        // with its windows (refer to `first_painted`).
+        app.field_after_paint = app.tabs.tabs.is_empty();
     });
 
     crate::diag::trace(|| "startup: first layout done".to_string());
     message_loop();
     Ok(())
+}
+
+/// The main window, for timers set from the message loop.
+fn main_window() -> HWND {
+    with_app(|app| app.hwnd).unwrap_or_default()
 }
 
 fn message_loop() {
@@ -449,6 +484,9 @@ fn message_loop() {
                 break;
             }
             let _doing = crate::diag::doing(&"message", msg.message as u64);
+            if engine_ui::hold_engine_message(main_window(), &msg) {
+                continue;
+            }
             if crate::settings_window::pre_translate(&msg) {
                 continue;
             }
@@ -735,6 +773,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
+                TIMER_FIELD_WARM => {
+                    let _doing = crate::diag::doing(&"timer:field warm", 0);
+                    with_app(|app| app.warm_field());
+                }
                 TIMER_EVENTS => {
                     unsafe {
                         let _ = KillTimer(Some(hwnd), TIMER_EVENTS);
@@ -945,10 +987,28 @@ impl App {
             right: dirty.right.min(width),
             bottom: dirty.bottom.min(height),
         };
+        // With no page on it (the first paint, a view still being made),
+        // the page's ground is one flat colour: GDI fills it, and Direct2D
+        // draws only the chrome. A software target renders each pixel it is
+        // bound to, and the ground is most of the window: repaints over a
+        // view being made took 10-45 ms.
+        let flat = (hint.is_none() && fills.is_empty() && self.motion.rail() >= 1.0).then(|| {
+            let c = self.layout.content;
+            RECT { left: c.left, top: c.top, right: c.right, bottom: c.bottom }
+        });
         if dirty.right > dirty.left && dirty.bottom > dirty.top {
             for rect in gfx::visible_rects(hdc, self.hwnd, dirty) {
-                if !surface.paint(hdc, rect, |g| tabbar::paint(g, width, height, &paint)) {
-                    gfx::fill_gdi(hdc, rect, self.palette.chrome);
+                let (chrome, ground) = match flat {
+                    Some(content) => split_off(rect, content),
+                    None => (vec![rect], None),
+                };
+                if let Some(ground) = ground {
+                    gfx::fill_gdi(hdc, ground, self.palette.field);
+                }
+                for piece in chrome {
+                    if !surface.paint(hdc, piece, |g| tabbar::paint(g, width, height, &paint)) {
+                        gfx::fill_gdi(hdc, piece, self.palette.chrome);
+                    }
                 }
             }
         }
@@ -1149,9 +1209,32 @@ impl App {
     /// The window drew itself once: what waited for it starts.
     fn first_painted(&mut self) {
         self.painted = true;
+        if std::mem::take(&mut self.field_after_paint) && self.mode.is_none() {
+            self.open_omnibar(Mode::NewTab);
+        } else {
+            self.omnibar.realize();
+        }
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_FIELD_WARM, FIELD_WARM_AFTER_MS, None);
+        }
         if std::mem::take(&mut self.env_after_paint) {
             self.request_environment();
         }
+    }
+
+    /// The field's first drawing, out of sight and before anyone asks for
+    /// it: the first opening of the history panel took 15 ms more for it.
+    /// Never while something moves or the field is open.
+    fn warm_field(&mut self) {
+        let busy = self.mode.is_some() || self.something_moves(Instant::now()) || crate::anim::stats().running;
+        unsafe {
+            if busy {
+                SetTimer(Some(self.hwnd), TIMER_FIELD_WARM, FIELD_WARM_AGAIN_MS, None);
+                return;
+            }
+            let _ = KillTimer(Some(self.hwnd), TIMER_FIELD_WARM);
+        }
+        self.omnibar.warm();
     }
 
     fn select(&mut self, id: u64) {
@@ -1489,6 +1572,7 @@ impl App {
                 self.invalidate();
             }
             Event::NavigationCompleted(id, ok) => {
+                self.page_arrived();
                 let records = self.tabs.records(id);
                 if let Some(tab) = self.tabs.get_mut(id) {
                     tab.loading = false;
@@ -2186,6 +2270,9 @@ impl App {
         if let Mode::RenameGroup(group) = mode {
             self.rename_submit(group);
             return;
+        }
+        if mode != Mode::Find {
+            self.page_typed();
         }
         match (mode, chosen) {
             (Mode::Find, _) => {

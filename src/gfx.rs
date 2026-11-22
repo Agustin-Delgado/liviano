@@ -13,7 +13,13 @@
 //! Coordinates are physical pixels (the target is told 96 DPI): the layout
 //! code already scales everything by the window's DPI.
 
-use std::{cell::RefCell, collections::HashMap, rc::Rc};
+use std::{
+    cell::RefCell,
+    collections::HashMap,
+    rc::Rc,
+    sync::{Condvar, Mutex},
+    time::Duration,
+};
 
 use windows::{
     Win32::{
@@ -300,9 +306,17 @@ pub fn line_marks(font: Font) -> LineMarks {
 
 impl Shared {
     fn create() -> windows::core::Result<Self> {
+        let warmed = take_warmed();
         unsafe {
-            let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
-            let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+            let (d2d, dwrite, family) = match warmed {
+                Some(w) => (w.d2d, w.dwrite, w.family),
+                None => {
+                    let d2d: ID2D1Factory = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, None)?;
+                    let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED)?;
+                    let family = pick_family(&dwrite);
+                    (d2d, dwrite, family)
+                }
+            };
             let round = d2d.CreateStrokeStyle(
                 &D2D1_STROKE_STYLE_PROPERTIES {
                     startCap: D2D1_CAP_STYLE_ROUND,
@@ -313,7 +327,7 @@ impl Shared {
                 },
                 None,
             )?;
-            let family = HSTRING::from(pick_family(&dwrite));
+            let family = HSTRING::from(family);
             Ok(Self {
                 d2d,
                 dwrite,
@@ -459,27 +473,87 @@ impl Surface {
     }
 }
 
-/// Starts Direct2D's software renderer on a thread of its own, while the
-/// window is made. The first drawing target of the process loads and
-/// starts it: 70 ms measured inside the first paint. Made again on the UI
-/// thread afterwards, the target is a few milliseconds. Nothing of it is
-/// kept: only what the process loaded and set up once.
+/// What the warm-up thread made for the UI thread: the factories, which
+/// already drew once. A single-threaded factory only asks that one thread
+/// at a time uses it: the thread lets go of it before the UI thread takes
+/// it, through the lock.
+struct Warmed {
+    d2d: ID2D1Factory,
+    dwrite: IDWriteFactory,
+    family: &'static str,
+}
+
+// Refer to `Warmed`: never used by two threads at once.
+unsafe impl Send for Warmed {}
+
+/// The warm-up's result, and whether the thread is done.
+static WARMED: Mutex<(Option<Warmed>, bool)> = Mutex::new((None, false));
+static WARMED_DONE: Condvar = Condvar::new();
+/// The UI thread waits this long at most for the warm-up to end.
+const WARM_WAIT: Duration = Duration::from_millis(150);
+
+/// Starts Direct2D and DirectWrite on a thread of its own, while the window
+/// is made. A factory's first target, its first binding and its first text
+/// set up its software renderer: 30-45 ms measured inside the first paint,
+/// once for each factory (a factory made on another thread warmed nothing
+/// of this one's). So the thread makes the UI thread's own factories,
+/// draws with them once, and hands them over. Not its target: one made on
+/// this thread drew each paint of the UI thread in 20-60 ms.
 pub fn warm_up() {
-    let _ = std::thread::Builder::new().name("gfx-warm".into()).stack_size(256 * 1024).spawn(|| {
-        use windows::Win32::Graphics::Gdi::{
-            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
-        };
-        unsafe {
-            let Ok(d2d) = D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) else { return };
-            let Ok(target) = d2d.CreateDCRenderTarget(&target_properties()) else { return };
+    let spawned = std::thread::Builder::new().name("gfx-warm".into()).stack_size(256 * 1024).spawn(|| {
+        let warmed = warm();
+        let mut slot = WARMED.lock().unwrap_or_else(|e| e.into_inner());
+        *slot = (warmed, true);
+        WARMED_DONE.notify_all();
+    });
+    if spawned.is_err() {
+        WARMED.lock().unwrap_or_else(|e| e.into_inner()).1 = true;
+    }
+}
+
+fn warm() -> Option<Warmed> {
+    use windows::Win32::Graphics::Gdi::{
+        CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+    };
+    unsafe {
+        let d2d = D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok()?;
+        let dwrite: IDWriteFactory = DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED).ok()?;
+        let family = pick_family(&dwrite);
+        let target = d2d.CreateDCRenderTarget(&target_properties()).ok().and_then(|target| {
+            let brush = target.CreateSolidColorBrush(&Color::from(Rgb(0, 0, 0)).d2d(), None).ok()?;
+            Some((target, brush))
+        });
+        if let Some((target, brush)) = &target {
             let screen = GetDC(None);
             let dc = CreateCompatibleDC(Some(screen));
-            let bitmap = CreateCompatibleBitmap(screen, 8, 8);
+            let bitmap = CreateCompatibleBitmap(screen, 64, 32);
             let old = SelectObject(dc, bitmap.into());
-            let rect = RECT { left: 0, top: 0, right: 8, bottom: 8 };
+            let rect = RECT { left: 0, top: 0, right: 64, bottom: 32 };
             if target.BindDC(dc, &rect).is_ok() {
                 target.BeginDraw();
-                target.Clear(Some(&Color::from(Rgb(0, 0, 0)).d2d()));
+                target.Clear(Some(&Color::from(Rgb(255, 255, 255)).d2d()));
+                let round =
+                    D2D1_ROUNDED_RECT { rect: RectF::new(2.0, 2.0, 60.0, 30.0).d2d(), radiusX: 6.0, radiusY: 6.0 };
+                target.FillRoundedRectangle(&round, brush);
+                if let Ok(format) = dwrite.CreateTextFormat(
+                    &HSTRING::from(family),
+                    None,
+                    DWRITE_FONT_WEIGHT(400),
+                    DWRITE_FONT_STYLE_NORMAL,
+                    DWRITE_FONT_STRETCH_NORMAL,
+                    13.0,
+                    &HSTRING::from("en-us"),
+                ) {
+                    let text: Vec<u16> = "Nea".encode_utf16().collect();
+                    target.DrawText(
+                        &text,
+                        &format,
+                        &rect_f(rect),
+                        brush,
+                        D2D1_DRAW_TEXT_OPTIONS_CLIP,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
                 let _ = target.EndDraw(None, None);
             }
             SelectObject(dc, old);
@@ -487,7 +561,21 @@ pub fn warm_up() {
             let _ = DeleteDC(dc);
             ReleaseDC(None, screen);
         }
-    });
+        drop(target);
+        Some(Warmed { d2d, dwrite, family })
+    }
+}
+
+fn rect_f(r: RECT) -> D2D_RECT_F {
+    D2D_RECT_F { left: r.left as f32, top: r.top as f32, right: r.right as f32, bottom: r.bottom as f32 }
+}
+
+/// The warm-up's factories, once it is done (waiting for it a little).
+fn take_warmed() -> Option<Warmed> {
+    let slot = WARMED.lock().unwrap_or_else(|e| e.into_inner());
+    let (mut slot, _) =
+        WARMED_DONE.wait_timeout_while(slot, WARM_WAIT, |(_, done)| !*done).unwrap_or_else(|e| e.into_inner());
+    slot.0.take()
 }
 
 fn target_properties() -> D2D1_RENDER_TARGET_PROPERTIES {

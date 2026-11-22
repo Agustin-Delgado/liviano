@@ -719,36 +719,47 @@ fn resample(
     };
     let columns = along(width, pivot.0, 0.0);
     let rows = along(height, pivot.1, dy);
-    let fetch = |x: isize, y: isize| -> u32 {
-        if x < 0 || y < 0 || x >= width as isize || y >= height as isize {
-            0
-        } else {
-            src[y as usize * width + x as usize]
-        }
-    };
     let fade = (opacity * 256.0).round() as u32;
+    // A source line, or None past the picture's edge (transparent there).
+    let line = |y: isize| (0..height as isize).contains(&y).then(|| &src[y as usize * width..][..width]);
+    let at = |line: Option<&[u32]>, x: isize| match line {
+        Some(line) if (0..width as isize).contains(&x) => line[x as usize],
+        _ => 0,
+    };
     for (y, &(sy, fy)) in rows.iter().enumerate() {
         let out = &mut dst[y * width..(y + 1) * width];
         if sy < -1 || sy >= height as isize {
             out.fill(0);
             continue;
         }
+        let (top, bottom) = (line(sy), line(sy + 1));
         for (x, &(sx, fx)) in columns.iter().enumerate() {
-            let (p00, p10, p01, p11) = (fetch(sx, sy), fetch(sx + 1, sy), fetch(sx, sy + 1), fetch(sx + 1, sy + 1));
+            let (p00, p10, p01, p11) = (at(top, sx), at(top, sx + 1), at(bottom, sx), at(bottom, sx + 1));
             if p00 | p10 | p01 | p11 == 0 {
                 out[x] = 0;
                 continue;
             }
             // Weights out of 65536.
             let (w00, w10, w01, w11) = ((256 - fx) * (256 - fy), fx * (256 - fy), (256 - fx) * fy, fx * fy);
-            let mut pixel = 0u32;
-            for shift in [0u32, 8, 16, 24] {
-                let c = |p: u32| (p >> shift) & 0xFF;
-                let sum = c(p00) * w00 + c(p10) * w10 + c(p01) * w01 + c(p11) * w11;
-                let value = (((sum + 32768) >> 16) * fade + 128) >> 8;
-                pixel |= value.min(255) << shift;
-            }
-            out[x] = pixel;
+            // Two channels at once, 32 bits apart: each sum stays under
+            // 2^24, so they never run into each other (the same numbers
+            // as one channel at a time, in half the multiplications).
+            let spread = |p: u32| (u64::from(p & 0x00FF_00FF), u64::from((p >> 8) & 0x00FF_00FF));
+            let lanes = |p: u32| {
+                let (even, odd) = spread(p);
+                ((even & 0xFF) | ((even >> 16) << 32), (odd & 0xFF) | ((odd >> 16) << 32))
+            };
+            let (a00, b00) = lanes(p00);
+            let (a10, b10) = lanes(p10);
+            let (a01, b01) = lanes(p01);
+            let (a11, b11) = lanes(p11);
+            let (w00, w10, w01, w11) = (u64::from(w00), u64::from(w10), u64::from(w01), u64::from(w11));
+            let even = a00 * w00 + a10 * w10 + a01 * w01 + a11 * w11;
+            let odd = b00 * w00 + b10 * w10 + b01 * w01 + b11 * w11;
+            let finish = |sum: u64| ((((sum as u32 + 32768) >> 16) * fade + 128) >> 8).min(255);
+            let (c0, c2) = (finish(even & 0xFFFF_FFFF), finish(even >> 32));
+            let (c1, c3) = (finish(odd & 0xFFFF_FFFF), finish(odd >> 32));
+            out[x] = c0 | (c1 << 8) | (c2 << 16) | (c3 << 24);
         }
     }
 }
@@ -788,6 +799,11 @@ thread_local! {
 /// The field or its panel grows, shrinks or changes size on screen.
 pub fn moving() -> bool {
     MOTION.with(|m| m.borrow().is_some())
+}
+
+/// The field is coming in (not going out).
+pub fn opening() -> bool {
+    MOTION.with(|m| m.borrow().as_ref().is_some_and(|m| !m.closing))
 }
 
 /// Something the picture shows changed: it is taken again before the next frame.
@@ -976,6 +992,8 @@ pub struct Omnibar {
     pub list: HWND,
     backdrop: HWND,
     owner: HWND,
+    /// The font the other controls use (the edit has its own).
+    ui_font: HFONT,
     rows: usize,
     metrics: Metrics,
     scale: f32,
@@ -995,8 +1013,73 @@ pub struct Omnibar {
 }
 
 impl Omnibar {
-    pub fn create(owner: HWND, handler: fn(Signal)) -> windows::core::Result<Self> {
+    /// The field of `owner`, without its windows yet: `realize` makes them,
+    /// after the window's first paint (refer to `App::first_painted`), so
+    /// the 12-16 ms they take do not come before it.
+    pub fn create(owner: HWND, handler: fn(Signal)) -> Self {
         HANDLER.with(|h| h.set(Some(handler)));
+        Self {
+            popup: HWND::default(),
+            edit: HWND::default(),
+            list: HWND::default(),
+            backdrop: HWND::default(),
+            owner,
+            ui_font: HFONT::default(),
+            rows: 0,
+            metrics: Metrics::at(1.0),
+            scale: 1.0,
+            line_height: 19,
+            visible_rows: usize::MAX,
+            rows_deletable: false,
+            position: FieldPosition::Top,
+            layout: Cell::new(None),
+            drawn: Cell::new(None),
+            scroll_to_end: Cell::new(false),
+        }
+    }
+
+    /// Whether its windows are made.
+    pub fn realized(&self) -> bool {
+        !self.popup.is_invalid()
+    }
+
+    /// Makes its windows, once, with the font and the colours already set.
+    pub fn realize(&mut self) {
+        if self.realized() {
+            return;
+        }
+        let Ok((popup, edit, list, backdrop)) = Self::make_windows(self.owner) else { return };
+        (self.popup, self.edit, self.list, self.backdrop) = (popup, edit, list, backdrop);
+        crate::diag::trace(|| "field windows made".to_string());
+        self.apply_font();
+        if let Some((palette, _)) = LOOK.with(|l| l.get()) {
+            self.apply_palette(&palette);
+        }
+    }
+
+    /// Draws the edit and a line in its font once, into a small bitmap
+    /// nobody sees: that first drawing (the font made ready to draw) is
+    /// what made the first picture of a panel 10-15 ms slower than the
+    /// next ones.
+    pub fn warm(&mut self) {
+        self.realize();
+        let Some(piece) = Canvas::new(160, 24) else { return };
+        unsafe {
+            let flags = PRF_CLIENT | PRF_NONCLIENT | PRF_ERASEBKGND;
+            SendMessageW(self.edit, WM_PRINT, Some(WPARAM(piece.dc.0 as usize)), Some(LPARAM(flags as isize)));
+            let font = SendMessageW(self.edit, WM_GETFONT, None, None).0;
+            if font != 0 {
+                let before = SelectObject(piece.dc, HFONT(font as _).into());
+                let mut sample: Vec<u16> = "Search or enter address".encode_utf16().collect();
+                let mut rect = RECT { left: 0, top: 0, right: 160, bottom: 24 };
+                DrawTextW(piece.dc, &mut sample, &mut rect, DT_LEFT | DT_TOP | DT_SINGLELINE | DT_NOPREFIX);
+                SelectObject(piece.dc, before);
+            }
+        }
+        crate::diag::trace(|| "field warmed".to_string());
+    }
+
+    fn make_windows(owner: HWND) -> windows::core::Result<(HWND, HWND, HWND, HWND)> {
         unsafe {
             let instance = GetModuleHandleW(None)?.into();
             let class = WNDCLASSW {
@@ -1085,34 +1168,29 @@ impl Omnibar {
             // draws it coming and going.
             fade::prepare(popup, 255);
             BACKDROP.with(|b| b.set(Some((backdrop, 0, 0))));
-            Ok(Self {
-                popup,
-                edit,
-                list,
-                backdrop,
-                owner,
-                rows: 0,
-                metrics: Metrics::at(1.0),
-                scale: 1.0,
-                line_height: 19,
-                visible_rows: usize::MAX,
-                rows_deletable: false,
-                position: FieldPosition::Top,
-                layout: Cell::new(None),
-                drawn: Cell::new(None),
-                scroll_to_end: Cell::new(false),
-            })
+            Ok((popup, edit, list, backdrop))
         }
     }
 
     /// The edit is set in a larger cut of the interface's face (`font` is
     /// the one other controls use; this one is the field's own).
     pub fn set_font(&mut self, font: HFONT, scale: f32) {
-        let edit_font = crate::app::make_font_sized(size::TEXT_FIELD, scale);
+        self.ui_font = font;
+        self.metrics = Metrics::at(scale);
+        self.scale = scale;
+        LOOK.with(|l| l.set(l.get().map(|(p, _)| (p, scale))));
+        self.apply_font();
+    }
+
+    fn apply_font(&mut self) {
+        if !self.realized() {
+            return;
+        }
+        let edit_font = crate::app::make_font_sized(size::TEXT_FIELD, self.scale);
         unsafe {
             let old = SendMessageW(self.edit, WM_GETFONT, None, None).0;
             SendMessageW(self.edit, WM_SETFONT, Some(WPARAM(edit_font.0 as usize)), Some(LPARAM(1)));
-            if old != 0 && old != font.0 as isize {
+            if old != 0 && old != self.ui_font.0 as isize {
                 let _ = DeleteObject(HFONT(old as _).into());
             }
             // The text line the edit draws, to centre it in the pill.
@@ -1124,14 +1202,9 @@ impl Omnibar {
             }
             SelectObject(dc, before);
             ReleaseDC(Some(self.edit), dc);
-        }
-        self.metrics = Metrics::at(scale);
-        unsafe {
             // Owner-drawn rows: their height is ours, not the font's.
             SendMessageW(self.list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(self.metrics.row as isize)));
         }
-        self.scale = scale;
-        LOOK.with(|l| l.set(l.get().map(|(p, _)| (p, scale))));
     }
 
     pub fn set_palette(&self, palette: &Palette) {
@@ -1146,6 +1219,13 @@ impl Omnibar {
             }
         });
         LOOK.with(|l| l.set(Some((*palette, self.scale))));
+        if !self.realized() {
+            return;
+        }
+        self.apply_palette(palette);
+    }
+
+    fn apply_palette(&self, palette: &Palette) {
         dwm::set(self.popup, dwm::DARK_MODE, palette.dark as u32);
         unsafe {
             let theme = if palette.dark { w!("DarkMode_Explorer") } else { w!("Explorer") };
@@ -1177,6 +1257,7 @@ impl Omnibar {
         select_all: bool,
         rows: &[String],
     ) {
+        self.realize();
         CUE.with(|c| *c.borrow_mut() = cue.encode_utf16().collect());
         unsafe {
             let _ = SetWindowTextW(self.edit, &HSTRING::from(text));
@@ -2035,6 +2116,17 @@ unsafe extern "system" fn list_proc(
                 paint_rows(hwnd, hdc, ps.rcPaint);
                 let _ = EndPaint(hwnd, &ps);
             }
+            return LRESULT(0);
+        }
+        // The picture of the panel for its motion (`take_still`): one pass,
+        // as a paint. The list's own printing drew each row on a target of
+        // its own (`WM_DRAWITEM`), 18-40 ms for the 16 rows of a panel.
+        WM_PRINTCLIENT => {
+            let mut client = RECT::default();
+            unsafe {
+                let _ = GetClientRect(hwnd, &mut client);
+            }
+            paint_rows(hwnd, HDC(wparam.0 as _), client);
             return LRESULT(0);
         }
         _ => {}

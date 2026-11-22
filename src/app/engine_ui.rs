@@ -25,7 +25,7 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 };
 use windows::Win32::{
     Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{KillTimer, SetTimer},
+    UI::WindowsAndMessaging::{GetClassNameW, KillTimer, MSG, PostMessageW, SetTimer, WM_USER},
 };
 
 use super::{App, with_app};
@@ -62,6 +62,133 @@ const RESTART_WINDOW: Duration = Duration::from_secs(120);
 const ENV_RETRY_MAX: Duration = Duration::from_secs(60);
 const TIMER_ENV_RETRY: usize = 0x44;
 
+/// The engine's own work on this thread (a new view wired to the window,
+/// its first showing) comes as one message, posted to its message window
+/// whenever work waits: 25-95 ms each, measured. Inside a slide that is two
+/// to five frames lost. While the strip or the field moves it waits for the
+/// motion to end, at most `ENGINE_HOLD_AT_MOST`: the engine works on in its
+/// own processes meanwhile, only what it hands back here is later. After a
+/// click or a tab switch the person looks at the slide, and the page comes
+/// a little later for it. After Enter in the field they look at where the
+/// page comes: the work for it goes at once (a hold made Enter -> page
+/// 45-90 ms slower, measured), until the page arrives.
+const ENGINE_WORK: u32 = WM_USER + 1;
+const ENGINE_CLASS: &str = "Chrome_MessageWindow";
+const ENGINE_HOLD_AT_MOST: Duration = Duration::from_millis(250);
+const TIMER_ENGINE_HOLD: usize = 0x44;
+const ENGINE_HOLD_CHECK_MS: u32 = 8;
+/// A page asked for in the field longer ago than this no longer counts as
+/// waited for (a slow server, or its end was not seen).
+const TYPED_PAGE_WAITS_AT_MOST: Duration = Duration::from_secs(3);
+
+thread_local! {
+    /// The engine's message window, once seen.
+    static ENGINE_WINDOW: std::cell::Cell<isize> = const { std::cell::Cell::new(0) };
+    /// Engine messages held back, in order, and since when.
+    static ENGINE_HELD: std::cell::RefCell<(Vec<MSG>, Option<Instant>)> =
+        const { std::cell::RefCell::new((Vec::new(), None)) };
+    /// This motion already held the engine for as long as it may: what
+    /// comes until it ends goes at once (without it, the messages given
+    /// back were held again, the limit never applied).
+    static ENGINE_HOLD_SPENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the engine's work waits now: something moves, nobody waits for
+/// a page they typed, and it has not waited for too long already.
+pub(super) fn hold_engine_work(moving: bool, typed: bool, held_since: Option<Instant>, now: Instant) -> bool {
+    moving && !typed && held_since.is_none_or(|since| now.duration_since(since) < ENGINE_HOLD_AT_MOST)
+}
+
+/// Whether the page asked for in the field at `asked` is still waited for.
+pub(super) fn typed_page_waits(asked: Option<Instant>, now: Instant) -> bool {
+    asked.is_some_and(|asked| now.duration_since(asked) < TYPED_PAGE_WAITS_AT_MOST)
+}
+
+/// Whether one more engine message is held: behind one already held it
+/// always is (the order stays); else only when the work waits now and this
+/// motion has not used up its hold.
+pub(super) fn holds_message(behind: bool, spent: bool, waits: bool) -> bool {
+    behind || (!spent && waits)
+}
+
+fn is_engine_window(hwnd: HWND) -> bool {
+    if hwnd.0.is_null() {
+        return false;
+    }
+    if ENGINE_WINDOW.with(|w| w.get()) == hwnd.0 as isize {
+        return true;
+    }
+    let mut name = [0u16; 32];
+    let len = unsafe { GetClassNameW(hwnd, &mut name) }.max(0) as usize;
+    let found = String::from_utf16_lossy(&name[..len.min(name.len())]) == ENGINE_CLASS;
+    if found {
+        ENGINE_WINDOW.with(|w| w.set(hwnd.0 as isize));
+    }
+    found
+}
+
+/// Called by the message loop before it dispatches `msg`: true when the
+/// message is the engine's work and waits for the motion to end.
+pub(super) fn hold_engine_message(owner: HWND, msg: &MSG) -> bool {
+    if msg.message != ENGINE_WORK || !is_engine_window(msg.hwnd) {
+        return false;
+    }
+    let now = Instant::now();
+    let (behind, since) = ENGINE_HELD.with(|h| {
+        let h = h.borrow();
+        (!h.0.is_empty(), h.1)
+    });
+    let (moving, typed) = super::with_app(|app| app.motion_holds_engine(now)).unwrap_or_default();
+    if !moving {
+        ENGINE_HOLD_SPENT.with(|s| s.set(false));
+    }
+    let spent = ENGINE_HOLD_SPENT.with(|s| s.get());
+    if !holds_message(behind, spent, hold_engine_work(moving, typed, since, now)) {
+        return false;
+    }
+    ENGINE_HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        h.0.push(*msg);
+        h.1.get_or_insert(now);
+    });
+    crate::diag::trace(|| "engine work held".to_string());
+    unsafe {
+        SetTimer(Some(owner), TIMER_ENGINE_HOLD, ENGINE_HOLD_CHECK_MS, Some(on_engine_hold_timer));
+    }
+    true
+}
+
+unsafe extern "system" fn on_engine_hold_timer(hwnd: HWND, _: u32, _: usize, _: u32) {
+    let now = Instant::now();
+    let since = ENGINE_HELD.with(|h| h.borrow().1);
+    let (moving, typed) = super::with_app(|app| app.motion_holds_engine(now)).unwrap_or_default();
+    if hold_engine_work(moving, typed, since, now) {
+        return;
+    }
+    ENGINE_HOLD_SPENT.with(|s| s.set(moving));
+    unsafe {
+        let _ = KillTimer(Some(hwnd), TIMER_ENGINE_HOLD);
+    }
+    release_engine_messages();
+}
+
+/// Gives the held engine messages back to the queue, in order.
+fn release_engine_messages() {
+    let held = ENGINE_HELD.with(|h| {
+        let mut h = h.borrow_mut();
+        h.1 = None;
+        std::mem::take(&mut h.0)
+    });
+    if !held.is_empty() {
+        crate::diag::trace(|| format!("engine work released ({})", held.len()));
+    }
+    for msg in held {
+        unsafe {
+            let _ = PostMessageW(Some(msg.hwnd), msg.message, msg.wParam, msg.lParam);
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct EngineUi {
     spare: Option<ICoreWebView2Controller>,
@@ -69,6 +196,8 @@ pub(super) struct EngineUi {
     making: bool,
     /// The tab waiting for the spare being made.
     claim: Option<u64>,
+    /// When a page was last asked for in the field (see `typed_page_waits`).
+    typed_at: Option<Instant>,
     /// Keep (or make) a spare until then.
     wanted_until: Option<Instant>,
     /// The engine was started for a spare, with no tab needing it.
@@ -310,6 +439,26 @@ impl App {
 
     fn on_screen(&self, id: u64) -> bool {
         self.shown_panes().iter().any(|(shown, _)| *shown == id)
+    }
+
+    /// Whether the strip's layout or the field coming in moves, and whether
+    /// a page typed in the field is waited for: the engine's own work on
+    /// this thread waits for the first, not for the second (see
+    /// `hold_engine_message`). The field going out is no motion here: it
+    /// goes after Enter.
+    pub(super) fn motion_holds_engine(&self, now: Instant) -> (bool, bool) {
+        let moving = self.motion.settling(now) || crate::omnibar::opening();
+        (moving, typed_page_waits(self.engine.typed_at, now))
+    }
+
+    /// The person asked for a page in the field.
+    pub(super) fn page_typed(&mut self) {
+        self.engine.typed_at = Some(Instant::now());
+    }
+
+    /// A page arrived: nobody waits for a typed one any more.
+    pub(super) fn page_arrived(&mut self) {
+        self.engine.typed_at = None;
     }
 
     /// The strip's layout, the field or a fading window moves: engine work
