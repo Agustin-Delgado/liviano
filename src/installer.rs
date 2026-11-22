@@ -90,6 +90,12 @@ struct Places {
     key: String,
 }
 
+/// A key path below HKCU\Software, the only place a test may point the
+/// uninstall entry at. `get`: an env value can cut a character in two.
+fn under_software(key: &str) -> bool {
+    key.len() > 9 && key.get(..9).is_some_and(|head| head.eq_ignore_ascii_case(r"Software\"))
+}
+
 fn env_path(name: &str) -> Option<PathBuf> {
     std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from)
 }
@@ -103,7 +109,7 @@ fn places() -> Result<Places, String> {
         .ok_or("Cannot find %APPDATA%.")?;
     let key = std::env::var("NEA_UNINSTALL_KEY")
         .ok()
-        .filter(|k| k.len() > 9 && k[..9].eq_ignore_ascii_case(r"Software\"))
+        .filter(|k| under_software(k))
         .unwrap_or_else(|| UNINSTALL_KEY.to_string());
     Ok(Places { dir, shortcut: menu.join(format!("{}.lnk", storage::DISPLAY_NAME)), key })
 }
@@ -350,7 +356,7 @@ fn legacy_places(new: &Places) -> Option<Places> {
     let shortcut = new.shortcut.with_file_name(format!("{}.lnk", legacy::NAME));
     let key = std::env::var("LIVIANO_UNINSTALL_KEY")
         .ok()
-        .filter(|k| k.len() > 9 && k[..9].eq_ignore_ascii_case(r"Software\"))
+        .filter(|k| under_software(k))
         .unwrap_or_else(|| format!(r"Software\Microsoft\Windows\CurrentVersion\Uninstall\{}", legacy::NAME));
     Some(Places { dir, shortcut, key })
 }
