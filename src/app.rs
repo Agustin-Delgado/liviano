@@ -13,7 +13,7 @@ use windows::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
             BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
-            LOGFONTW, PAINTSTRUCT,
+            LOGFONTW, MONITOR_DEFAULTTONULL, MonitorFromRect, PAINTSTRUCT,
         },
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
@@ -392,6 +392,21 @@ fn message_loop() {
     }
 }
 
+/// Where the window opens: the saved place when it is a sane size and still
+/// on a monitor (one that was unplugged leaves it off screen), else the
+/// default. The numbers come from session.json, so they can be anything.
+pub(crate) fn window_rect(saved: Option<[i32; 4]>) -> (i32, i32, i32, i32) {
+    const DEFAULT: (i32, i32, i32, i32) = (CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860);
+    let Some([l, t, r, b]) = saved else { return DEFAULT };
+    let (Some(w), Some(h)) = (r.checked_sub(l), b.checked_sub(t)) else { return DEFAULT };
+    if !(200..=32_000).contains(&w) || !(200..=32_000).contains(&h) {
+        return DEFAULT;
+    }
+    let rect = RECT { left: l, top: t, right: r, bottom: b };
+    let on_screen = unsafe { !MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid() };
+    if on_screen { (l, t, w, h) } else { DEFAULT }
+}
+
 fn create_window(session: &Session) -> windows::core::Result<HWND> {
     unsafe {
         let instance = GetModuleHandleW(None)?.into();
@@ -405,10 +420,7 @@ fn create_window(session: &Session) -> windows::core::Result<HWND> {
             ..Default::default()
         };
         RegisterClassW(&class);
-        let (x, y, w, h) = match session.window {
-            Some([l, t, r, b]) if r - l > 200 && b - t > 200 => (l, t, r - l, b - t),
-            _ => (CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860),
-        };
+        let (x, y, w, h) = window_rect(session.window);
         CreateWindowExW(
             WINDOW_EX_STYLE::default(),
             w!("NeaWindow"),
@@ -645,25 +657,33 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_DPICHANGED => {
-            let suggested = unsafe { &*(lparam.0 as *const RECT) };
-            unsafe {
-                let _ = SetWindowPos(
-                    hwnd,
-                    None,
-                    suggested.left,
-                    suggested.top,
-                    suggested.right - suggested.left,
-                    suggested.bottom - suggested.top,
-                    SWP_NOZORDER | SWP_NOACTIVATE,
-                );
+            // The system always sends a rect; a message posted by anything
+            // else may not have one.
+            if let Some(suggested) = unsafe { (lparam.0 as *const RECT).as_ref() } {
+                let (w, h) =
+                    (suggested.right.saturating_sub(suggested.left), suggested.bottom.saturating_sub(suggested.top));
+                if w > 0 && h > 0 {
+                    unsafe {
+                        let _ = SetWindowPos(
+                            hwnd,
+                            None,
+                            suggested.left,
+                            suggested.top,
+                            w,
+                            h,
+                            SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
             }
             crate::app_icon::apply(hwnd);
             with_app(|app| app.refresh_dpi());
             LRESULT(0)
         }
         WM_GETMINMAXINFO => {
-            let info = unsafe { &mut *(lparam.0 as *mut MINMAXINFO) };
-            info.ptMinTrackSize = POINT { x: 420, y: 300 };
+            if let Some(info) = unsafe { (lparam.0 as *mut MINMAXINFO).as_mut() } {
+                info.ptMinTrackSize = POINT { x: 420, y: 300 };
+            }
             LRESULT(0)
         }
         WM_NCACTIVATE => {

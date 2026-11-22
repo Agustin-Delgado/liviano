@@ -59,7 +59,7 @@ pub(super) fn history_entries(json: &str, back: bool) -> Vec<(i64, String)> {
     let picked: Vec<&Value> = if back {
         entries.iter().take(current.min(entries.len())).rev().collect()
     } else {
-        entries.iter().skip(current + 1).collect()
+        entries.iter().skip(current.saturating_add(1)).collect()
     };
     picked.into_iter().take(MENU_ENTRIES).filter_map(|e| e["id"].as_i64().map(|id| (id, label(e)))).collect()
 }

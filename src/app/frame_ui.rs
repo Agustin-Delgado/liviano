@@ -112,7 +112,7 @@ fn ht(hit: FrameHit) -> u32 {
 pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
-        WM_NCCALCSIZE if wparam.0 != 0 => {
+        WM_NCCALCSIZE if wparam.0 != 0 && lparam.0 != 0 => {
             let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
             let top = params.rgrc[0].top;
             // Windows works out the side and bottom frames; the top goes
