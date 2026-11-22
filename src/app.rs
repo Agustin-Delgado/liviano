@@ -2022,10 +2022,15 @@ impl App {
             _ => self.omnibar.set_list_mode(usize::MAX, false),
         }
         let position = crate::omnibar::position_for(self.settings.field_position, mode == Mode::Find);
-        self.omnibar.open(frame, position, cue, &text, select_all);
-        if matches!(mode, Mode::Switch | Mode::Panel(_) | Mode::Split) {
-            self.refresh_rows(false);
-        }
+        // A list that shows at once opens with its rows: the field is
+        // placed, shaped and drawn once, not empty and then again.
+        let rows = match mode {
+            Mode::Switch | Mode::Panel(_) | Mode::Split => self.rows_for(mode, &text, false).unwrap_or_default(),
+            _ => Vec::new(),
+        };
+        let labels: Vec<String> = rows.iter().map(|(label, _)| label.clone()).collect();
+        self.rows = rows.into_iter().map(|(_, row)| row).collect();
+        self.omnibar.open(frame, position, cue, &text, select_all, &labels);
         self.invalidate();
     }
 
@@ -2094,12 +2099,19 @@ impl App {
     fn refresh_rows(&mut self, typing_forward: bool) {
         let Some(mode) = self.mode else { return };
         let text = self.omnibar.text();
+        if let Some(rows) = self.rows_for(mode, &text, typing_forward) {
+            self.set_rows(rows);
+        }
+    }
+
+    /// The rows of the field in `mode` for `text`; None for a mode without a list.
+    fn rows_for(&mut self, mode: Mode, text: &str, typing_forward: bool) -> Option<Vec<(String, Row)>> {
         let rows = match mode {
             Mode::Switch => self
                 .tabs
                 .tabs
                 .iter()
-                .filter(|t| fuzzy_match(&text, t.label()) || fuzzy_match(&text, &t.url))
+                .filter(|t| fuzzy_match(text, t.label()) || fuzzy_match(text, &t.url))
                 .take(12)
                 .map(|t| (format!("{}    {}", t.label(), omnibox::display_host(&t.url)), Row::Switch(t.id)))
                 .collect(),
@@ -2109,33 +2121,33 @@ impl App {
                 let _doing = crate::diag::doing(&"field:history", 0);
                 if typing_forward
                     && caret_at_end
-                    && let Some(completion) = self.history.inline_completion(&text)
+                    && let Some(completion) = self.history.inline_completion(text)
                 {
-                    self.omnibar.complete_inline(&text, &completion);
+                    self.omnibar.complete_inline(text, &completion);
                 }
                 let history = self
                     .history
-                    .suggest(&text, 8, unix_now())
+                    .suggest(text, 8, unix_now())
                     .into_iter()
                     .map(|e| {
                         let title = if e.title.is_empty() { omnibox::strip_for_match(&e.url) } else { &e.title };
                         (format!("{title}    {}", omnibox::strip_for_match(&e.url)), Row::Go(e.url.clone()))
                     })
                     .collect();
-                let mut rows = self.with_bookmark_suggestions(&text, history);
-                if let Some(row) = self.extension_row(&text) {
+                let mut rows = self.with_bookmark_suggestions(text, history);
+                if let Some(row) = self.extension_row(text) {
                     rows.insert(0, row);
                 }
                 rows
             }
             Mode::Panel(kind) => {
                 let _doing = crate::diag::doing(&"field:panel", 0);
-                self.panel_rows(kind, &text)
+                self.panel_rows(kind, text)
             }
-            Mode::Split => self.split_rows(&text),
-            Mode::Find | Mode::RenameGroup(_) => return,
+            Mode::Split => self.split_rows(text),
+            Mode::Find | Mode::RenameGroup(_) => return None,
         };
-        self.set_rows(rows);
+        Some(rows)
     }
 
     fn show_find_status(&mut self) {

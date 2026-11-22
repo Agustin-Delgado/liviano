@@ -144,6 +144,8 @@ thread_local! {
     /// Whether the edit was empty at its last change: the placeholder comes
     /// and goes with a whole repaint when that flips.
     static WAS_EMPTY: Cell<bool> = const { Cell::new(true) };
+    /// The list's rows in the order of the list on screen.
+    static ROWS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 /// The placeholder's ink: `ink-muted`, a step stronger than the
@@ -1060,7 +1062,10 @@ impl Omnibar {
                 PCWSTR::null(),
                 WS_CHILD
                     | WS_VSCROLL
-                    | WINDOW_STYLE((LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32),
+                    // No data in the list: it only counts the rows, and
+                    // each one is drawn from `ROWS`. Adding 200 strings
+                    // one by one held the history panel for 24 ms.
+                    | WINDOW_STYLE((LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_NODATA) as u32),
                 0,
                 30,
                 100,
@@ -1162,8 +1167,16 @@ impl Omnibar {
         self.rows_deletable = rows_deletable;
     }
 
-    /// Opens in `frame` at `position` (see `position_for`).
-    pub fn open(&mut self, frame: Frame, position: FieldPosition, cue: &str, text: &str, select_all: bool) {
+    /// Opens in `frame` at `position` (see `position_for`) with `rows` in its list.
+    pub fn open(
+        &mut self,
+        frame: Frame,
+        position: FieldPosition,
+        cue: &str,
+        text: &str,
+        select_all: bool,
+        rows: &[String],
+    ) {
         CUE.with(|c| *c.borrow_mut() = cue.encode_utf16().collect());
         unsafe {
             let _ = SetWindowTextW(self.edit, &HSTRING::from(text));
@@ -1175,7 +1188,7 @@ impl Omnibar {
             let _ = InvalidateRect(Some(self.edit), None, true);
         }
         self.position = position;
-        self.set_rows(&[]);
+        self.set_rows(rows);
         // Already on screen (one mode handing over to another) it stays
         // put; coming back while it leaves, it turns around from where it is.
         let shown = unsafe { IsWindowVisible(self.popup).as_bool() };
@@ -1637,19 +1650,11 @@ impl Omnibar {
         GROUNDS.with(|g| *g.borrow_mut() = Default::default());
         let upward = self.upward();
         unsafe {
-            // Each add repaints a shown list otherwise: two hundred rows of
-            // the history panel were a third of a second per keystroke.
+            ROWS.with(|r| *r.borrow_mut() = list_order(rows, upward));
+            // A shown list repaints on each change otherwise.
             SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(0)), None);
             SendMessageW(self.list, LB_RESETCONTENT, None, None);
-            let mut add = |row: &String| {
-                let text = HSTRING::from(row.as_str());
-                SendMessageW(self.list, LB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
-            };
-            if upward {
-                rows.iter().rev().for_each(&mut add);
-            } else {
-                rows.iter().for_each(&mut add);
-            }
+            SendMessageW(self.list, LB_SETCOUNT, Some(WPARAM(rows.len())), None);
             SendMessageW(self.list, WM_SETREDRAW, Some(WPARAM(1)), None);
             let _ = InvalidateRect(Some(self.list), None, false);
         }
@@ -1660,7 +1665,7 @@ impl Omnibar {
     /// The rows in the app's order (the first is the best), whichever way
     /// the list reads on screen.
     pub fn row_labels(&self) -> Vec<String> {
-        let mut labels: Vec<String> = (0..self.rows).map(|i| item_text(self.list, i)).collect();
+        let mut labels: Vec<String> = (0..self.rows).map(item_text).collect();
         if self.upward() {
             labels.reverse();
         }
@@ -1826,6 +1831,7 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
         }
         WM_ERASEBKGND => LRESULT(1),
         WM_PAINT => {
+            let _doing = crate::diag::doing(&"field:paint", 0);
             let mut ps = PAINTSTRUCT::default();
             unsafe {
                 let hdc = BeginPaint(hwnd, &mut ps);
@@ -1833,32 +1839,31 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
                 let _ = GetClientRect(hwnd, &mut rect);
                 let placed = INSTANCE.with(|i| i.get()).and_then(|o| (*o).layout.get().map(|l| (l, (*o).metrics)));
                 if let (Some((palette, scale)), Some((layout, metrics))) = (LOOK.with(|l| l.get()), placed) {
-                    SURFACES.with(|s| {
-                        s.borrow_mut().0.paint(hdc, rect, |g| paint_panel(g, rect, &layout, metrics, &palette, scale))
-                    });
+                    // Only what is in sight: the list covers most of the
+                    // panel, and a software target draws each pixel it is
+                    // bound to, seen or not.
+                    for piece in crate::gfx::visible_rects(hdc, hwnd, ps.rcPaint) {
+                        SURFACES.with(|s| {
+                            s.borrow_mut()
+                                .0
+                                .paint(hdc, piece, |g| paint_panel(g, rect, &layout, metrics, &palette, scale))
+                        });
+                    }
                 }
                 let _ = EndPaint(hwnd, &ps);
             }
             LRESULT(0)
         }
         WM_DRAWITEM => {
+            let _doing = crate::diag::doing(&"field:row", 0);
             let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
             if item.itemID == u32::MAX {
                 return LRESULT(1);
             }
-            let text = item_text(item.hwndItem, item.itemID as usize);
+            let text = item_text(item.itemID as usize);
             let row = item.itemID as usize;
             let picked = item.itemState.0 & ODS_SELECTED.0 != 0;
-            let hovered = HOVERED.with(|h| h.get()) == Some(row);
-            // The picked row's ground and the hover's fade in and out as a
-            // menu item's colours do (150 ms ease-out).
-            let now = std::time::Instant::now();
-            let (picked, hovered, moving) = GROUNDS.with(|g| {
-                let (p, h) = &mut *g.borrow_mut();
-                p.set(row, if picked { 1.0 } else { 0.0 }, now, specs::HOVER);
-                h.set(row, if hovered { 1.0 } else { 0.0 }, now, specs::HOVER);
-                (p.get(row, now), h.get(row, now), p.moving(now) || h.moving(now))
-            });
+            let (picked, hovered, moving) = row_grounds(row, picked, std::time::Instant::now());
             if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
                 SURFACES.with(|s| {
                     s.borrow_mut().1.paint(item.hDC, item.rcItem, |g| {
@@ -1980,16 +1985,15 @@ impl<'a> RowParts<'a> {
     }
 }
 
-fn item_text(list: HWND, index: usize) -> String {
-    unsafe {
-        let len = SendMessageW(list, LB_GETTEXTLEN, Some(WPARAM(index)), None).0;
-        if len <= 0 {
-            return String::new();
-        }
-        let mut buffer = vec![0u16; len as usize + 1];
-        SendMessageW(list, LB_GETTEXT, Some(WPARAM(index)), Some(LPARAM(buffer.as_mut_ptr() as isize)));
-        String::from_utf16_lossy(&buffer[..len as usize])
-    }
+/// The rows in the order of the list on screen: the best row is next to
+/// the field, at the bottom when the list opens upward.
+fn list_order(rows: &[String], upward: bool) -> Vec<String> {
+    if upward { rows.iter().rev().cloned().collect() } else { rows.to_vec() }
+}
+
+/// The text of row `index` of the list on screen.
+fn item_text(index: usize) -> String {
+    ROWS.with(|r| r.borrow().get(index).cloned().unwrap_or_default())
 }
 
 /// Tracks the row under the pointer for its quieter ground.
@@ -2018,9 +2022,80 @@ unsafe extern "system" fn list_proc(
             set_hovered(hwnd, row);
         }
         WM_MOUSELEAVE => set_hovered(hwnd, None),
+        WM_ERASEBKGND => return LRESULT(1),
+        WM_PAINT => {
+            let mut ps = PAINTSTRUCT::default();
+            unsafe {
+                let hdc = BeginPaint(hwnd, &mut ps);
+                paint_rows(hwnd, hdc, ps.rcPaint);
+                let _ = EndPaint(hwnd, &ps);
+            }
+            return LRESULT(0);
+        }
         _ => {}
     }
     unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) }
+}
+
+/// The picked row's ground and the hover's, as far as they came in: they
+/// fade in and out as a menu item's colours do (150 ms ease-out). And
+/// whether either still moves.
+fn row_grounds(row: usize, picked: bool, now: std::time::Instant) -> (f32, f32, bool) {
+    let hovered = HOVERED.with(|h| h.get()) == Some(row);
+    GROUNDS.with(|g| {
+        let (p, h) = &mut *g.borrow_mut();
+        p.set(row, if picked { 1.0 } else { 0.0 }, now, specs::HOVER);
+        h.set(row, if hovered { 1.0 } else { 0.0 }, now, specs::HOVER);
+        (p.get(row, now), h.get(row, now), p.moving(now) || h.moving(now))
+    })
+}
+
+/// The rows of the list in `dirty`, in one pass of one target. Drawn one by
+/// one (`WM_DRAWITEM`), the 16 rows of a panel took 27 ms: each row bound,
+/// began and ended a target of its own.
+fn paint_rows(list: HWND, hdc: HDC, dirty: RECT) {
+    let _doing = crate::diag::doing(&"field:rows paint", 0);
+    let Some((palette, scale)) = LOOK.with(|l| l.get()) else { return };
+    let (count, top, height, picked) = unsafe {
+        (
+            SendMessageW(list, LB_GETCOUNT, None, None).0.max(0) as usize,
+            SendMessageW(list, LB_GETTOPINDEX, None, None).0.max(0) as usize,
+            SendMessageW(list, LB_GETITEMHEIGHT, Some(WPARAM(0)), None).0.max(1) as i32,
+            SendMessageW(list, LB_GETCURSEL, None, None).0,
+        )
+    };
+    let mut client = RECT::default();
+    unsafe {
+        let _ = GetClientRect(list, &mut client);
+    }
+    let now = std::time::Instant::now();
+    let mut moving = Vec::new();
+    SURFACES.with(|s| {
+        s.borrow_mut().1.paint(hdc, dirty, |g| {
+            g.fill(client.into(), palette.field);
+            for (i, row) in (top..count).enumerate() {
+                let y = client.top + i as i32 * height;
+                if y >= client.bottom {
+                    break;
+                }
+                let rect = RECT { left: client.left, top: y, right: client.right, bottom: y + height };
+                if rect.bottom <= dirty.top || rect.top >= dirty.bottom {
+                    continue;
+                }
+                let (p, h, still_moving) = row_grounds(row, picked == row as isize, now);
+                paint_row(g, rect.into(), &item_text(row), p, h, &palette, scale);
+                if still_moving {
+                    moving.push(rect);
+                }
+            }
+        });
+    });
+    if !moving.is_empty() {
+        anim::mark("rows");
+        for rect in moving {
+            anim::repaint(list, Some(rect));
+        }
+    }
 }
 
 fn set_hovered(list: HWND, row: Option<usize>) {
