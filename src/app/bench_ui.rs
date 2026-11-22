@@ -106,7 +106,7 @@ impl BenchState {
             Event::NavigationCompleted(id, ok) => {
                 self.loaded.insert(*id, *ok);
             }
-            Event::ProcessFailed(id, _) => {
+            Event::ProcessFailed(id, ..) => {
                 self.loaded.remove(id);
             }
             _ => {}

@@ -7,7 +7,7 @@ use std::{cell::Cell, rc::Rc};
 
 use webview2_com::{Microsoft::Web::WebView2::Win32::*, *};
 use windows::{
-    Win32::Foundation::{E_POINTER, HWND},
+    Win32::Foundation::HWND,
     core::{HSTRING, Interface, Result},
 };
 
@@ -15,7 +15,7 @@ use super::App;
 use crate::{
     session::SavedTab,
     tabs::TabList,
-    web::{self, Event, WebTab},
+    web::{self, WebTab},
 };
 
 /// Kept apart from the default profile, so an InPrivate session never shares
@@ -27,13 +27,7 @@ const PROFILE_NAME: &str = "Privado";
 /// the view InPrivate.
 pub(super) fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id: u64) -> Result<()> {
     let env10 = env.cast::<ICoreWebView2Environment10>()?;
-    let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(move |result, controller| {
-        web::push(Event::ControllerReady(
-            id,
-            result.and_then(|_| controller.ok_or_else(|| windows::core::Error::from(E_POINTER))),
-        ));
-        Ok(())
-    }));
+    let handler = web::controller_handler(id);
     unsafe {
         let options = env10.CreateCoreWebView2ControllerOptions()?;
         options.SetProfileName(&HSTRING::from(PROFILE_NAME))?;

@@ -37,7 +37,11 @@ param(
     # Exit with code 1 when hang.log has a handler of 50 ms or more.
     [switch]$FailOnStall,
     # Print each dropped frame with its time (ms from start, as in trace.log).
-    [switch]$ShowGaps
+    [switch]$ShowGaps,
+    # No network outside this computer: the engine resolves only 127.0.0.1,
+    # the block lists stay the built-in ones and the updater does not check.
+    # The pages of other hosts become error pages.
+    [switch]$Offline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -118,8 +122,14 @@ function Stats([double[]]$values) {
 
 $data = Join-Path ([IO.Path]::GetTempPath()) ('neafps-data-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $data | Out-Null
-$settings = @{ bench_enabled = $true; field_position = 'middle'; hover_preview = $true }
+$settings = @{ bench_enabled = $true; field_position = 'middle'; hover_preview = $true; check_updates = $false }
 [IO.File]::WriteAllText((Join-Path $data 'settings.json'), ($settings | ConvertTo-Json -Compress))
+$oldArgs = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+if ($Offline) {
+    New-Item -ItemType Directory -Path (Join-Path $data 'shield') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $data 'shield\updated'), '')
+    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"'
+}
 $saved = @()
 for ($i = 0; $i -lt $Tabs; $i++) {
     $tab = @{ url = "https://example.com/?tab=$i"; title = "Example tab $i"; pinned = $false }
@@ -353,6 +363,10 @@ try {
         Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
     }
     Remove-Item Env:NEA_DATA_DIR, Env:NEA_BENCH, Env:NEA_BENCH_PIPE, Env:NEA_TRACE, Env:NEA_SCALE, Env:NEA_CREDENTIAL_PREFIX -ErrorAction SilentlyContinue
+    if ($Offline) {
+        if ($null -eq $oldArgs) { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue }
+        else { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $oldArgs }
+    }
     if (-not $KeepData) { Remove-Item -Recurse -Force -LiteralPath $data -ErrorAction SilentlyContinue } else { Write-Host "Data: $data" }
 }
 if ($script:exitCode) { exit $script:exitCode }

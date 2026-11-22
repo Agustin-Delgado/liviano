@@ -255,7 +255,12 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(0)
         }
         WM_DRAWITEM => {
-            let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            // Only from our own buttons: another program can send any lParam.
+            let Some(item) = (unsafe { crate::msg_param::read::<DRAWITEMSTRUCT>(lparam) })
+                .filter(|item| crate::msg_param::from_child(hwnd, item.hwndItem))
+            else {
+                return LRESULT(0);
+            };
             if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
                 let kind = if item.CtlID == 1 { ButtonKind::Primary } else { ButtonKind::Secondary };
                 SURFACE.with(|s| {

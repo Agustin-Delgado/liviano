@@ -28,8 +28,13 @@ use crate::{
 pub const WM_APP_EVENTS: u32 = WM_APP + 1;
 
 pub enum Event {
-    EnvironmentReady(Result<ICoreWebView2Environment>),
-    ControllerReady(u64, Result<ICoreWebView2Controller>),
+    /// The environment asked for under this engine number (`generation`).
+    EnvironmentReady(u64, Result<ICoreWebView2Environment>),
+    /// A view for this tab, asked for under this engine number.
+    ControllerReady(u64, u64, Result<ICoreWebView2Controller>),
+    /// The browser process of this engine number ended; true when it failed
+    /// (a crash, a kill), false when it ended because nothing used it.
+    BrowserExited(u64, bool),
     TitleChanged(u64),
     SourceChanged(u64),
     NavigationStarting(u64),
@@ -38,8 +43,9 @@ pub enum Event {
     /// key was behind it. The engine's window is never opened: the app
     /// opens a tab or blocks it.
     NewWindow(u64, String, bool),
-    /// A process of the engine died or hung; the kind says which.
-    ProcessFailed(u64, COREWEBVIEW2_PROCESS_FAILED_KIND),
+    /// A process of the engine died or hung: tab, engine number, and the
+    /// kind, which says which process.
+    ProcessFailed(u64, u64, COREWEBVIEW2_PROCESS_FAILED_KIND),
     /// The page of this tab took focus (a click on it).
     PageClicked(u64),
     FindChanged(u64),
@@ -65,7 +71,8 @@ impl Event {
     /// What the diagnostics call it (see `diag::doing`).
     pub fn name(&self) -> &'static &'static str {
         match self {
-            Event::EnvironmentReady(_) => &"event:EnvironmentReady",
+            Event::EnvironmentReady(..) => &"event:EnvironmentReady",
+            Event::BrowserExited(..) => &"event:BrowserExited",
             Event::ControllerReady(..) => &"event:ControllerReady",
             Event::TitleChanged(_) => &"event:TitleChanged",
             Event::SourceChanged(_) => &"event:SourceChanged",
@@ -86,10 +93,21 @@ impl Event {
         }
     }
 
+    /// The engine number it belongs to, for the events of one engine.
+    pub fn generation(&self) -> Option<u64> {
+        match self {
+            Event::EnvironmentReady(generation, _)
+            | Event::ControllerReady(_, generation, _)
+            | Event::BrowserExited(generation, _)
+            | Event::ProcessFailed(_, generation, _) => Some(*generation),
+            _ => None,
+        }
+    }
+
     /// The tab it is about, or 0.
     pub fn tab(&self) -> u64 {
         match self {
-            Event::ControllerReady(id, _)
+            Event::ControllerReady(id, ..)
             | Event::TitleChanged(id)
             | Event::SourceChanged(id)
             | Event::NavigationStarting(id)
@@ -111,6 +129,23 @@ impl Event {
 thread_local! {
     static QUEUE: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
     static WINDOW: Cell<isize> = const { Cell::new(0) };
+    static GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+/// The number of the engine now in use. Each environment asked for, and
+/// each restart after a crash, gets a new one: an answer or an event of an
+/// earlier engine (a view made for a browser process that died since) is
+/// then known as such and dropped.
+pub fn generation() -> u64 {
+    GENERATION.with(|g| g.get())
+}
+
+/// Starts a new engine number: everything of the previous one is old now.
+pub fn next_generation() -> u64 {
+    GENERATION.with(|g| {
+        g.set(g.get() + 1);
+        g.get()
+    })
 }
 
 pub fn set_window(hwnd: HWND) {
@@ -168,10 +203,12 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
         options.set_are_browser_extensions_enabled(extensions);
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
-    crate::diag::trace(|| "environment requested".to_string());
-    let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(|result, env| {
+    let generation = next_generation();
+    crate::diag::trace(|| format!("environment requested engine={generation}"));
+    let handler = CreateCoreWebView2EnvironmentCompletedHandler::create(Box::new(move |result, env| {
         crate::diag::trace(|| format!("environment ready ok={}", result.is_ok()));
-        push(Event::EnvironmentReady(result.and_then(|_| env.ok_or_else(|| windows::core::Error::from(E_POINTER)))));
+        let env = result.and_then(|_| env.ok_or_else(|| windows::core::Error::from(E_POINTER)));
+        push(Event::EnvironmentReady(generation, env));
         Ok(())
     }));
     unsafe { CreateCoreWebView2EnvironmentWithOptions(None, &HSTRING::from(data_dir.as_os_str()), &options, &handler) }
@@ -179,15 +216,53 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
 
 pub fn create_controller(env: &ICoreWebView2Environment, parent: HWND, id: u64) -> Result<()> {
     crate::diag::trace(|| format!("controller requested tab={id}"));
-    let handler = CreateCoreWebView2ControllerCompletedHandler::create(Box::new(move |result, controller| {
+    let handler = controller_handler(id);
+    unsafe { env.CreateCoreWebView2Controller(parent, &handler) }
+}
+
+/// The answer to a view request for tab `id`, queued with the engine number
+/// of now. It can be an error: E_ABORT when the request ended before the
+/// view did (the engine or the window went first), or the engine's own.
+pub fn controller_handler(id: u64) -> ICoreWebView2CreateCoreWebView2ControllerCompletedHandler {
+    let generation = generation();
+    CreateCoreWebView2ControllerCompletedHandler::create(Box::new(move |result, controller| {
         crate::diag::trace(|| format!("controller ready tab={id} ok={}", result.is_ok()));
         push(Event::ControllerReady(
             id,
+            generation,
             result.and_then(|_| controller.ok_or_else(|| windows::core::Error::from(E_POINTER))),
         ));
         Ok(())
+    }))
+}
+
+/// Reports the end of the engine's browser process. The views each report
+/// it too, but only the views: with every tab asleep, or only a spare or a
+/// view being made, nothing else would tell that the engine is gone.
+pub fn watch_browser(env: &ICoreWebView2Environment, generation: u64) {
+    let Ok(env5) = env.cast::<ICoreWebView2Environment5>() else { return };
+    let handler = BrowserProcessExitedEventHandler::create(Box::new(move |_, args| {
+        let (mut kind, mut pid) = (COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND_NORMAL, 0u32);
+        if let Some(args) = args {
+            unsafe {
+                let _ = args.BrowserProcessExitKind(&mut kind);
+                let _ = args.BrowserProcessId(&mut pid);
+            }
+        }
+        let failed = kind == COREWEBVIEW2_BROWSER_PROCESS_EXIT_KIND_FAILED;
+        if failed {
+            crate::diag::log(
+                crate::diag::Log::Crash,
+                format!("{} engine: browser process {pid} failed (engine {generation})", crate::diag::stamp()),
+            );
+        }
+        push(Event::BrowserExited(generation, failed));
+        Ok(())
     }));
-    unsafe { env.CreateCoreWebView2Controller(parent, &handler) }
+    let mut token = 0i64;
+    unsafe {
+        let _ = env5.add_BrowserProcessExited(&handler, &mut token);
+    }
 }
 
 fn modifiers_down() -> (bool, bool, bool) {
@@ -205,7 +280,22 @@ pub fn current_chord(vk: u32) -> Chord {
 impl WebTab {
     /// Wires the engine events of a new view to the queue and applies the
     /// look. The view stays hidden until the app shows it.
+    /// On an error the view is closed: a view half wired and dropped
+    /// without `Close` stayed in the window, a page nobody could reach.
     pub fn new(id: u64, controller: ICoreWebView2Controller, shortcuts: Rc<Shortcuts>, theme: Theme) -> Result<Self> {
+        let generation = generation();
+        Self::wire(id, generation, controller.clone(), shortcuts, theme).inspect_err(|_| unsafe {
+            let _ = controller.Close();
+        })
+    }
+
+    fn wire(
+        id: u64,
+        generation: u64,
+        controller: ICoreWebView2Controller,
+        shortcuts: Rc<Shortcuts>,
+        theme: Theme,
+    ) -> Result<Self> {
         unsafe {
             let webview = controller.CoreWebView2()?;
             // A view parked visible at zero size (the spare, or one just
@@ -308,7 +398,7 @@ impl WebTab {
                         crate::diag::Log::Crash,
                         format!("{} engine: {} (tab {id})", crate::diag::stamp(), failure.describe()),
                     );
-                    push(Event::ProcessFailed(id, failure.kind));
+                    push(Event::ProcessFailed(id, generation, failure.kind));
                     Ok(())
                 })),
                 &mut token,

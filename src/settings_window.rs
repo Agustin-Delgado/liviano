@@ -1601,27 +1601,38 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_DPICHANGED => {
-            let suggested = (lparam.0 != 0).then(|| unsafe { *(lparam.0 as *const RECT) });
+            let suggested = unsafe { crate::msg_param::read::<RECT>(lparam) }.copied();
             rescale((wparam.0 & 0xFFFF) as u32, suggested);
             LRESULT(0)
         }
         WM_NOTIFY => {
             // The check boxes stay native and are drawn as the design system's.
-            let header = unsafe { &*(lparam.0 as *const NMHDR) };
+            // Windows does not marshal WM_NOTIFY: from another program,
+            // lParam points into that program, or nowhere.
+            let Some(header) = (unsafe { crate::msg_param::read::<NMHDR>(lparam) })
+                .filter(|header| crate::msg_param::from_child(hwnd, header.hwndFrom))
+            else {
+                return LRESULT(0);
+            };
             let is_check = header.code == NM_CUSTOMDRAW
                 && unsafe {
                     (GetWindowLongW(header.hwndFrom, GWL_STYLE) as u32 & BS_TYPEMASK as u32) == BS_AUTOCHECKBOX as u32
                 };
-            match LOOK.with(|l| l.get()) {
-                Some((palette, scale)) if is_check => {
-                    let nm = unsafe { &*(lparam.0 as *const NMCUSTOMDRAW) };
+            let custom = || unsafe { crate::msg_param::read::<NMCUSTOMDRAW>(lparam) };
+            match (LOOK.with(|l| l.get()), is_check.then(custom).flatten()) {
+                (Some((palette, scale)), Some(nm)) => {
                     widgets::draw_check(nm, Color::from(palette.field), &palette, scale)
                 }
                 _ => default(),
             }
         }
         WM_DRAWITEM => {
-            let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            // Only from our own controls: another program can send any lParam.
+            let Some(item) = (unsafe { crate::msg_param::read::<DRAWITEMSTRUCT>(lparam) })
+                .filter(|item| crate::msg_param::from_child(hwnd, item.hwndItem))
+            else {
+                return LRESULT(0);
+            };
             let Some((palette, scale)) = LOOK.with(|l| l.get()) else { return LRESULT(1) };
             if item.CtlType == ODT_BUTTON {
                 let kind = if item.CtlID == ID_CLOSE as u32 { ButtonKind::Primary } else { ButtonKind::Secondary };

@@ -178,6 +178,9 @@ $rows = New-Object System.Collections.Generic.List[object]
 $process = $null
 try {
     [IO.File]::WriteAllText((Join-Path $dir 'settings.json'), (@{ bench_enabled = $true; check_updates = $false } | ConvertTo-Json -Compress))
+    # Fresh block lists (the built-in ones): the run downloads nothing.
+    New-Item -ItemType Directory -Path (Join-Path $dir 'shield') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $dir 'shield\updated'), '')
     $saved = @(for ($i = 0; $i -lt $StartTabs; $i++) { @{ url = ($base -f $i); title = "Tab $i"; pinned = $false } })
     $session = @{ tabs = $saved; active = 0; vertical_tabs = $false; sidebar_collapsed = $false; window = @(60, 60, 1460, 960); maximized = $false }
     [IO.File]::WriteAllText((Join-Path $dir 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))

@@ -44,7 +44,11 @@ param(
     # The time that a person needs to type the address, from the open field to Enter.
     # With 0, the pipe types immediately. This is the worst case: a person cannot
     # press Enter before the engine has the view ready.
-    [int]$TypingMs = 0
+    [int]$TypingMs = 0,
+    # No network outside this computer: the engine resolves only 127.0.0.1,
+    # the block lists stay the built-in ones and the updater does not check.
+    # The pages of other hosts become error pages.
+    [switch]$Offline
 )
 
 $ErrorActionPreference = 'Stop'
@@ -109,12 +113,17 @@ $script:Runs = @()
 
 function Start-Run([hashtable]$settings, $session) {
     $dir = New-TempDir 'nea-latency'
-    $all = @{ bench_enabled = $true }
+    $all = @{ bench_enabled = $true; check_updates = $false }
     foreach ($k in $settings.Keys) { $all[$k] = $settings[$k] }
     [IO.File]::WriteAllText((Join-Path $dir 'settings.json'), ($all | ConvertTo-Json -Compress -Depth 5))
     if ($session) { [IO.File]::WriteAllText((Join-Path $dir 'session.json'), ($session | ConvertTo-Json -Compress -Depth 5)) }
     if ($script:HistoryFile) { Copy-Item -LiteralPath $script:HistoryFile -Destination (Join-Path $dir 'history.json') }
     if ($script:ShieldCache) { Copy-Item -Recurse -LiteralPath $script:ShieldCache -Destination (Join-Path $dir 'shield') }
+    if ($Offline) {
+        New-Item -ItemType Directory -Force -Path (Join-Path $dir 'shield') | Out-Null
+        [IO.File]::WriteAllText((Join-Path $dir 'shield\updated'), '')
+        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1"'
+    }
     $env:NEA_DATA_DIR = $dir
     $env:NEA_BENCH = '1'
     $env:NEA_TRACE = '1'
@@ -138,6 +147,7 @@ function Stop-Run($run, [switch]$Keep) {
     Start-Sleep -Milliseconds 500
     foreach ($p in (Get-ProcessesMentioning 'msedgewebview2.exe' $run.Dir)) { Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue }
     Remove-Item Env:NEA_DATA_DIR, Env:NEA_BENCH, Env:NEA_BENCH_PIPE, Env:NEA_TRACE -ErrorAction SilentlyContinue
+    if ($Offline) { Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS -ErrorAction SilentlyContinue }
     if (-not $Keep) { Remove-TempDir $run.Dir }
 }
 
@@ -211,6 +221,11 @@ function Open-Background([int]$count) {
 }
 
 function Initialize-Cache {
+    if ($Offline) {
+        $script:HistoryFile = Join-Path ([IO.Path]::GetTempPath()) ("nea-latency-history-" + [Guid]::NewGuid().ToString('N').Substring(0, 8) + '.json')
+        Write-History $script:HistoryFile $HistoryEntries
+        return
+    }
     $run = Start-Run @{} $null
     try {
         Invoke-Nea open @{ url = 'about:blank' } | Out-Null

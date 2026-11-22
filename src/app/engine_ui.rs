@@ -21,7 +21,7 @@ use std::{
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
     COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_EXITED,
-    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, ICoreWebView2Controller,
+    COREWEBVIEW2_PROCESS_FAILED_KIND_RENDER_PROCESS_UNRESPONSIVE, ICoreWebView2Controller, ICoreWebView2Environment,
 };
 use windows::Win32::{
     Foundation::{HWND, RECT},
@@ -57,6 +57,10 @@ const SPARE_AFTER_MOTION_MS: u64 = 300;
 /// Engine restarts allowed within `RESTART_WINDOW` before giving up.
 const MAX_RESTARTS: usize = 3;
 const RESTART_WINDOW: Duration = Duration::from_secs(120);
+/// The engine did not start (the runtime is missing, or being updated):
+/// asked for again after a wait that doubles each time, up to this.
+const ENV_RETRY_MAX: Duration = Duration::from_secs(60);
+const TIMER_ENV_RETRY: usize = 0x44;
 
 #[derive(Default)]
 pub(super) struct EngineUi {
@@ -88,6 +92,40 @@ pub(super) struct EngineUi {
     held_focus: Option<u64>,
     /// When the oldest held work was held.
     held_since: Option<Instant>,
+    /// Starts of the engine that failed in a row.
+    env_failures: u32,
+    /// No new start of the engine before then.
+    env_retry_at: Option<Instant>,
+}
+
+/// What an answer to a view request means for its tab.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum Arrival {
+    /// The tab waits for this view: wire it.
+    Wire,
+    /// Nobody waits for it any more (the tab closed, went to sleep, or got
+    /// a view from another request): the view is closed and the tab stays
+    /// as it is. A tab with a view must never lose it to a late answer.
+    Unwanted,
+    /// No view: the tab sleeps. `retry` when it is on screen and may try
+    /// again, so that a page in sight does not stay empty.
+    Failed { retry: bool },
+}
+
+/// `waiting`: the tab exists and waits for a view (`Live::Creating`).
+pub(super) fn arrival(waiting: bool, made: bool, on_screen: bool, may_retry: impl FnOnce() -> bool) -> Arrival {
+    match (waiting, made) {
+        (false, _) => Arrival::Unwanted,
+        (true, true) => Arrival::Wire,
+        (true, false) => Arrival::Failed { retry: on_screen && may_retry() },
+    }
+}
+
+/// How long to wait before the engine is asked for again after `failures`
+/// starts in a row that failed: 1 s, 2 s, 4 s… up to `ENV_RETRY_MAX`.
+pub(super) fn env_retry_delay(failures: u32) -> Duration {
+    let doubled = 1u64.checked_shl(failures.saturating_sub(1)).unwrap_or(u64::MAX);
+    Duration::from_secs(doubled).min(ENV_RETRY_MAX)
 }
 
 /// What a failed engine process means for the app.
@@ -120,6 +158,16 @@ fn may_restart(restarts: &mut Vec<Instant>, now: Instant) -> bool {
     true
 }
 
+/// After the last restart allowed: how long until the oldest one leaves
+/// the window and the engine may start again (at least a second).
+pub(super) fn restart_wait(restarts: &[Instant], now: Instant) -> Duration {
+    let left = restarts
+        .iter()
+        .min()
+        .map_or(Duration::ZERO, |oldest| (*oldest + RESTART_WINDOW).saturating_duration_since(now));
+    left.max(Duration::from_secs(1))
+}
+
 /// Whether the page of `tab` loads again after its process ended. A page
 /// that ends it on every load (edge://kill, a page that runs out of memory)
 /// reloaded about three times a second for ever: after `MAX_RESTARTS` in
@@ -131,6 +179,14 @@ fn reload_after_crash(reloads: &mut HashMap<u64, Vec<Instant>>, tab: u64, now: I
 
 unsafe extern "system" fn on_warm_timer(_: HWND, _: u32, _: usize, _: u32) {
     with_app(|app| app.warm_tick());
+}
+
+unsafe extern "system" fn on_env_retry_timer(hwnd: HWND, _: u32, _: usize, _: u32) {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), TIMER_ENV_RETRY);
+    }
+    let _doing = crate::diag::doing(&"timer:engine retry", 0);
+    with_app(|app| app.retry_environment());
 }
 
 unsafe extern "system" fn on_held_timer(_: HWND, _: u32, _: usize, _: u32) {
@@ -387,7 +443,7 @@ impl App {
             self.engine.hold_until = Some(Instant::now() + REPLENISH_AFTER);
             // Through the queue, as any new view: the caller is in the
             // middle of showing tabs.
-            web::push(Event::ControllerReady(id, Ok(controller)));
+            web::push(Event::ControllerReady(id, web::generation(), Ok(controller)));
             return true;
         }
         if self.engine.making && self.engine.claim.is_none() {
@@ -460,34 +516,174 @@ impl App {
                     self.show_active();
                 }
             }
-            Response::Restart => self.restart_engine(id),
+            Response::Restart => self.restart_engine(),
         }
         self.invalidate();
     }
 
-    /// The browser process died: every view went with it. Each view reports
-    /// it; the first one with a live view does the work.
-    fn restart_engine(&mut self, id: u64) {
-        if !self.tabs.get(id).is_some_and(|t| matches!(t.live, Live::Ready(_))) {
-            return;
+    /// The browser process of the engine in use ended. `failed`: it
+    /// crashed or was killed, and the views went with it. A normal end
+    /// comes when no view needs the process; the next view starts it again.
+    pub(super) fn browser_exited(&mut self, failed: bool) {
+        if failed {
+            self.restart_engine();
+            self.invalidate();
         }
+    }
+
+    /// An answer or a report of an engine that is no longer the one in use
+    /// (it died, or it was let go). A view it made is closed: nobody waits
+    /// for it, and the tab that asked has asked the new engine since.
+    pub(super) fn stale_engine_event(&mut self, event: Event) {
+        crate::diag::trace(|| format!("old engine {}: {}", event.generation().unwrap_or(0), event.name()));
+        match event {
+            Event::ControllerReady(_, _, Ok(controller)) => unsafe {
+                let _ = controller.Close();
+            },
+            Event::EnvironmentReady(..) => {
+                // Let go of an environment nobody asked for any more.
+            }
+            _ => {}
+        }
+    }
+
+    /// The engine started, or did not.
+    pub(super) fn environment_ready(&mut self, result: windows::core::Result<ICoreWebView2Environment>) {
+        match result {
+            Ok(env) => {
+                self.engine.env_failures = 0;
+                self.engine.env_retry_at = None;
+                self.env_error = None;
+                web::watch_browser(&env, web::generation());
+                self.env = Some(env);
+                self.show_active();
+                self.warm_environment_ready();
+            }
+            Err(err) => self.environment_failed(format!(
+                "Cannot start WebView2 ({err}). Install the WebView2 Runtime. Nea tries again by itself."
+            )),
+        }
+    }
+
+    /// The engine did not start: the message is shown, and it is asked for
+    /// again later (a runtime that is being updated comes back by itself).
+    pub(super) fn environment_failed(&mut self, message: String) {
+        crate::diag::log(crate::diag::Log::Crash, format!("{} engine: {message}", crate::diag::stamp()));
+        self.env_error = Some(message);
+        self.env_requested = false;
+        self.engine.env_failures = self.engine.env_failures.saturating_add(1);
+        let delay = env_retry_delay(self.engine.env_failures);
+        self.engine.env_retry_at = Some(Instant::now() + delay);
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_ENV_RETRY, delay.as_millis() as u32, Some(on_env_retry_timer));
+        }
+        self.invalidate();
+    }
+
+    /// Whether the engine may be asked for now (not too soon after a failure).
+    pub(super) fn environment_allowed(&self) -> bool {
+        self.engine.env_retry_at.is_none_or(|at| Instant::now() >= at)
+    }
+
+    /// The wait after a failed start is over: the tabs on screen ask again.
+    fn retry_environment(&mut self) {
+        self.engine.env_retry_at = None;
+        if self.env.is_none() && !self.env_requested {
+            self.show_active();
+        }
+    }
+
+    /// The answer to a view request for tab `id` (not the spare's): the
+    /// view to wire, if the tab still waits for it.
+    pub(super) fn view_arrived(
+        &mut self,
+        id: u64,
+        result: windows::core::Result<ICoreWebView2Controller>,
+    ) -> Option<ICoreWebView2Controller> {
+        let waiting = self.tabs.get(id).is_some_and(|t| matches!(t.live, Live::Creating));
+        let on_screen = self.on_screen(id);
+        let reloads = &mut self.engine.page_reloads;
+        let outcome = arrival(waiting, result.is_ok(), on_screen, || reload_after_crash(reloads, id, Instant::now()));
+        match (outcome, result) {
+            (Arrival::Wire, Ok(controller)) => Some(controller),
+            (Arrival::Unwanted, Ok(controller)) => {
+                unsafe {
+                    let _ = controller.Close();
+                }
+                None
+            }
+            (Arrival::Failed { retry }, result) => {
+                if let Err(err) = result {
+                    crate::diag::log(
+                        crate::diag::Log::Crash,
+                        format!("{} engine: no view for tab {id} ({err})", crate::diag::stamp()),
+                    );
+                }
+                if let Some(tab) = self.tabs.get_mut(id) {
+                    tab.live = Live::Asleep;
+                    if tab.private {
+                        self.close_tab(id);
+                        return None;
+                    }
+                }
+                if retry {
+                    self.show_active();
+                }
+                None
+            }
+            (_, Err(_)) => None,
+        }
+    }
+
+    /// The browser process died: every view went with it. Each view reports
+    /// it, and the environment too; the first report does the work, and
+    /// the new engine number makes the others old (see `web::generation`).
+    /// The views being made go to sleep as well: their answers, from the
+    /// engine that died, would never come or come as errors, and the tab
+    /// waited for them for ever.
+    fn restart_engine(&mut self) {
+        web::next_generation();
         for tab in &mut self.tabs.tabs {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
             }
             tab.loading = false;
         }
-        self.engine.spare = None;
+        if let Some(spare) = self.engine.spare.take() {
+            unsafe {
+                let _ = spare.Close();
+            }
+        }
+        for (_, result) in self.engine.held_ready.drain(..) {
+            if let Ok(controller) = result {
+                unsafe {
+                    let _ = controller.Close();
+                }
+            }
+        }
         self.engine.making = false;
         self.engine.claim = None;
+        self.engine.from_spare = None;
         self.env = None;
         if may_restart(&mut self.engine.restarts, Instant::now()) {
             self.env_requested = false;
             self.env_error = None;
             self.show_active();
         } else {
-            self.env_error =
-                Some("The page engine stopped many times in a row. Close Nea and open it again.".to_string());
+            // Not for good: an engine that a runtime update ends three
+            // times starts again once the window has passed.
+            let wait = restart_wait(&self.engine.restarts, Instant::now());
+            crate::diag::log(
+                crate::diag::Log::Crash,
+                format!("{} engine: stopped too often, next start in {} s", crate::diag::stamp(), wait.as_secs()),
+            );
+            self.env_error = Some("The page engine stopped many times in a row. Nea starts it again soon.".to_string());
+            self.env_requested = false;
+            self.engine.env_retry_at = Some(Instant::now() + wait);
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_ENV_RETRY, wait.as_millis() as u32, Some(on_env_retry_timer));
+            }
+            self.invalidate();
         }
     }
 }

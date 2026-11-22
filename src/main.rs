@@ -26,6 +26,7 @@ mod inject;
 mod installer;
 mod legacy;
 mod memory;
+mod msg_param;
 mod omnibar;
 mod omnibox;
 mod pacer;

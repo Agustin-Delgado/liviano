@@ -284,6 +284,17 @@ fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
     APP.with(|cell| cell.try_borrow_mut().ok().and_then(|mut guard| guard.as_mut().map(f)))
 }
 
+/// Whether the app is in the middle of something (refer to `with_app`).
+fn app_busy() -> bool {
+    APP.with(|cell| cell.try_borrow_mut().is_err())
+}
+
+/// Whether the window may go now: the app wrote its session, or there is
+/// no app to write one. A busy app gets the close again shortly.
+fn close_now(shut_down: bool, busy: bool) -> bool {
+    shut_down || !busy
+}
+
 fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
@@ -756,7 +767,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             with_app(|app| app.refresh_dpi(dpi));
             // The system always sends a rect; a message posted by anything
             // else may not have one.
-            if let Some(suggested) = unsafe { (lparam.0 as *const RECT).as_ref() } {
+            if let Some(suggested) = unsafe { crate::msg_param::read::<RECT>(lparam) } {
                 let (w, h) =
                     (suggested.right.saturating_sub(suggested.left), suggested.bottom.saturating_sub(suggested.top));
                 if w > 0 && h > 0 {
@@ -777,7 +788,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_GETMINMAXINFO => {
-            if let Some(info) = unsafe { (lparam.0 as *mut MINMAXINFO).as_mut() } {
+            if let Some(info) = unsafe { crate::msg_param::write::<MINMAXINFO>(lparam) } {
                 let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
                 let (x, y) = min_window_size(dpi);
                 info.ptMinTrackSize = POINT { x, y };
@@ -805,7 +816,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_CLOSE => {
             let _doing = crate::diag::doing(&"close", 0);
-            with_app(|app| app.shutdown());
+            let shut_down = with_app(|app| app.shutdown()).is_some();
+            // A modal loop inside the app (a menu) dispatches the close too:
+            // destroyed then, the window went without the session written.
+            if !close_now(shut_down, app_busy()) {
+                retry_later(hwnd, WM_CLOSE, WPARAM(0), LPARAM(0));
+                return LRESULT(0);
+            }
             crate::diag::flush_now();
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -1114,7 +1131,7 @@ impl App {
     /// the window's first paint: its start holds the UI thread for 25-30 ms,
     /// and the chrome comes first.
     fn request_environment(&mut self) {
-        if self.env_requested {
+        if self.env_requested || !self.environment_allowed() {
             return;
         }
         if !self.painted {
@@ -1125,8 +1142,7 @@ impl App {
         shield::start();
         let extensions = self.extensions_for_environment();
         if let Err(err) = web::create_environment(&storage::engine_dir(), extensions) {
-            self.env_error = Some(format!("Cannot start WebView2: {err}"));
-            self.invalidate();
+            self.environment_failed(format!("Cannot start WebView2: {err}"));
         }
     }
 
@@ -1433,18 +1449,15 @@ impl App {
     }
 
     fn handle(&mut self, event: Event) {
+        if event.generation().is_some_and(|g| g != web::generation()) {
+            self.stale_engine_event(event);
+            return;
+        }
         match event {
-            Event::EnvironmentReady(Ok(env)) => {
-                self.env = Some(env);
-                self.show_active();
-                self.warm_environment_ready();
-            }
-            Event::EnvironmentReady(Err(err)) => {
-                self.env_error = Some(format!("Cannot start WebView2 ({err}). Install the WebView2 Runtime."));
-                self.invalidate();
-            }
-            Event::ControllerReady(engine_ui::SPARE, result) => self.spare_ready(result),
-            Event::ControllerReady(id, result) => self.view_ready(id, result),
+            Event::EnvironmentReady(_, result) => self.environment_ready(result),
+            Event::BrowserExited(_, failed) => self.browser_exited(failed),
+            Event::ControllerReady(engine_ui::SPARE, _, result) => self.spare_ready(result),
+            Event::ControllerReady(id, _, result) => self.view_ready(id, result),
             Event::TitleChanged(id) => {
                 let records = self.tabs.records(id);
                 if let Some(tab) = self.tabs.get_mut(id)
@@ -1489,7 +1502,7 @@ impl App {
                 self.invalidate();
             }
             Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
-            Event::ProcessFailed(id, kind) => self.process_failed(id, kind),
+            Event::ProcessFailed(id, _, kind) => self.process_failed(id, kind),
             Event::PageClicked(id) => self.page_focused(id),
             Event::HistoryChanged(id) => {
                 if self.tabs.active == Some(id) {
@@ -1552,17 +1565,10 @@ impl App {
     ) {
         let started = Instant::now();
         let _traced = Traced(started, id);
-        let Ok(controller) = result else {
-            if let Some(tab) = self.tabs.get_mut(id) {
-                tab.live = Live::Asleep;
-                if tab.private {
-                    self.close_tab(id);
-                }
-            }
-            return;
-        };
+        // A failure, or a view nobody waits for any more (the tab closed or
+        // slept while it was made), ends here.
+        let Some(controller) = self.view_arrived(id, result) else { return };
         let Some(tab) = self.tabs.get_mut(id) else {
-            // The tab was closed while its view was being created.
             unsafe {
                 let _ = controller.Close();
             }

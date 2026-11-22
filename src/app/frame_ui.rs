@@ -114,8 +114,12 @@ fn ht(hit: FrameHit) -> u32 {
 pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     match msg {
-        WM_NCCALCSIZE if wparam.0 != 0 && lparam.0 != 0 => {
-            let params = unsafe { &mut *(lparam.0 as *mut NCCALCSIZE_PARAMS) };
+        WM_NCCALCSIZE if wparam.0 != 0 => {
+            // Posted by another program, lParam can point anywhere: then
+            // not even the default handling reads it.
+            let Some(params) = (unsafe { crate::msg_param::write::<NCCALCSIZE_PARAMS>(lparam) }) else {
+                return Some(LRESULT(0));
+            };
             let top = params.rgrc[0].top;
             // Windows works out the side and bottom frames; the top goes
             // back to the window's edge (past the off-screen frame when maximized).

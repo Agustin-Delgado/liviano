@@ -12,7 +12,8 @@
        same program. Because its name contains "setup", it installs itself
        when you open it. It does not need administrator rights.
     5. With -UpdateKey, makes a signed latest.json (Ed25519) for the updater.
-    6. Writes SHA256SUMS.txt with the hash of each file.
+    6. Copies the symbols (nea-<version>.pdb), for tools\symbolize.ps1.
+    7. Writes SHA256SUMS.txt with the hash of each file.
 
     The zip is reproducible. The entries have a fixed order and the date of
     the last commit (or SOURCE_DATE_EPOCH, if it is set).
@@ -101,6 +102,16 @@ if ($CertificatePath -or $CertificateThumbprint) {
     Write-Host "== Signed with signtool"
 } else {
     Write-Warning 'No code signing certificate: nea.exe is not signed. SmartScreen shows a warning when a person opens it.'
+}
+
+# The symbols of this nea.exe: a crash.log offset resolves to a function
+# and a line only with the PDB of the same build (tools\symbolize.ps1).
+# Signing changes the file, not the code, so the PDB still matches.
+$pdb = Join-Path "target\$profileDir" 'nea.pdb'
+if (Test-Path $pdb) {
+    Copy-Item $pdb (Join-Path $OutDir "nea-$version.pdb")
+} else {
+    Write-Warning "No $pdb`: the crash logs of this build cannot be symbolized."
 }
 
 $setup = Join-Path $OutDir "$prefix-$version-setup.exe"

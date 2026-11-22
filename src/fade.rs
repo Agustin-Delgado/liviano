@@ -213,35 +213,53 @@ fn restore_place(hwnd: HWND, slide: Option<(i32, i32, i32)>) {
     }
 }
 
-fn apply(hwnd: HWND, fading: &Fading, now: Instant) {
+/// Opacity, and the place when the window slides.
+type Pose = (u8, Option<(i32, i32)>);
+
+/// The opacity and the place of a fading window at `now`.
+fn pose(fading: &Fading, now: Instant) -> Pose {
     let level = fading.level.value(now);
     // The level may overshoot on a spring; opacity can't.
-    set_alpha(hwnd, (level.clamp(0.0, 1.0) * fading.max as f32).round() as u8);
-    if let Some((x, y, dy)) = fading.slide {
-        let off = (dy as f32 * (1.0 - level)).round() as i32;
+    let alpha = (level.clamp(0.0, 1.0) * fading.max as f32).round() as u8;
+    let place = fading.slide.map(|(x, y, dy)| (x, y + (dy as f32 * (1.0 - level)).round() as i32));
+    (alpha, place)
+}
+
+fn put(hwnd: HWND, (alpha, place): Pose) {
+    set_alpha(hwnd, alpha);
+    if let Some((x, y)) = place {
         unsafe {
-            let _ = SetWindowPos(hwnd, Some(HWND_TOP), x, y + off, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+            let _ = SetWindowPos(hwnd, Some(HWND_TOP), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
     }
 }
 
-/// One frame for every fading popup; false once none is left.
+fn apply(hwnd: HWND, fading: &Fading, now: Instant) {
+    put(hwnd, pose(fading, now));
+}
+
+/// One frame for every fading popup; false once none is left. The frame
+/// is read under the borrow and applied after it: a move sends the window
+/// messages, and a handler that started or ended a fade then found the
+/// map borrowed (a panic, which ends the process).
 fn step() -> bool {
     let now = Instant::now();
     anim::mark("fade");
     let mut done: Vec<(HWND, Fading)> = Vec::new();
-    FADING.with(|f| {
+    let poses: Vec<(HWND, Pose)> = FADING.with(|f| {
         let mut f = f.borrow_mut();
-        let keys: Vec<isize> = f.keys().copied().collect();
-        for key in keys {
-            let hwnd = HWND(key as _);
-            let fading = &f[&key];
-            apply(hwnd, fading, now);
-            if !fading.level.moving(now) {
-                done.push((hwnd, f.remove(&key).expect("key listed")));
+        let poses = f.iter().map(|(key, fading)| (HWND(*key as _), pose(fading, now))).collect();
+        let ended: Vec<isize> = f.iter().filter(|(_, w)| !w.level.moving(now)).map(|(key, _)| *key).collect();
+        for key in ended {
+            if let Some(fading) = f.remove(&key) {
+                done.push((HWND(key as _), fading));
             }
         }
+        poses
     });
+    for (hwnd, pose) in poses {
+        put(hwnd, pose);
+    }
     for (hwnd, fading) in done {
         if fading.closing {
             unsafe {

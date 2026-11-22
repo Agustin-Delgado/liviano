@@ -171,13 +171,40 @@ as `*.log.old`.
 
 | File | Contents |
 |---|---|
-| `crash.log` | A *panic*: the message, file, line, time, version and the current task of the window. An unhandled exception: the code and the address in `nea.exe`. Each engine process that crashes or stops responding (browser, page, GPU…), with its reason and exit code. |
+| `crash.log` | A *panic*: the message, file, line, time, version and the current task of the window. An unhandled exception: the code, the address as `module+0xoffset` and the stack (up to 24 frames). Each engine process that crashes or stops responding (browser, page, GPU…), with its reason and exit code. |
 | `hang.log` | Each time the window stops for more than 2 s: the start time and the current task (an engine event, a command, a timer, the test pipe, a blocker request…). It also records when the window responds again, and each step that takes more than 250 ms. |
 
 If Nea closes or stops responding, these two files show the cause. If the
 full engine process crashes, Nea starts it again and reloads the visible tabs.
-It does this up to three times in two minutes. If the GPU or a helper process
-crashes, the engine recovers and the tabs do not change.
+It does this up to three times in two minutes. After that, it waits for the
+end of the two minutes, then it starts the engine again. If the GPU or a helper process
+crashes, the engine recovers and the tabs do not change. If WebView2 is not
+installed or is updating, Nea tries again after 1 s, 2 s, 4 s… (at most each
+minute), and the tabs load when the engine is available.
+
+### Read a crash.log
+
+The frames in `crash.log` are offsets, such as `nea.exe+0x1A2B3C`: the
+release build has no names in it. Each release publishes the symbols of its
+`nea.exe` as `nea-<version>.pdb`, next to the other files. To get the
+function, the file and the line of each frame:
+
+1. Find the version in the line of the crash (`panic v0.1.3`, `exception
+   v0.1.3`), and download `nea-<version>.pdb` of that release. Only the PDB
+   of the same build gives correct names.
+2. Run:
+
+   ```powershell
+   tools\symbolize.ps1 -Pdb nea-0.1.3.pdb -Log crash.log
+   ```
+
+   Each line that has `nea.exe+0x…` gets its function, file and line at the
+   end. For one offset: `tools\symbolize.ps1 -Pdb nea-0.1.3.pdb -Offset 0x1A2B3C`.
+   Frames in other modules (`ntdll.dll`, `EmbeddedBrowserWebView.dll`) stay as
+   they are: their symbols come from Microsoft.
+
+The script uses `dbghelp.dll` of Windows. It needs no other tool and no
+network. For your own build, use `target\release\nea.pdb`.
 
 Nea prepares a spare view before it needs one, so that Enter does not wait
 for the engine. It prepares the view in these cases:

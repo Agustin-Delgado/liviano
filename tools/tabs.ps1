@@ -113,9 +113,12 @@ try {
             Start-Sleep -Milliseconds 300
         }
     }
-    $settings = @{ bench_enabled = $true }
+    $settings = @{ bench_enabled = $true; check_updates = $false }
     [IO.File]::WriteAllText((Join-Path $data 'settings.json'), ($settings | ConvertTo-Json -Compress))
-    $saved = @(for ($i = 0; $i -lt $Tabs; $i++) { @{ url = "$base$i"; title = "Page $i"; pinned = $false } })
+    # Fresh block lists (the built-in ones): the run downloads nothing.
+    New-Item -ItemType Directory -Path (Join-Path $data 'shield') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $data 'shield\updated'), '')
+    $saved =@(for ($i = 0; $i -lt $Tabs; $i++) { @{ url = "$base$i"; title = "Page $i"; pinned = $false } })
     $session = @{ tabs = $saved; active = 0; vertical_tabs = $true; sidebar_collapsed = $false; window = @(80, 80, 1480, 980); maximized = $false }
     [IO.File]::WriteAllText((Join-Path $data 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))
     $now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()

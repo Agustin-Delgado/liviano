@@ -1856,7 +1856,12 @@ unsafe extern "system" fn popup_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpara
         }
         WM_DRAWITEM => {
             let _doing = crate::diag::doing(&"field:row", 0);
-            let item = unsafe { &*(lparam.0 as *const DRAWITEMSTRUCT) };
+            // Only from our own list: another program can send any lParam.
+            let Some(item) = (unsafe { crate::msg_param::read::<DRAWITEMSTRUCT>(lparam) })
+                .filter(|item| crate::msg_param::from_child(hwnd, item.hwndItem))
+            else {
+                return LRESULT(0);
+            };
             if item.itemID == u32::MAX {
                 return LRESULT(1);
             }

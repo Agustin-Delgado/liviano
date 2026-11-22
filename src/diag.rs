@@ -444,20 +444,24 @@ fn watch() {
 }
 
 /// An exception nobody handled (an access violation in a COM call, a stack
-/// overflow): one line with its code and where, relative to the
-/// executable, then the default handling (the process ends).
+/// overflow): a line with its code and where (module and offset), then the
+/// stack that led there, one frame per line as the panic hook writes them,
+/// and then the default handling (the process ends).
 mod seh {
     use std::{path::Path, sync::OnceLock};
 
     use windows::{
         Win32::{
-            Foundation::HANDLE,
+            Foundation::{HANDLE, HMODULE},
             Storage::FileSystem::{
                 CreateFileW, FILE_APPEND_DATA, FILE_ATTRIBUTE_NORMAL, FILE_SHARE_READ, OPEN_ALWAYS, WriteFile,
             },
             System::{
                 Diagnostics::Debug::{EXCEPTION_POINTERS, SetUnhandledExceptionFilter},
-                LibraryLoader::GetModuleHandleW,
+                LibraryLoader::{
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                    GetModuleFileNameW, GetModuleHandleExW,
+                },
             },
         },
         core::PCWSTR,
@@ -465,6 +469,10 @@ mod seh {
 
     static PATH: OnceLock<Vec<u16>> = OnceLock::new();
     const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+    #[cfg(target_arch = "x86_64")]
+    const STACK_OVERFLOW: u32 = 0xC000_00FD;
+    /// Frames written for an exception.
+    pub(super) const MAX_FRAMES: usize = 24;
 
     pub fn install(dir: &Path) {
         let wide: Vec<u16> = dir.join("crash.log").as_os_str().encode_wide_with_nul();
@@ -486,18 +494,102 @@ mod seh {
     }
 
     /// A fixed buffer: nothing here allocates, the heap may be what broke.
-    struct Line {
-        bytes: [u8; 256],
+    pub(super) struct Line<const N: usize> {
+        bytes: [u8; N],
         len: usize,
     }
 
-    impl std::fmt::Write for Line {
+    impl<const N: usize> Line<N> {
+        pub(super) fn new() -> Self {
+            Self { bytes: [0; N], len: 0 }
+        }
+        pub(super) fn text(&self) -> &[u8] {
+            &self.bytes[..self.len]
+        }
+    }
+
+    impl<const N: usize> std::fmt::Write for Line<N> {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
             let room = self.bytes.len() - self.len;
             let n = s.len().min(room);
             self.bytes[self.len..self.len + n].copy_from_slice(&s.as_bytes()[..n]);
             self.len += n;
             Ok(())
+        }
+    }
+
+    /// `address` as `module+0xoffset` (or the bare address, outside any
+    /// module), without allocating. The offset is what a PDB resolves.
+    pub(super) fn write_place(out: &mut impl std::fmt::Write, address: usize) {
+        let mut module = HMODULE::default();
+        let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+        let found = unsafe { GetModuleHandleExW(flags, PCWSTR(address as *const u16), &mut module) };
+        if found.is_err() || module.is_invalid() {
+            let _ = write!(out, "0x{address:X}");
+            return;
+        }
+        let mut name = [0u16; 260];
+        let len = (unsafe { GetModuleFileNameW(Some(module), &mut name) } as usize).min(name.len());
+        let slash = |c: &u16| *c == u16::from(b'\\') || *c == u16::from(b'/');
+        let start = name[..len].iter().rposition(slash).map_or(0, |i| i + 1);
+        for c in char::decode_utf16(name[start..len].iter().copied()) {
+            let _ = out.write_char(c.unwrap_or(char::REPLACEMENT_CHARACTER));
+        }
+        let _ = write!(out, "+0x{:X}", address.wrapping_sub(module.0 as usize));
+    }
+
+    /// The stack from `context` (the state of the thread at the exception),
+    /// one `#n module+0xoffset` line per frame, by the unwind data of each
+    /// module: the frames of the code that failed, not of this handler.
+    #[cfg(target_arch = "x86_64")]
+    pub(super) fn write_frames(
+        out: &mut impl std::fmt::Write,
+        context: &windows::Win32::System::Diagnostics::Debug::CONTEXT,
+    ) {
+        use windows::Win32::System::Diagnostics::Debug::{RtlLookupFunctionEntry, RtlVirtualUnwind, UNW_FLAG_NHANDLER};
+        // The unwinder stores the vector registers with aligned moves.
+        #[repr(C, align(16))]
+        struct Aligned(windows::Win32::System::Diagnostics::Debug::CONTEXT);
+        let mut aligned = Aligned(*context);
+        let context = &mut aligned.0;
+        for i in 0..MAX_FRAMES {
+            let pc = context.Rip;
+            if pc == 0 {
+                break;
+            }
+            let _ = write!(out, "    #{i} ");
+            write_place(out, pc as usize);
+            let _ = out.write_str("\r\n");
+            let mut base = 0u64;
+            let entry = unsafe { RtlLookupFunctionEntry(pc, &mut base, None) };
+            if entry.is_null() {
+                // A leaf function: the return address is on top of the stack.
+                let Some(&ret) = (unsafe { (context.Rsp as *const u64).as_ref() }) else { break };
+                context.Rip = ret;
+                context.Rsp += 8;
+            } else {
+                let (mut data, mut frame) = (std::ptr::null_mut(), 0u64);
+                unsafe {
+                    RtlVirtualUnwind(UNW_FLAG_NHANDLER, base, pc, entry, context, &mut data, &mut frame, None);
+                }
+            }
+        }
+    }
+
+    unsafe fn append(path: &[u16], text: &[u8]) {
+        unsafe {
+            if let Ok(file) = CreateFileW(
+                PCWSTR(path.as_ptr()),
+                FILE_APPEND_DATA.0,
+                FILE_SHARE_READ,
+                None,
+                OPEN_ALWAYS,
+                FILE_ATTRIBUTE_NORMAL,
+                None,
+            ) {
+                let _ = WriteFile(file, Some(text), None, None);
+                let _ = windows::Win32::Foundation::CloseHandle(HANDLE(file.0));
+            }
         }
     }
 
@@ -510,12 +602,11 @@ mod seh {
                 None => (0, 0),
             }
         };
-        let base = unsafe { GetModuleHandleW(PCWSTR::null()).map_or(0, |m| m.0 as usize) };
         let t = unsafe { windows::Win32::System::SystemInformation::GetLocalTime() };
-        let mut line = Line { bytes: [0; 256], len: 0 };
+        let mut line = Line::<512>::new();
         let _ = write!(
             line,
-            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} exception v{} code 0x{code:08X} at 0x{address:X} (nea.exe+0x{:X})\r\n",
+            "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:03} exception v{} code 0x{code:08X} at 0x{address:X} (",
             t.wYear,
             t.wMonth,
             t.wDay,
@@ -524,21 +615,20 @@ mod seh {
             t.wSecond,
             t.wMilliseconds,
             env!("CARGO_PKG_VERSION"),
-            address.wrapping_sub(base),
         );
-        unsafe {
-            if let Ok(file) = CreateFileW(
-                PCWSTR(path.as_ptr()),
-                FILE_APPEND_DATA.0,
-                FILE_SHARE_READ,
-                None,
-                OPEN_ALWAYS,
-                FILE_ATTRIBUTE_NORMAL,
-                None,
-            ) {
-                let _ = WriteFile(file, Some(&line.bytes[..line.len]), None, None);
-                let _ = windows::Win32::Foundation::CloseHandle(HANDLE(file.0));
-            }
+        write_place(&mut line, address);
+        let _ = line.write_str(")\r\n");
+        // The first line is on disk before the walk, which reads the stack
+        // of a thread that just failed and can fail itself.
+        unsafe { append(path, line.text()) };
+        // A thread out of stack has no room for a copy of its context.
+        #[cfg(target_arch = "x86_64")]
+        if code != STACK_OVERFLOW
+            && let Some(context) = unsafe { info.as_ref().and_then(|i| i.ContextRecord.as_ref()) }
+        {
+            let mut frames = Line::<2048>::new();
+            write_frames(&mut frames, context);
+            unsafe { append(path, frames.text()) };
         }
         EXCEPTION_CONTINUE_SEARCH
     }

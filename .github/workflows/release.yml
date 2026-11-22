@@ -100,7 +100,7 @@ jobs:
         shell: bash
         run: |
           cd dist
-          for f in nea.exe latest.json SHA256SUMS.txt "Nea-$VERSION-setup.exe" "Nea-$VERSION-portable.zip"; do
+          for f in nea.exe latest.json SHA256SUMS.txt "Nea-$VERSION-setup.exe" "Nea-$VERSION-portable.zip" "nea-$VERSION.pdb"; do
             [ -s "$f" ] || { echo "::error::dist/$f is missing."; exit 1; }
           done
           grep -q "\"version\": \"$VERSION\"" latest.json || { echo "::error::latest.json has a different version."; exit 1; }
@@ -128,9 +128,11 @@ jobs:
 
           The files are not signed with a code signing certificate. Windows SmartScreen can show "Windows protected your PC". Select **More info**, then **Run anyway**.
 
+          \`nea-$VERSION.pdb\` holds the symbols of this \`nea.exe\`, to read a crash log (\`tools/symbolize.ps1\`).
+
           Compare the files with \`SHA256SUMS.txt\`. Installed copies update themselves: they read \`latest.json\` and verify its Ed25519 signature.
 
           Code signing policy: https://github.com/Agustin-Delgado/nea#code-signing-policy
           EOF
           gh release create "$TAG" --verify-tag --title "Nea $VERSION" --notes-file notes.md \
-            dist/nea.exe dist/latest.json "dist/Nea-$VERSION-setup.exe" "dist/Nea-$VERSION-portable.zip" dist/SHA256SUMS.txt
+            dist/nea.exe dist/latest.json "dist/Nea-$VERSION-setup.exe" "dist/Nea-$VERSION-portable.zip" "dist/nea-$VERSION.pdb" dist/SHA256SUMS.txt

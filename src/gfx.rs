@@ -439,12 +439,15 @@ impl Surface {
         }
         drop(bitmaps);
         if let Err(error) = result {
-            // The target is gone with whatever device stood behind it; the
-            // next paint makes a new one.
-            if error.code() == D2DERR_RECREATE_TARGET {
-                self.target = None;
-                self.bitmaps.borrow_mut().clear();
-            }
+            // D2DERR_RECREATE_TARGET: the target is gone with whatever stood
+            // behind it. Any other error leaves a target in a state nobody
+            // knows. Both: the next paint makes a new one, a few ms.
+            crate::diag::trace(|| {
+                let lost = error.code() == D2DERR_RECREATE_TARGET;
+                format!("draw target dropped: 0x{:08X} (lost {lost})", error.code().0)
+            });
+            self.target = None;
+            self.bitmaps.borrow_mut().clear();
         }
         true
     }

@@ -64,6 +64,9 @@ lto = true
 codegen-units = 1
 panic = "abort"
 strip = true
+# Lines in the PDB (not in nea.exe): a crash.log offset resolves to a file
+# and a line with the PDB of the release (tools/symbolize.ps1).
+debug = "line-tables-only"
 
 [dev-dependencies]
 # Only the key generator needs randomness.
