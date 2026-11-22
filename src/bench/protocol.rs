@@ -80,6 +80,13 @@ pub enum Action {
         x: i32,
         y: i32,
     },
+    /// Gives the window a new DPI (96 is 100 %) as Windows does when the
+    /// window goes to another screen: a `WM_DPICHANGED` with the window's
+    /// rectangle scaled. Windows does not let another process send that
+    /// message. `GetDpiForWindow` keeps the real value.
+    Dpi {
+        dpi: u32,
+    },
     /// Puts tabs in a tab group: a new one made from `tabs`, or `group`
     /// when given; then sets its name, colour (`blue`, `red`…) and whether
     /// it is folded, as the menus would.

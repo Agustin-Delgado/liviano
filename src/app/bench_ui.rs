@@ -32,6 +32,40 @@ use windows::{
 };
 
 use super::{App, Mode, with_app};
+
+/// A scripted DPI change (`Action::Dpi`); the DPI is in `wParam`.
+pub(super) const WM_APP_DPI: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 0x42;
+
+/// The rectangle of `window` scaled from `from` to `to`, its top left corner
+/// kept: what Windows suggests in `WM_DPICHANGED`.
+pub(super) fn scaled_window(
+    window: windows::Win32::Foundation::RECT,
+    from: f32,
+    to: f32,
+) -> windows::Win32::Foundation::RECT {
+    let size = |v: i32| (v as f32 * to / from).round() as i32;
+    windows::Win32::Foundation::RECT {
+        left: window.left,
+        top: window.top,
+        right: window.left + size(window.right - window.left),
+        bottom: window.top + size(window.bottom - window.top),
+    }
+}
+
+/// Sends the window the `WM_DPICHANGED` of a scripted DPI change.
+pub(super) fn simulate_dpi(hwnd: HWND, dpi: u32) {
+    use windows::Win32::UI::WindowsAndMessaging::{GetWindowRect, WM_DPICHANGED};
+    let Some(from) = with_app(|app| app.scale) else { return };
+    let mut window = windows::Win32::Foundation::RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut window);
+    }
+    let suggested = scaled_window(window, from, crate::design::dpi_scale(dpi));
+    let both = (dpi as usize) | ((dpi as usize) << 16);
+    unsafe {
+        SendMessageW(hwnd, WM_DPICHANGED, Some(WPARAM(both)), Some(LPARAM(&suggested as *const _ as isize)));
+    }
+}
 use crate::{
     bench::{
         self, Job, Reply,
@@ -344,6 +378,17 @@ impl App {
                 }
                 reply.ok(json!({ "closed": ids.len() }));
             }
+            Action::Dpi { dpi } => {
+                if !(48..=480).contains(&dpi) {
+                    return reply.error("dpi must be from 48 to 480");
+                }
+                // Posted: the message comes back into the window proc, and
+                // the app is busy with this request now.
+                unsafe {
+                    let _ = PostMessageW(Some(self.hwnd), WM_APP_DPI, WPARAM(dpi as usize), LPARAM(0));
+                }
+                reply.ok(json!({ "dpi": dpi }));
+            }
             Action::Quit => {
                 reply.ok(json!({ "closing": true }));
                 unsafe {
@@ -560,6 +605,7 @@ impl App {
                 })
             })
             .collect();
+        let content = self.layout.content;
         json!({
             "tabs": tabs,
             "active": self.tabs.active,
@@ -573,6 +619,14 @@ impl App {
             "anim": crate::app::tooltip_ui::anim_state(),
             "field": self.field_state(),
             "engine": if self.env.is_some() { "ready" } else if self.env_requested { "starting" } else { "off" },
+            "scale": self.scale,
+            "content": [content.left, content.top, content.right, content.bottom],
+            "fullscreen": self.fullscreen.on(),
         })
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../../tests/unit/app/bench_ui.rs"]
+#[rustfmt::skip]
+mod tests;

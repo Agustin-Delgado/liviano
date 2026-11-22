@@ -577,6 +577,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             with_app(|app| app.thumbs_shrunk());
             LRESULT(0)
         }
+        bench_ui::WM_APP_DPI => {
+            bench_ui::simulate_dpi(hwnd, wparam.0 as u32);
+            LRESULT(0)
+        }
         WM_APP_REPAINT => {
             unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
