@@ -137,6 +137,9 @@ pub struct WebTab {
     pub controller: ICoreWebView2Controller,
     pub webview: ICoreWebView2,
     pub suspended: bool,
+    /// The engine was told that the page may use less memory: the first
+    /// stage of a tab out of sight (refer to `memory`).
+    pub lowered: bool,
     /// Where the view is shown, or `None` while hidden. Every tab switch
     /// walks all the tabs: telling the engine what it already knows is a
     /// round trip to its process per tab.
@@ -209,7 +212,8 @@ impl WebTab {
                 controller.SetIsVisible(false)?;
             }
             let shown = parked.then_some(bounds);
-            let tab = WebTab { controller, webview, suspended: false, shown, passwords: true, find: None };
+            let tab =
+                WebTab { controller, webview, suspended: false, lowered: false, shown, passwords: true, find: None };
             tab.apply_theme(theme);
 
             let settings = tab.webview.Settings()?;
@@ -407,11 +411,13 @@ impl WebTab {
                 if let Ok(w3) = self.webview.cast::<ICoreWebView2_3>() {
                     let _ = w3.Resume();
                 }
-                // Only `suspend` lowers it.
+                self.suspended = false;
+            }
+            if self.lowered {
                 if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
                     let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL);
                 }
-                self.suspended = false;
+                self.lowered = false;
             }
             if self.shown != Some(bounds) {
                 let _doing = crate::diag::doing(&"view:bounds", 0);
@@ -439,15 +445,27 @@ impl WebTab {
         }
     }
 
+    /// First stage of sleeping: the page goes on, and the engine drops what
+    /// it can make again. Only `show` sets the level back.
+    pub fn lower(&mut self) {
+        if self.lowered {
+            return;
+        }
+        unsafe {
+            if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
+                let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
+            }
+        }
+        self.lowered = true;
+    }
+
     /// Second stage of sleeping: the engine stops timers and scripts and
     /// trims memory. Fails on its own if the page plays audio.
     pub fn suspend(&mut self) {
         // A background tab is hidden already.
         self.hide();
+        self.lower();
         unsafe {
-            if let Ok(w19) = self.webview.cast::<ICoreWebView2_19>() {
-                let _ = w19.SetMemoryUsageTargetLevel(COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW);
-            }
             if let Ok(w3) = self.webview.cast::<ICoreWebView2_3>() {
                 let _ = w3.TrySuspend(&TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(()))));
             }

@@ -25,6 +25,7 @@ mod image;
 mod inject;
 mod installer;
 mod legacy;
+mod memory;
 mod omnibar;
 mod omnibox;
 mod pacer;

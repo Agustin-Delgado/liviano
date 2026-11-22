@@ -37,6 +37,7 @@ mod extensions_ui;
 mod frame_ui;
 mod groups_ui;
 mod hovercard_ui;
+mod memory_ui;
 mod nav_ui;
 mod panel_ui;
 mod popups_ui;
@@ -171,6 +172,7 @@ struct App {
     /// `tabbar::changed_area`).
     painted_sheet: Option<tabbar::Sheet>,
     engine: engine_ui::EngineUi,
+    memory: memory_ui::MemoryUi,
 }
 
 thread_local! {
@@ -330,6 +332,7 @@ pub fn run() -> windows::core::Result<()> {
         frame_now: None,
         painted_sheet: None,
         engine: Default::default(),
+        memory: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -349,6 +352,7 @@ pub fn run() -> windows::core::Result<()> {
         SetTimer(Some(hwnd), TIMER_SAVE, 5_000, None);
         SetTimer(Some(hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
     }
+    crate::memory::watch_low_memory(hwnd, memory_ui::WM_APP_LOW_MEMORY);
     with_app(|app| {
         app.relayout();
         if app.tabs.tabs.is_empty() {
@@ -491,13 +495,25 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             LRESULT(0)
         }
+        memory_ui::WM_APP_LOW_MEMORY => {
+            let _doing = crate::diag::doing(&"low memory", 0);
+            with_app(|app| app.low_memory());
+            LRESULT(0)
+        }
         crate::bench::WM_APP_BENCH => {
             let _doing = crate::diag::doing(&"script", 0);
             bench_ui::drain();
             LRESULT(0)
         }
         WM_SIZE | WM_APP_LAYOUT => {
-            if with_app(|app| app.relayout()).is_none() {
+            let kind = if msg == WM_SIZE { wparam.0 as u32 } else { SIZE_RESTORED };
+            if with_app(|app| {
+                if app.window_sized(kind) {
+                    app.relayout()
+                }
+            })
+            .is_none()
+            {
                 retry_later(hwnd, WM_APP_LAYOUT, WPARAM(0), LPARAM(0));
             }
             LRESULT(0)
@@ -927,7 +943,8 @@ impl App {
     /// Shows the active tab's view (and its partner's, when split), creating
     /// them if asleep, and hides the rest.
     fn show_active(&mut self) {
-        let shown = self.shown_panes();
+        // A minimized window hides its pages (refer to `memory_ui`).
+        let shown = if self.memory.pages_hidden() { Vec::new() } else { self.shown_panes() };
         let mut wake = Vec::new();
         for tab in &mut self.tabs.tabs {
             let bounds = shown.iter().find(|(id, _)| *id == tab.id).map(|(_, r)| *r);
@@ -1108,9 +1125,6 @@ impl App {
         self.settings.keep_awake.contains(omnibox::display_host(url))
     }
 
-    /// Background tabs: suspended after a while, then destroyed down to their
-    /// metadata. Pinned and private tabs may be suspended but never destroyed;
-    /// kept-awake sites are left alone; a tab playing audio is never destroyed.
     /// Work that would make a click wait, done ahead while the person is
     /// away: the Settings window is made hidden, so opening it only shows
     /// it. Tried again later while the person is busy or something moves.
@@ -1149,30 +1163,76 @@ impl App {
     }
 
     fn sleep_tick(&mut self) {
-        let now = Instant::now();
-        let suspend_after = Duration::from_secs(self.settings.suspend_after_secs);
-        let discard_after = Duration::from_secs(self.settings.discard_after_secs);
         let pressure = memory_load() >= self.settings.memory_pressure_percent;
+        self.sleep_pass(pressure);
+    }
+
+    /// Tabs out of sight go to their next stage (lowered, suspended, then
+    /// destroyed down to their metadata; refer to `memory`). Pinned and
+    /// private tabs may sleep but are never destroyed; kept-awake sites are
+    /// left alone; a tab playing audio is never destroyed.
+    fn sleep_pass(&mut self, pressure: bool) {
+        let now = Instant::now();
+        let policy = crate::memory::Policy::new(self.settings.suspend_after_secs, self.settings.discard_after_secs);
+        let minimized = self.memory.minimized();
         let mut to_discard = Vec::new();
+        // Live views out of sight that may still be discarded: what the cap counts.
+        let mut capped = Vec::new();
         let keep_awake: Vec<bool> = self.tabs.tabs.iter().map(|t| self.keeps_awake(&t.url)).collect();
         // Both pages of the pair on screen are in use: their idle time starts
-        // when they leave the screen.
+        // when they leave the screen, or when the window is minimized.
         let visible = self.visible_tabs();
         for (tab, awake) in self.tabs.tabs.iter_mut().zip(keep_awake) {
-            if visible.contains(&tab.id) {
+            let shown = visible.contains(&tab.id);
+            if shown && !minimized {
                 tab.last_active = now;
                 continue;
             }
-            if awake {
-                continue;
-            }
             let Live::Ready(web) = &mut tab.live else { continue };
-            let idle = now.duration_since(tab.last_active);
-            if !tab.pinned && !tab.private && (pressure || idle >= discard_after) && !web.is_playing_audio() {
-                to_discard.push((tab.last_active, tab.id));
-            } else if !web.suspended && idle >= suspend_after {
-                web.suspend();
+            let mut facts = crate::memory::Facts {
+                idle: now.duration_since(tab.last_active),
+                minimized_on_screen: shown,
+                keep_awake: awake,
+                pinned: tab.pinned,
+                private: tab.private,
+                playing_audio: false,
+                lowered: web.lowered,
+                suspended: web.suspended,
+            };
+            let mut step = crate::memory::step(&facts, &policy, pressure);
+            // Asking the engine about sound is a round trip: only for a tab
+            // that would be destroyed.
+            if step == crate::memory::Step::Discard && web.is_playing_audio() {
+                facts.playing_audio = true;
+                step = crate::memory::step(&facts, &policy, pressure);
             }
+            match step {
+                crate::memory::Step::Discard => to_discard.push((tab.last_active, tab.id)),
+                crate::memory::Step::Suspend => web.suspend(),
+                crate::memory::Step::Lower => web.lower(),
+                crate::memory::Step::Keep => {}
+            }
+            if step != crate::memory::Step::Discard && !tab.pinned && !tab.private && !awake && !shown {
+                capped.push((tab.last_active, tab.id));
+            }
+        }
+        for (since, id) in crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight) {
+            if let Some(Live::Ready(web)) = self.tabs.get(id).map(|t| &t.live)
+                && !web.is_playing_audio()
+            {
+                to_discard.push((since, id));
+            }
+        }
+        // Closing a view holds the window for tens of milliseconds: never
+        // while the strip or the field moves.
+        if !to_discard.is_empty() && self.something_moves(now) {
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_SLEEP, SLEEP_AGAIN_MS, None);
+            }
+            return;
+        }
+        if pressure {
+            self.trim_under_pressure();
         }
         let more = take_first_discards(&mut to_discard, DISCARDS_PER_TICK);
         if !to_discard.is_empty() {

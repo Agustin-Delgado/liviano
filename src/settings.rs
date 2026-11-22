@@ -39,6 +39,10 @@ pub struct Settings {
     pub suspend_after_secs: u64,
     /// Seconds a background tab stays suspended before its view is destroyed.
     pub discard_after_secs: u64,
+    /// Views out of sight that stay live at most (the most recently seen);
+    /// the others are discarded at once. A suspended view still holds most
+    /// of its memory.
+    pub live_tabs_out_of_sight: usize,
     /// System memory load (percent) above which background tabs are discarded at once.
     pub memory_pressure_percent: u32,
     /// Hosts that never sleep nor get discarded (they cost more memory).
@@ -78,6 +82,7 @@ impl Default for Settings {
             search_url: "https://duckduckgo.com/?q={q}".to_string(),
             suspend_after_secs: 60,
             discard_after_secs: 15 * 60,
+            live_tabs_out_of_sight: 8,
             memory_pressure_percent: 85,
             keep_awake: BTreeSet::new(),
             shield_disabled: BTreeSet::new(),

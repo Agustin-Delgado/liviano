@@ -170,7 +170,7 @@ impl App {
 
     /// The strip's layout, the field or a fading window moves: engine work
     /// waits. The loading ring and hovers do not count (see `settling`).
-    fn something_moves(&self, now: Instant) -> bool {
+    pub(super) fn something_moves(&self, now: Instant) -> bool {
         self.motion.settling(now) || crate::omnibar::moving() || crate::fade::running()
     }
 
@@ -234,6 +234,8 @@ impl App {
             && self.engine.spare.is_none()
             && !self.engine.making
             && !moving
+            // A spare is a renderer nobody uses yet: not while memory is low.
+            && super::memory_load() < self.settings.memory_pressure_percent
         {
             match self.engine.hold_until.and_then(|until| until.checked_duration_since(Instant::now())) {
                 Some(wait) => next = wait.max(Duration::from_millis(50)),
