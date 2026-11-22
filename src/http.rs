@@ -49,7 +49,8 @@ pub fn parse(url: &str) -> Option<Url> {
 }
 
 fn strip_prefix_ignore_case<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
-    (text.len() >= prefix.len() && text[..prefix.len()].eq_ignore_ascii_case(prefix)).then(|| &text[prefix.len()..])
+    // `get`: the cut may fall inside a character of the text.
+    text.get(..prefix.len()).filter(|head| head.eq_ignore_ascii_case(prefix)).map(|_| &text[prefix.len()..])
 }
 
 /// Plain http is only for a server on this machine (tests, a local mirror):
@@ -66,12 +67,14 @@ pub fn resolve(base: &str, reference: &str) -> String {
         return reference.to_string();
     }
     let base = base.trim();
+    // The query and fragment go first: a '/' inside "?x=/y" is not a path.
+    let base = &base[..base.find(['?', '#']).unwrap_or(base.len())];
     let scheme_end = base.find("://").map_or(0, |i| i + 3);
     let path_start = base[scheme_end..].find('/').map_or(base.len(), |i| scheme_end + i);
     if let Some(absolute) = reference.strip_prefix('/') {
         return format!("{}/{absolute}", &base[..path_start]);
     }
-    let without_query = &base[..base.find('?').unwrap_or(base.len())];
+    let without_query = base;
     let dir_end = without_query[path_start..].rfind('/').map_or(without_query.len(), |i| path_start + i);
     format!("{}/{reference}", &without_query[..dir_end])
 }
