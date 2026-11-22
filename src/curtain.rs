@@ -322,6 +322,13 @@ impl Curtain {
         register(&web.webview, tab, self.store.boot_script().as_deref());
     }
 
+    /// A closed tab leaves nothing behind: one entry per tab ever opened
+    /// added up in a long session.
+    pub fn closed(&mut self, tab: u64) {
+        self.picking.remove(&tab);
+        SCRIPTS.with(|scripts| scripts.borrow_mut().remove(&tab));
+    }
+
     /// A navigation ends the picker of that tab's page.
     pub fn navigated(&mut self, tab: u64) {
         self.picking.remove(&tab);

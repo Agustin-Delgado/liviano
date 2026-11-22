@@ -1058,6 +1058,7 @@ impl App {
 
     fn close_tab(&mut self, id: u64) {
         self.forget_thumb(id);
+        self.curtain.closed(id);
         let heir = self.unpair_closing(id);
         if let Some(tab) = self.tabs.close(id)
             && let Live::Ready(web) = tab.live
