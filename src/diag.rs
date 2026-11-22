@@ -112,8 +112,18 @@ pub fn install(dir: &Path) {
     TRACING.store(std::env::var("NEA_TRACE").is_ok_and(|v| v.trim() == "1"), Ordering::Relaxed);
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        write_now(Log::Crash, &panic_line(info));
+        let mut text = panic_line(info);
+        for frame in backtrace() {
+            text.push_str("\r\n    ");
+            text.push_str(&frame);
+        }
+        write_now(Log::Crash, &text);
         previous(info);
+        // Release builds abort on a panic anyway. A build that unwinds would
+        // lose only the thread: the writer or a worker gone and the window
+        // still up, saving nothing. One rule for every build: a panic ends
+        // the process, and the next start restores the session.
+        std::process::abort();
     }));
     seh::install(dir);
     trace(|| format!("process started {:.1} ms before", since_process_start_ms()));
@@ -285,6 +295,43 @@ fn panic_line(info: &std::panic::PanicHookInfo<'_>) -> String {
         .unwrap_or_else(|| "(no message)".to_string());
     let _ = write!(line, "{message} | doing: {}", current());
     line.replace(['\r', '\n'], " ")
+}
+
+/// Where the panicking thread was: one line per frame, as module+offset
+/// (the release build has no symbols; the offset finds the line in the PDB
+/// of the same build). The hook's own frames and std's panic machinery are
+/// in it too: the culprit is the first frame of nea.exe after them.
+fn backtrace() -> Vec<String> {
+    use windows::Win32::{
+        Foundation::HMODULE,
+        System::{
+            Diagnostics::Debug::RtlCaptureStackBackTrace,
+            LibraryLoader::{
+                GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS, GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                GetModuleFileNameW, GetModuleHandleExW,
+            },
+        },
+    };
+    let mut frames = [std::ptr::null_mut(); 62];
+    let count = unsafe { RtlCaptureStackBackTrace(1, &mut frames, None) } as usize;
+    frames
+        .iter()
+        .take(count)
+        .enumerate()
+        .map(|(i, &address)| {
+            let mut module = HMODULE::default();
+            let flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+            let found = unsafe { GetModuleHandleExW(flags, windows::core::PCWSTR(address as *const u16), &mut module) };
+            if found.is_err() || module.is_invalid() {
+                return format!("#{i} 0x{:X}", address as usize);
+            }
+            let mut name = [0u16; 260];
+            let len = unsafe { GetModuleFileNameW(Some(module), &mut name) } as usize;
+            let path = String::from_utf16_lossy(&name[..len.min(name.len())]);
+            let file = path.rsplit(['\\', '/']).next().unwrap_or("?");
+            format!("#{i} {file}+0x{:X}", (address as usize).wrapping_sub(module.0 as usize))
+        })
+        .collect()
 }
 
 /// Writes straight away, on the calling thread (a panic is about to abort).
