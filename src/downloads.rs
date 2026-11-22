@@ -51,7 +51,8 @@ impl Download {
             State::InProgress => match self.total {
                 Some(total) if total > 0 => format!(
                     "{}% · {} of {}",
-                    (self.received.min(total) * 100 / total),
+                    // In u128: a size near u64::MAX (a damaged file) times 100 overflows.
+                    (u128::from(self.received.min(total)) * 100 / u128::from(total)),
                     panels::format_bytes(self.received),
                     panels::format_bytes(total)
                 ),
