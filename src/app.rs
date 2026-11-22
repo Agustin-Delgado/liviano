@@ -196,7 +196,6 @@ struct App {
     memory: memory_ui::MemoryUi,
     power: power_ui::PowerUi,
     fullscreen: fullscreen_ui::FullscreenUi,
-    views: views_ui::ViewsUi,
 }
 
 thread_local! {
@@ -388,7 +387,6 @@ pub fn run() -> windows::core::Result<()> {
         memory: Default::default(),
         power: Default::default(),
         fullscreen: Default::default(),
-        views: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {

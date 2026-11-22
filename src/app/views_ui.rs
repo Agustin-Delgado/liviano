@@ -5,18 +5,14 @@
 //! milliseconds when the engine is idle, and hundreds when it is busy (many
 //! views made or closed). So a tab switch tells the engine only what
 //! changed: the views that are already hidden get no call, and with 200
-//! tabs a switch is still one show and one hide. The hides wait for the next
-//! frame, one in each tick: the page that comes on screen goes first.
+//! tabs a switch is still one show and one hide. The page that comes on
+//! screen goes first. The hide is not put off to a later tick: it then fell
+//! inside the slide of the strip and stopped it for 50-100 ms.
 
-use windows::Win32::{
-    Foundation::{HWND, RECT},
-    UI::WindowsAndMessaging::{KillTimer, SetTimer, USER_TIMER_MINIMUM},
-};
+use windows::Win32::Foundation::RECT;
 
-use super::{App, with_app};
+use super::App;
 use crate::tabs::Live;
-
-const TIMER_HIDE: usize = 0x4C;
 
 /// What a tab's view is, as far as showing it goes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,17 +53,6 @@ pub(super) fn plan(tabs: &[(u64, View)], wanted: &[(u64, RECT)]) -> Vec<Change> 
     shows
 }
 
-unsafe extern "system" fn on_hide_timer(_: HWND, _: u32, _: usize, _: u32) {
-    let _doing = crate::diag::doing(&"timer:hide", 0);
-    with_app(|app| app.hide_next());
-}
-
-#[derive(Default)]
-pub(super) struct ViewsUi {
-    /// Views to take off screen, one in each tick.
-    hides: Vec<u64>,
-}
-
 impl App {
     /// Shows the active tab's view (and its partner's, when split), creating
     /// them if asleep, and hides the rest.
@@ -79,23 +64,18 @@ impl App {
         for change in plan(&views, &wanted) {
             match change {
                 Change::Show(id, bounds) => {
-                    self.views.hides.retain(|h| *h != id);
                     if let Some(Live::Ready(web)) = self.tabs.get_mut(id).map(|t| &mut t.live) {
                         let _doing = crate::diag::doing(&"view:show", id);
                         web.show(bounds);
                     }
                 }
                 Change::Hide(id) => {
-                    if !self.views.hides.contains(&id) {
-                        self.views.hides.push(id);
+                    if let Some(Live::Ready(web)) = self.tabs.get_mut(id).map(|t| &mut t.live) {
+                        let _doing = crate::diag::doing(&"view:hide", id);
+                        web.hide();
                     }
                 }
                 Change::Wake(id) => wake.push(id),
-            }
-        }
-        if !self.views.hides.is_empty() {
-            unsafe {
-                SetTimer(Some(self.hwnd), TIMER_HIDE, USER_TIMER_MINIMUM, Some(on_hide_timer));
             }
         }
         for id in wake {
@@ -106,24 +86,6 @@ impl App {
         self.autofill_follow();
         self.place_vault_bar();
         self.refresh_nav();
-    }
-
-    /// Takes the next view off screen, unless it came back on screen.
-    fn hide_next(&mut self) {
-        if !self.views.hides.is_empty() {
-            let id = self.views.hides.remove(0);
-            let wanted = !self.memory.pages_hidden() && self.visible_tabs().contains(&id);
-            if !wanted && let Some(Live::Ready(web)) = self.tabs.get_mut(id).map(|t| &mut t.live) {
-                let _doing = crate::diag::doing(&"view:hide", id);
-                web.hide();
-                self.keyboard_off_hidden_views();
-            }
-        }
-        if self.views.hides.is_empty() {
-            unsafe {
-                let _ = KillTimer(Some(self.hwnd), TIMER_HIDE);
-            }
-        }
     }
 }
 
