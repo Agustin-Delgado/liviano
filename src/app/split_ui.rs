@@ -74,7 +74,8 @@ impl App {
 
     /// The pair on screen: the active tab's, when split view is on.
     pub(super) fn shown_pair(&self) -> Option<Pair> {
-        if !self.settings.split_view {
+        // A page in full screen fills the window alone.
+        if !self.settings.split_view || self.fullscreen.by_page().is_some() {
             return None;
         }
         self.tabs.active.and_then(|id| self.split.splits.pair_of(id)).copied()

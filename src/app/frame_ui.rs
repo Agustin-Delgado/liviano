@@ -93,8 +93,10 @@ fn frame_thickness(hwnd: HWND) -> i32 {
     }
 }
 
+/// Maximized with its frame: a maximized window in full screen has no frame
+/// off the screen to make up for (refer to `fullscreen_ui`).
 fn is_maximized(hwnd: HWND) -> bool {
-    unsafe { IsZoomed(hwnd).as_bool() }
+    unsafe { IsZoomed(hwnd).as_bool() && GetWindowLongW(hwnd, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0 }
 }
 
 fn ht(hit: FrameHit) -> u32 {
@@ -192,6 +194,9 @@ impl App {
     }
 
     fn frame_hit(&self, x: i32, y: i32) -> FrameHit {
+        if self.fullscreen.on() {
+            return FrameHit::Client;
+        }
         let (width, _) = self.client_size();
         frame::hit(&self.layout, width, x, y, self.is_maximized(), self.scale)
     }

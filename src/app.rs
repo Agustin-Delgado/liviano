@@ -35,6 +35,7 @@ mod bench_ui;
 mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
+mod fullscreen_ui;
 mod groups_ui;
 mod hovercard_ui;
 mod memory_ui;
@@ -177,6 +178,7 @@ struct App {
     engine: engine_ui::EngineUi,
     memory: memory_ui::MemoryUi,
     power: power_ui::PowerUi,
+    fullscreen: fullscreen_ui::FullscreenUi,
 }
 
 thread_local! {
@@ -338,6 +340,7 @@ pub fn run() -> windows::core::Result<()> {
         engine: Default::default(),
         memory: Default::default(),
         power: Default::default(),
+        fullscreen: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -782,6 +785,9 @@ impl App {
             &metrics,
             self.extension_slots(),
         );
+        if self.fullscreen.on() {
+            self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
+        }
         self.show_active();
         self.place_omnibar();
         self.invalidate();
@@ -1077,6 +1083,7 @@ impl App {
         }
         if let Some(leaving) = self.tabs.active {
             self.capture_thumb(leaving);
+            self.fullscreen_tab_leaves(leaving);
         }
         // A tab of a folded group (Ctrl+K, Ctrl+1…8) unfolds it.
         let unfolds = self.tabs.is_hidden(id);
@@ -1138,6 +1145,7 @@ impl App {
     }
 
     fn close_tab(&mut self, id: u64) {
+        self.fullscreen_tab_leaves(id);
         self.forget_thumb(id);
         self.curtain.closed(id);
         let heir = self.unpair_closing(id);
@@ -1177,6 +1185,7 @@ impl App {
             self.close_tab(id);
             return;
         }
+        self.fullscreen_tab_leaves(id);
         if let Some(tab) = self.tabs.get_mut(id) {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
@@ -1399,6 +1408,7 @@ impl App {
                 }
             }
             Event::Command(command) => self.run(command),
+            Event::FullScreen(id) => self.page_fullscreen(id),
             Event::Download(download) => self.on_download(download),
             Event::Vault(id, message) => self.on_vault_message(id, message),
             Event::Extension(event) => self.on_extension_event(event),
@@ -1427,6 +1437,9 @@ impl App {
             &metrics,
             self.extension_slots(),
         );
+        if self.fullscreen.on() {
+            self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
+        }
         self.invalidate();
     }
 
@@ -1498,6 +1511,7 @@ impl App {
                 self.open_omnibar(mode);
             }
             Command::NewTab => self.open_omnibar(Mode::NewTab),
+            Command::Fullscreen => self.toggle_fullscreen(),
             Command::NewPrivateTab => self.open_omnibar(Mode::NewPrivateTab),
             Command::SwitchTab => self.open_omnibar(Mode::Switch),
             Command::Find => {
@@ -2123,6 +2137,10 @@ impl App {
             WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
         unsafe {
             let _ = GetWindowPlacement(self.hwnd, &mut placement);
+        }
+        // In full screen, the place the window goes back to.
+        if let Some(normal) = self.fullscreen.normal_placement() {
+            placement = normal;
         }
         let r = placement.rcNormalPosition;
         let (tabs, active) = private_tabs::saved_tabs(&self.tabs);

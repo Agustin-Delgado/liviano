@@ -47,6 +47,7 @@ pub enum Command {
     GroupTab,
     UngroupTab,
     ToggleGroup,
+    Fullscreen,
 }
 
 impl Command {
@@ -95,6 +96,7 @@ impl Command {
                     Command::GroupTab => "group_tab",
                     Command::UngroupTab => "ungroup_tab",
                     Command::ToggleGroup => "toggle_group",
+                    Command::Fullscreen => "fullscreen",
                     Command::GoToTab(_) => unreachable!(),
                 };
                 name.to_string()
@@ -146,6 +148,7 @@ impl Command {
             Command::GroupTab => "Add tab to new group",
             Command::UngroupTab => "Remove tab from group",
             Command::ToggleGroup => "Collapse or expand group",
+            Command::Fullscreen => "Full screen",
         };
         label.to_string()
     }
@@ -178,6 +181,7 @@ const VK_DELETE: u32 = 0x2E;
 const VK_F1: u32 = 0x70;
 const VK_F5: u32 = 0x74;
 const VK_F6: u32 = 0x75;
+const VK_F11: u32 = 0x7A;
 const VK_OEM_PLUS: u32 = 0xBB;
 const VK_OEM_COMMA: u32 = 0xBC;
 const VK_OEM_MINUS: u32 = 0xBD;
@@ -236,6 +240,7 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(false, false, false, VK_F5), Command::Reload),
         (chord(true, false, false, key(b'R')), Command::Reload),
         (chord(true, false, false, VK_F5), Command::HardReload),
+        (chord(false, false, false, VK_F11), Command::Fullscreen),
         (chord(true, true, false, key(b'B')), Command::ToggleBookmark),
         // Nea's own chord: a free chord beside the other panels'.
         (chord(true, true, false, key(b'O')), Command::Bookmarks),

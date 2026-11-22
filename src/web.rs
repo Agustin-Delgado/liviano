@@ -51,6 +51,8 @@ pub enum Event {
     /// A page posted a message: tab, source URL, message as JSON.
     WebMessage(u64, String, String),
     Command(Command),
+    /// The page of this tab entered or left a full screen element.
+    FullScreen(u64),
     /// A download started, progressed or ended (see `download_watch`).
     Download(crate::downloads::Download),
     /// The saved-passwords script of a tab said something (see `vault_watch`).
@@ -77,6 +79,7 @@ impl Event {
             Event::NavHistory(..) => &"event:NavHistory",
             Event::WebMessage(..) => &"event:WebMessage",
             Event::Command(_) => &"event:Command",
+            Event::FullScreen(_) => &"event:FullScreen",
             Event::Download(_) => &"event:Download",
             Event::Vault(..) => &"event:Vault",
             Event::Extension(_) => &"event:Extension",
@@ -98,6 +101,7 @@ impl Event {
             | Event::HistoryChanged(id)
             | Event::NavHistory(id, ..)
             | Event::WebMessage(id, ..)
+            | Event::FullScreen(id)
             | Event::Vault(id, _) => *id,
             _ => 0,
         }
@@ -281,6 +285,13 @@ impl WebTab {
                         args.SetHandled(true)?;
                         push(Event::NewWindow(id, take_pwstr(uri), user.as_bool()));
                     }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            tab.webview.add_ContainsFullScreenElementChanged(
+                &ContainsFullScreenElementChangedEventHandler::create(Box::new(move |_, _| {
+                    push(Event::FullScreen(id));
                     Ok(())
                 })),
                 &mut token,
