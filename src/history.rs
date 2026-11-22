@@ -2,7 +2,7 @@
 //! each keystroke: tens of thousands of entries take well under a millisecond
 //! and cost no extra index in memory.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +29,10 @@ pub struct History {
 impl History {
     pub fn from_entries(mut entries: Vec<Entry>) -> Self {
         entries.sort_by_key(|e| std::cmp::Reverse(e.last));
+        // An address twice (a file edited by hand or damaged) keeps its
+        // newest entry: the index has room for one.
+        let mut seen = HashSet::new();
+        entries.retain(|e| seen.insert(e.url.clone()));
         entries.truncate(MAX_ENTRIES);
         let by_url = entries.iter().enumerate().map(|(i, e)| (e.url.clone(), i)).collect();
         Self { entries, by_url, dirty: false }
@@ -44,7 +48,7 @@ impl History {
         }
         if let Some(&i) = self.by_url.get(url) {
             let entry = &mut self.entries[i];
-            entry.visits += 1;
+            entry.visits = entry.visits.saturating_add(1);
             entry.last = now;
             if !title.is_empty() {
                 entry.title = title.to_string();
@@ -149,22 +153,20 @@ impl History {
         let mut best: Option<(&str, u32)> = None;
         for entry in &self.entries {
             let address = strip_for_match(&entry.url);
-            if !starts_with_folded(address, &typed_lower) {
-                continue;
-            }
+            // Bytes of the address that the typed text covers: not always as
+            // many as were typed (the Kelvin sign is three bytes and folds to "k").
+            let Some(matched) = folded_prefix_len(address, &typed_lower) else { continue };
             // Complete up to the end of the host when the typed text is still
             // inside it; otherwise up to the whole address.
             let host_end = address.find('/').unwrap_or(address.len());
-            let candidate = if typed.len() < host_end { &address[..host_end] } else { address };
+            let candidate = if matched < host_end { &address[..host_end] } else { address };
             let candidate = candidate.trim_end_matches('/');
-            if candidate.len() <= typed.len() {
-                continue;
-            }
+            let Some(rest) = candidate.get(matched..).filter(|rest| !rest.is_empty()) else { continue };
             if best.is_none_or(|(_, visits)| entry.visits > visits) {
-                best = Some((candidate, entry.visits));
+                best = Some((rest, entry.visits));
             }
         }
-        best.map(|(candidate, _)| candidate[typed.len()..].to_string())
+        best.map(|(rest, _)| rest.to_string())
     }
 }
 
@@ -176,6 +178,28 @@ fn starts_with_folded(text: &str, lower: &str) -> bool {
         return text.len() >= lower.len() && text[..lower.len()].eq_ignore_ascii_case(lower);
     }
     text.to_lowercase().starts_with(lower)
+}
+
+/// How many bytes at the start of `text` fold to `lower` (already
+/// lowercase), or None when `text` doesn't start with it. Always a
+/// character boundary of `text`.
+fn folded_prefix_len(text: &str, lower: &str) -> Option<usize> {
+    if lower.is_ascii() {
+        // Only ASCII bytes of `text` can equal ASCII bytes of `lower`.
+        let head = text.as_bytes().get(..lower.len())?;
+        return head.eq_ignore_ascii_case(lower.as_bytes()).then_some(lower.len());
+    }
+    let mut folded = String::new();
+    for (at, c) in text.char_indices() {
+        folded.extend(c.to_lowercase());
+        if folded.len() >= lower.len() {
+            return (folded == lower).then_some(at + c.len_utf8());
+        }
+        if !lower.starts_with(&folded) {
+            return None;
+        }
+    }
+    None
 }
 
 /// `text` contains `lower` (already lowercase) ignoring case, as above.
