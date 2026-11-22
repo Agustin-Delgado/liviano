@@ -65,8 +65,61 @@ pub fn engine_dir() -> PathBuf {
     base
 }
 
+/// The file's value, or the default when it is missing. A file that does
+/// not parse (damaged, cut short, edited by hand) is set aside first, so the
+/// default written over it later does not destroy what it held.
 pub fn read_json<T: DeserializeOwned + Default>(path: &Path) -> T {
-    fs::read(path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+    let Ok(bytes) = fs::read(path) else { return T::default() };
+    match serde_json::from_slice(&bytes) {
+        Ok(value) => value,
+        Err(error) => {
+            let kept = set_aside(path);
+            crate::diag::log(
+                crate::diag::Log::Crash,
+                format!(
+                    "{} unreadable {}: {error}; kept as {}",
+                    crate::diag::stamp(),
+                    path.display(),
+                    kept.as_deref().map_or("nothing (the move failed)".into(), |p| p.display().to_string())
+                ),
+            );
+            T::default()
+        }
+    }
+}
+
+/// How many set-aside copies of one file are kept.
+const KEEP_CORRUPT: usize = 3;
+
+/// Moves a file that does not parse to `<name>.corrupt-<unix seconds>` and
+/// removes the oldest copies past `KEEP_CORRUPT`. Returns the new path.
+pub fn set_aside(path: &Path) -> Option<PathBuf> {
+    let name = path.file_name()?.to_string_lossy().into_owned();
+    let dir = path.parent()?;
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let prefix = format!("{name}.corrupt-");
+    let mut target = dir.join(format!("{prefix}{secs}"));
+    // Two in the same second (several files share a start) get a suffix.
+    for n in 1..100 {
+        if !target.exists() {
+            break;
+        }
+        target = dir.join(format!("{prefix}{secs}-{n}"));
+    }
+    fs::rename(path, &target).ok()?;
+    let mut copies: Vec<(std::time::SystemTime, PathBuf)> = fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.file_name().to_string_lossy().starts_with(&prefix))
+        .map(|e| (e.metadata().and_then(|m| m.modified()).unwrap_or(std::time::UNIX_EPOCH), e.path()))
+        .collect();
+    copies.sort();
+    let extra = copies.len().saturating_sub(KEEP_CORRUPT);
+    for (_, old) in copies.into_iter().take(extra) {
+        let _ = fs::remove_file(old);
+    }
+    Some(target)
 }
 
 pub fn write_json<T: Serialize>(path: &Path, value: &T) -> std::io::Result<()> {
