@@ -87,6 +87,8 @@ const AWAY_AFTER_MS: u32 = 1_500;
 /// Losing this much history to a crash is fine; rewriting it every 5 s is not.
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
+/// The smallest window, in DIPs: the strip and the window buttons still fit.
+const MIN_WINDOW_DIPS: (i32, i32) = (420, 300);
 const WM_APP_REPAINT: u32 = WM_APP + 3;
 const MENU_PIN: usize = 10;
 const MENU_DUPLICATE: usize = 11;
@@ -663,6 +665,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_DPICHANGED => {
+            // The new scale first: the resize below lays the window out
+            // again, and with the old scale that layout was wrong for a frame.
+            // A message from anything else than the system can have no DPI.
+            let dpi = match (wparam.0 & 0xFFFF) as u32 {
+                0 => unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) },
+                dpi => dpi,
+            };
+            with_app(|app| app.refresh_dpi(dpi));
             // The system always sends a rect; a message posted by anything
             // else may not have one.
             if let Some(suggested) = unsafe { (lparam.0 as *const RECT).as_ref() } {
@@ -683,12 +693,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 }
             }
             crate::app_icon::apply(hwnd);
-            with_app(|app| app.refresh_dpi());
             LRESULT(0)
         }
         WM_GETMINMAXINFO => {
             if let Some(info) = unsafe { (lparam.0 as *mut MINMAXINFO).as_mut() } {
-                info.ptMinTrackSize = POINT { x: 420, y: 300 };
+                let dpi = unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) };
+                let (x, y) = min_window_size(dpi);
+                info.ptMinTrackSize = POINT { x, y };
             }
             LRESULT(0)
         }
@@ -949,15 +960,19 @@ impl App {
                 web.apply_theme(self.settings.theme);
             }
         }
+        self.restyle_vault();
         self.invalidate();
     }
 
-    fn refresh_dpi(&mut self) {
-        self.scale = design::window_scale(self.hwnd);
+    /// The window has a new DPI. `WM_DPICHANGED` gives it.
+    fn refresh_dpi(&mut self, dpi: u32) {
+        self.scale = design::scale_for_dpi(dpi);
         let old = self.font;
         self.font = make_font(self.scale);
         crate::favicon::set_scale(self.scale);
         self.omnibar.set_font(self.font, self.scale);
+        // Before the old font is deleted: the offer's controls still use it.
+        self.restyle_vault();
         unsafe {
             let _ = DeleteObject(old.into());
         }
@@ -2133,6 +2148,14 @@ impl App {
             }
         }
     }
+}
+
+/// The smallest size of the window in pixels at `dpi`: the same size in
+/// DIPs at each scale. A size in pixels was half as large at 200 %.
+fn min_window_size(dpi: u32) -> (i32, i32) {
+    let scale = design::dpi_scale(dpi.max(96));
+    let px = |dips: i32| (dips as f32 * scale).round() as i32;
+    (px(MIN_WINDOW_DIPS.0), px(MIN_WINDOW_DIPS.1))
 }
 
 /// The keyboard is in a child window of the main window (`in_window`) that

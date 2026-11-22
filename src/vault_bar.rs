@@ -153,6 +153,20 @@ impl VaultBar {
         }
     }
 
+    /// The look of the app changed while the bubble is open: the theme,
+    /// the DPI scale, or both. `font` replaces the one the bubble got: the
+    /// app deletes the old one when the DPI changes.
+    pub fn restyle(&mut self, palette: &Palette, font: HFONT, scale: f32) {
+        unsafe {
+            for child in std::iter::once(self.label).chain(self.buttons.iter().copied()) {
+                SendMessageW(child, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(1)));
+            }
+        }
+        self.scale = scale;
+        self.layout();
+        self.set_palette(palette);
+    }
+
     pub fn set_palette(&self, palette: &Palette) {
         COLORS.with(|c| {
             let (old, _, _) = c.get();
@@ -284,3 +298,8 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
+
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/vault_bar.rs"]
+#[rustfmt::skip]
+mod tests;

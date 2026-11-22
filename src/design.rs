@@ -290,14 +290,24 @@ pub mod dwm {
 /// can ask for another one with `NEA_SCALE` (a percentage: 125, 150),
 /// to see a layout at a scale the screen they run on doesn't have.
 pub fn window_scale(hwnd: windows::Win32::Foundation::HWND) -> f32 {
+    scale_for_dpi(unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) })
+}
+
+/// The interface's scale at `dpi`, unless `NEA_SCALE` forces one.
+pub fn scale_for_dpi(dpi: u32) -> f32 {
     let forced =
         std::env::var("NEA_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|p| (100..=300).contains(p));
     match forced {
         Some(percent) => percent as f32 / 100.0,
-        // 0 when the window is gone; no display is below 96 (100 %). A
-        // scale of 0 made sizes of 0, and a clamp between two of them panicked.
-        None => (unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) }).max(96) as f32 / 96.0,
+        None => dpi_scale(dpi),
     }
+}
+
+/// `dpi` as a scale: 96 is 100 %. `GetDpiForWindow` gives 0 when the
+/// window is gone, and no display is below 96: a scale of 0 made sizes of 0,
+/// and a clamp between two of them panicked.
+pub fn dpi_scale(dpi: u32) -> f32 {
+    dpi.max(96) as f32 / 96.0
 }
 
 /// Windows' own "Animation effects" switch (Accessibility > Visual effects).

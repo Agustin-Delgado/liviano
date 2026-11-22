@@ -10,10 +10,10 @@ use std::cell::{Cell, RefCell};
 
 use windows::{
     Win32::{
-        Foundation::{COLORREF, HWND, LPARAM, LRESULT, RECT, WPARAM},
+        Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, PAINTSTRUCT, RDW_ALLCHILDREN,
-            RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SetBkColor, SetTextColor,
+            BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, HBRUSH, HDC, HFONT, MapWindowPoints, PAINTSTRUCT,
+            RDW_ALLCHILDREN, RDW_ERASE, RDW_FRAME, RDW_INVALIDATE, RedrawWindow, SetBkColor, SetTextColor,
         },
         System::LibraryLoader::GetModuleHandleW,
         UI::{
@@ -458,6 +458,89 @@ pub fn pre_translate(msg: &MSG) -> bool {
             return false;
         }
         IsDialogMessageW(hwnd, msg).as_bool()
+    }
+}
+
+/// A size or a coordinate at the scale `from`, at the scale `to`.
+fn rescaled(v: i32, from: f32, to: f32) -> i32 {
+    (v as f32 * to / from).round() as i32
+}
+
+/// The window has a new DPI: Windows moved it to a screen with another
+/// scale, or the scale of its screen changed. Each control keeps its place
+/// and size in DIPs and gets fonts at the new scale. The window is not made
+/// again: a drag across two screens continues, and the focus and the text
+/// typed stay.
+fn rescale(dpi: u32, suggested: Option<RECT>) {
+    let to = crate::design::dpi_scale(dpi.max(96));
+    let Some((hwnd, children, from, old_font, old_heading)) = STATE.with(|s| {
+        s.try_borrow()
+            .ok()
+            .and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.scale, st.font, st.heading_font)))
+    }) else {
+        return;
+    };
+    let font = make_font(to, 400);
+    let heading_font = make_font(to, 500);
+    let scale_rect = |r: RECT| RECT {
+        left: rescaled(r.left, from, to),
+        top: rescaled(r.top, from, to),
+        right: rescaled(r.right, from, to),
+        bottom: rescaled(r.bottom, from, to),
+    };
+    unsafe {
+        for (child, kind) in &children {
+            let mut rect = RECT::default();
+            let _ = GetWindowRect(*child, &mut rect);
+            if matches!(kind, Kind::Combo) {
+                // Its height on screen is the closed field; the height it
+                // was given is that of the open list.
+                SendMessageW(*child, CB_GETDROPPEDCONTROLRECT, None, Some(LPARAM(&mut rect as *mut RECT as isize)));
+            }
+            let mut corners = [POINT { x: rect.left, y: rect.top }, POINT { x: rect.right, y: rect.bottom }];
+            MapWindowPoints(None, Some(hwnd), &mut corners);
+            let at =
+                scale_rect(RECT { left: corners[0].x, top: corners[0].y, right: corners[1].x, bottom: corners[1].y });
+            let heading = SendMessageW(*child, WM_GETFONT, None, None).0 == old_heading.0 as isize;
+            let new = if heading { heading_font } else { font };
+            SendMessageW(*child, WM_SETFONT, Some(WPARAM(new.0 as usize)), Some(LPARAM(0)));
+            let _ = SetWindowPos(
+                *child,
+                None,
+                at.left,
+                at.top,
+                at.right - at.left,
+                at.bottom - at.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+        if let Some(r) = suggested {
+            let _ = SetWindowPos(
+                hwnd,
+                None,
+                r.left,
+                r.top,
+                r.right - r.left,
+                r.bottom - r.top,
+                SWP_NOZORDER | SWP_NOACTIVATE,
+            );
+        }
+    }
+    WELLS.with(|w| w.borrow_mut().iter_mut().for_each(|well| *well = scale_rect(*well)));
+    with_state(|st| {
+        st.font = font;
+        st.heading_font = heading_font;
+        st.scale = to;
+        unsafe {
+            let row = (28.0 * to).round() as isize;
+            SendMessageW(st.keys_list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(row)));
+        }
+    });
+    LOOK.with(|l| l.set(l.get().map(|(palette, _)| (palette, to))));
+    unsafe {
+        let _ = DeleteObject(old_font.into());
+        let _ = DeleteObject(old_heading.into());
+        let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
     }
 }
 
@@ -1515,6 +1598,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_CLOSE => {
             close();
+            LRESULT(0)
+        }
+        WM_DPICHANGED => {
+            let suggested = (lparam.0 != 0).then(|| unsafe { *(lparam.0 as *const RECT) });
+            rescale((wparam.0 & 0xFFFF) as u32, suggested);
             LRESULT(0)
         }
         WM_NOTIFY => {

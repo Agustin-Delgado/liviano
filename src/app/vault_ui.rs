@@ -869,6 +869,17 @@ impl App {
         self.place_vault_bar();
     }
 
+    /// The theme or the DPI scale changed: the offer and the account list
+    /// that are open take the new look.
+    pub(super) fn restyle_vault(&mut self) {
+        let (palette, font, scale) = (self.palette, self.font, self.scale);
+        if let Some(bar) = &mut self.vault.bar {
+            bar.restyle(&palette, font, scale);
+        }
+        self.place_vault_bar();
+        self.autofill_draw();
+    }
+
     /// Keeps the offer at the page's top right corner, shown only over its tab.
     pub(super) fn place_vault_bar(&self) {
         let (Some(offer), Some(bar)) = (&self.vault.offer, &self.vault.bar) else { return };
