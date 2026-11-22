@@ -294,7 +294,9 @@ pub fn window_scale(hwnd: windows::Win32::Foundation::HWND) -> f32 {
         std::env::var("NEA_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).filter(|p| (100..=300).contains(p));
     match forced {
         Some(percent) => percent as f32 / 100.0,
-        None => (unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) }) as f32 / 96.0,
+        // 0 when the window is gone; no display is below 96 (100 %). A
+        // scale of 0 made sizes of 0, and a clamp between two of them panicked.
+        None => (unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) }).max(96) as f32 / 96.0,
     }
 }
 

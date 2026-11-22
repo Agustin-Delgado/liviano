@@ -95,7 +95,7 @@ pub fn card_layout(scale: f32, has_status: bool, thumb: Option<(u32, u32)>) -> C
     });
     let thumb = thumb.filter(|(w, h)| *w > 0 && *h > 0).map(|(w, h)| {
         y += px(8, scale);
-        let height = ((h as i64 * inner as i64) / w as i64).clamp(1, px(180, scale) as i64) as i32;
+        let height = ((h as i64 * inner as i64) / w as i64).clamp(1, px(180, scale).max(1) as i64) as i32;
         let r = Rect::new(pad, y, pad + inner, y + height);
         y = r.bottom;
         r
