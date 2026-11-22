@@ -26,9 +26,17 @@ awake.
 The time that the computer sleeps does not count as idle time: after the
 resume, each tab is as idle as it was before the sleep.
 
-Nea closes at most 3 views in one sleep tick, and it does not close a view
-while the strip or the field moves. Closing a view stops the window for
-tens of milliseconds.
+Each stage is a call to the engine, and each call stops the window: tens of
+milliseconds, and hundreds when the engine is busy. Thus Nea closes at most
+one view in one sleep tick, or else lowers or suspends at most 4 views. The
+next tick comes after 250 ms, or after three times the length of the last
+tick if that is more. Nea does not change a stage while the strip or the
+field moves, and it closes a view only after 1 s without a key, a click or
+a pointer move (except when memory is low).
+
+Nea also makes at most 2 views at the same time. A tab on screen goes
+before the tabs out of sight. When a tab leaves the screen before its view
+is started, it stays asleep.
 
 ## Minimized window
 

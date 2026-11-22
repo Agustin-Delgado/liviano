@@ -215,6 +215,7 @@ fn screenshot_path(tab: u64, asked: Option<&str>) -> std::path::PathBuf {
 
 impl App {
     fn bench_job(&mut self, job: Job) {
+        super::note_script();
         let Job { action, reply } = job;
         match action {
             Action::Open { url, background } => {

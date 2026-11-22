@@ -75,9 +75,13 @@ const TIMER_SLEEP: usize = 1;
 const SLEEP_EVERY_MS: u32 = 15_000;
 /// Closing a view waits on the engine (tens of milliseconds, hundreds when it
 /// is busy): under memory pressure thirty of them in one go froze the window
-/// for seconds. A few per tick, and the next tick comes sooner.
-const DISCARDS_PER_TICK: usize = 3;
-const SLEEP_AGAIN_MS: u32 = 1_000;
+/// for seconds. One per tick, and the next tick comes sooner.
+const DISCARDS_PER_TICK: usize = 1;
+/// A lower or a suspend is a shorter call: a few in a tick without a discard.
+const STAGES_PER_TICK: usize = 4;
+const SLEEP_AGAIN_MS: u32 = 250;
+/// A discard waits until no key or click came for this long.
+const QUIET_BEFORE_DISCARD: Duration = Duration::from_secs(1);
 const TIMER_SAVE: usize = 2;
 const TIMER_RETRY: usize = 3;
 /// Work done ahead of time while the person is away (see `idle_work`).
@@ -88,6 +92,12 @@ const IDLE_WORK_AFTER_MS: u32 = 3_000;
 const AWAY_AFTER_MS: u32 = 1_500;
 /// Losing this much history to a crash is fine; rewriting it every 5 s is not.
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
+/// Engine events left for the next pass (see `drain_events`).
+const TIMER_EVENTS: usize = 5;
+/// One pass over the engine events stops after this much work: 200 views
+/// made at once queued 200 events, and handling them in one go held the
+/// window for seconds.
+const EVENTS_BUDGET: Duration = Duration::from_millis(8);
 const WM_APP_LAYOUT: u32 = WM_APP + 2;
 /// The smallest window, in DIPs: the strip and the window buttons still fit.
 const MIN_WINDOW_DIPS: (i32, i32) = (420, 300);
@@ -187,6 +197,29 @@ thread_local! {
     static APP: RefCell<Option<App>> = const { RefCell::new(None) };
     /// Messages that found the app busy, waiting for `TIMER_RETRY`.
     static RETRY: RefCell<Vec<(HWND, u32, WPARAM, LPARAM)>> = const { RefCell::new(Vec::new()) };
+    /// The last request of a script, which stands for the person's input.
+    static LAST_SCRIPT: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) };
+}
+
+/// A script asked for something: as input from the person (see `quiet_for`).
+fn note_script() {
+    LAST_SCRIPT.with(|l| l.set(Some(Instant::now())));
+}
+
+/// Whether no key, click or pointer move came for `quiet`, in this window,
+/// in a page or anywhere in the session (a page's input never reaches this
+/// thread), and no script request either.
+fn quiet_for(quiet: Duration) -> bool {
+    let script_quiet = LAST_SCRIPT.with(|l| l.get()).is_none_or(|at| at.elapsed() >= quiet);
+    script_quiet && system_idle().is_some_and(|idle| idle >= quiet)
+}
+
+/// How long the session had no input.
+fn system_idle() -> Option<Duration> {
+    use windows::Win32::{System::SystemInformation::GetTickCount, UI::Input::KeyboardAndMouse::*};
+    let mut info = LASTINPUTINFO { cbSize: std::mem::size_of::<LASTINPUTINFO>() as u32, dwTime: 0 };
+    unsafe { GetLastInputInfo(&mut info).as_bool() }
+        .then(|| Duration::from_millis(u64::from(unsafe { GetTickCount() }.wrapping_sub(info.dwTime))))
 }
 
 /// The app is busy — a menu's modal loop runs inside it, and dispatches
@@ -661,6 +694,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                     with_app(|app| app.save(false));
                 }
                 TIMER_RETRY => post_retries(hwnd),
+                TIMER_EVENTS => {
+                    unsafe {
+                        let _ = KillTimer(Some(hwnd), TIMER_EVENTS);
+                    }
+                    if with_app(|app| app.drain_events()).is_none() {
+                        retry_later(hwnd, web::WM_APP_EVENTS, WPARAM(0), LPARAM(0));
+                    }
+                }
                 TIMER_IDLE => {
                     let _doing = crate::diag::doing(&"timer:idle", 0);
                     with_app(|app| app.idle_work());
@@ -1178,14 +1219,7 @@ impl App {
     /// away: the Settings window is made hidden, so opening it only shows
     /// it. Tried again later while the person is busy or something moves.
     fn idle_work(&mut self) {
-        let away = unsafe {
-            let mut info = windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO {
-                cbSize: std::mem::size_of::<windows::Win32::UI::Input::KeyboardAndMouse::LASTINPUTINFO>() as u32,
-                dwTime: 0,
-            };
-            windows::Win32::UI::Input::KeyboardAndMouse::GetLastInputInfo(&mut info).as_bool()
-                && windows::Win32::System::SystemInformation::GetTickCount().wrapping_sub(info.dwTime) >= AWAY_AFTER_MS
-        };
+        let away = system_idle().is_some_and(|idle| idle >= Duration::from_millis(u64::from(AWAY_AFTER_MS)));
         let busy = crate::anim::stats().running || self.mode.is_some();
         unsafe {
             if !away || busy {
@@ -1220,11 +1254,16 @@ impl App {
     /// destroyed down to their metadata; refer to `memory`). Pinned and
     /// private tabs may sleep but are never destroyed; kept-awake sites are
     /// left alone; a tab playing audio is never destroyed.
+    ///
+    /// Each stage is a call to the engine: one tick makes one discard or a
+    /// few lighter calls, the longest idle tabs first, and the next tick
+    /// comes sooner while work is left.
     fn sleep_pass(&mut self, pressure: bool) {
         let now = Instant::now();
         let policy = crate::memory::Policy::new(self.settings.suspend_after_secs, self.settings.discard_after_secs);
         let minimized = self.memory.minimized();
         let mut to_discard = Vec::new();
+        let mut stages = Vec::new();
         // Live views out of sight that may still be discarded: what the cap counts.
         let mut capped = Vec::new();
         let keep_awake: Vec<bool> = self.tabs.tabs.iter().map(|t| self.keeps_awake(&t.url)).collect();
@@ -1237,8 +1276,8 @@ impl App {
                 tab.last_active = now;
                 continue;
             }
-            let Live::Ready(web) = &mut tab.live else { continue };
-            let mut facts = crate::memory::Facts {
+            let Live::Ready(web) = &tab.live else { continue };
+            let facts = crate::memory::Facts {
                 idle: now.duration_since(tab.last_active),
                 minimized_on_screen: shown,
                 keep_awake: awake,
@@ -1248,33 +1287,27 @@ impl App {
                 lowered: web.lowered,
                 suspended: web.suspended,
             };
-            let mut step = crate::memory::step(&facts, &policy, pressure);
-            // Asking the engine about sound is a round trip: only for a tab
-            // that would be destroyed.
-            if step == crate::memory::Step::Discard && web.is_playing_audio() {
-                facts.playing_audio = true;
-                step = crate::memory::step(&facts, &policy, pressure);
-            }
+            let step = crate::memory::step(&facts, &policy, pressure);
             match step {
-                crate::memory::Step::Discard => to_discard.push((tab.last_active, tab.id)),
-                crate::memory::Step::Suspend => web.suspend(),
-                crate::memory::Step::Lower => web.lower(),
+                crate::memory::Step::Discard => to_discard.push((tab.last_active, tab.id, Some(facts))),
                 crate::memory::Step::Keep => {}
+                step => stages.push((tab.last_active, tab.id, step)),
             }
             if step != crate::memory::Step::Discard && !tab.pinned && !tab.private && !awake && !shown {
                 capped.push((tab.last_active, tab.id));
             }
         }
-        for (since, id) in crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight) {
-            if let Some(Live::Ready(web)) = self.tabs.get(id).map(|t| &t.live)
-                && !web.is_playing_audio()
-            {
-                to_discard.push((since, id));
-            }
-        }
-        // Closing a view holds the window for tens of milliseconds: never
-        // while the strip or the field moves.
-        if !to_discard.is_empty() && self.something_moves(now) {
+        to_discard.extend(
+            crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight)
+                .into_iter()
+                .map(|(since, id)| (since, id, None)),
+        );
+        // A call to the engine holds the window: never while the strip or
+        // the field moves, and a discard (hundreds of ms when the engine is
+        // busy) only once the person paused, unless memory is low.
+        let work = !to_discard.is_empty() || !stages.is_empty();
+        let busy = !to_discard.is_empty() && !pressure && !quiet_for(QUIET_BEFORE_DISCARD);
+        if work && (busy || self.something_moves(now)) {
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_SLEEP, SLEEP_AGAIN_MS, None);
             }
@@ -1283,25 +1316,73 @@ impl App {
         if pressure {
             self.trim_under_pressure();
         }
-        let more = take_first_discards(&mut to_discard, DISCARDS_PER_TICK);
-        if !to_discard.is_empty() {
-            for (_, id) in to_discard {
+        to_discard.sort_by_key(|(since, ..)| *since);
+        stages.sort_by_key(|(since, ..)| *since);
+        let mut discarded = 0;
+        let started = Instant::now();
+        let mut pending = to_discard.into_iter();
+        for (_, id, facts) in pending.by_ref() {
+            let Some(Live::Ready(web)) = self.tabs.get(id).map(|t| &t.live) else { continue };
+            if web.is_playing_audio() {
+                // A page that plays sound is never cut off; one due for
+                // discard goes to the stage it may still take.
+                if let Some(mut facts) = facts {
+                    facts.playing_audio = true;
+                    let step = crate::memory::step(&facts, &policy, pressure);
+                    if step != crate::memory::Step::Keep {
+                        stages.insert(0, (now, id, step));
+                    }
+                }
+                continue;
+            }
+            {
+                let _doing = crate::diag::doing(&"view:close", id);
                 self.discard(id);
             }
-            self.invalidate();
+            discarded += 1;
+            if discarded == DISCARDS_PER_TICK {
+                break;
+            }
         }
+        let mut more = pending.next().is_some();
+        if discarded > 0 {
+            self.invalidate();
+            more |= !stages.is_empty();
+        } else {
+            more |= stages.len() > STAGES_PER_TICK;
+            for (_, id, step) in stages.into_iter().take(STAGES_PER_TICK) {
+                if let Some(Live::Ready(web)) = self.tabs.get_mut(id).map(|t| &mut t.live) {
+                    match step {
+                        crate::memory::Step::Suspend => web.suspend(),
+                        crate::memory::Step::Lower => web.lower(),
+                        crate::memory::Step::Keep | crate::memory::Step::Discard => {}
+                    }
+                }
+            }
+        }
+        let next = if more { sleep_again_ms(started.elapsed()) } else { SLEEP_EVERY_MS };
         unsafe {
-            SetTimer(Some(self.hwnd), TIMER_SLEEP, if more { SLEEP_AGAIN_MS } else { SLEEP_EVERY_MS }, None);
+            SetTimer(Some(self.hwnd), TIMER_SLEEP, next, None);
         }
     }
 
     // ---------- engine events ----------
 
     fn drain_events(&mut self) {
+        let started = Instant::now();
         while let Some(event) = web::pop() {
-            let _doing = crate::diag::doing(event.name(), event.tab());
-            self.bench.observe(&event);
-            self.handle(event);
+            {
+                let _doing = crate::diag::doing(event.name(), event.tab());
+                self.bench.observe(&event);
+                self.handle(event);
+            }
+            if yield_events(started.elapsed(), web::queued()) {
+                // A timer comes after the paint and the input that wait.
+                unsafe {
+                    SetTimer(Some(self.hwnd), TIMER_EVENTS, USER_TIMER_MINIMUM, None);
+                }
+                break;
+            }
         }
         self.bench_poll();
     }
@@ -2171,13 +2252,17 @@ fn keyboard_is_ours(foreground: HWND, windows: &[HWND]) -> bool {
     !foreground.is_invalid() && windows.contains(&foreground)
 }
 
-/// Keeps the `limit` longest idle of `candidates` (idle since, tab); whether
-/// some were left for the next tick.
-fn take_first_discards(candidates: &mut Vec<(Instant, u64)>, limit: usize) -> bool {
-    candidates.sort_by_key(|(since, _)| *since);
-    let more = candidates.len() > limit;
-    candidates.truncate(limit);
-    more
+/// When the next sleep tick comes while work is left, after one that took
+/// `took`: the window is free at least three quarters of the time.
+fn sleep_again_ms(took: Duration) -> u32 {
+    let took = took.as_millis().min(10_000) as u32;
+    SLEEP_AGAIN_MS.max(took * 3)
+}
+
+/// Whether a pass over the engine events stops here, after `spent`, and
+/// leaves the rest for the next one.
+fn yield_events(spent: Duration, more: bool) -> bool {
+    more && spent >= EVENTS_BUDGET
 }
 
 /// Traces how long wiring a new view took (on drop, so every return counts).
