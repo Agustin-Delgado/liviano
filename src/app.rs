@@ -990,10 +990,26 @@ impl App {
         for id in wake {
             self.wake(id);
         }
+        self.keyboard_off_hidden_views();
         self.update_title();
         self.autofill_follow();
         self.place_vault_bar();
         self.refresh_nav();
+    }
+
+    /// A view that went out of sight with the keyboard in it would still get
+    /// the keys that the person types (the next page takes the keyboard only
+    /// when its slide ends). The main window holds the keyboard until then:
+    /// its shortcuts continue to work, and no key goes to a hidden page.
+    fn keyboard_off_hidden_views(&self) {
+        use windows::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+        unsafe {
+            let focus = GetFocus();
+            let ours = !focus.is_invalid() && focus != self.hwnd && IsChild(self.hwnd, focus).as_bool();
+            if keyboard_in_hidden_view(ours, ours && IsWindowVisible(focus).as_bool()) {
+                let _ = SetFocus(Some(self.hwnd));
+            }
+        }
     }
 
     fn wake_now(&mut self, id: u64) {
@@ -1065,9 +1081,16 @@ impl App {
     }
 
     fn focus_page(&self) {
-        if self.mode.is_some() || !crate::omnibar::owns_foreground() {
+        let foreground = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
+        if self.mode.is_some() || !keyboard_is_ours(foreground, &[self.hwnd, self.omnibar.popup]) {
             return;
         }
+        self.focus_page_now();
+    }
+
+    /// Gives the keyboard to the active page, or to the window while that
+    /// page is being made. Only for a window that is in front.
+    fn focus_page_now(&self) {
         if let Some(Live::Ready(web)) = self.tabs.active_tab().map(|t| &t.live) {
             let _doing = crate::diag::doing(&"view:focus", 0);
             web.focus();
@@ -1087,7 +1110,7 @@ impl App {
                 let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(self.omnibar.edit));
             }
         } else {
-            self.focus_page();
+            self.focus_page_now();
         }
     }
 
@@ -2110,6 +2133,21 @@ impl App {
             }
         }
     }
+}
+
+/// The keyboard is in a child window of the main window (`in_window`) that
+/// is not on screen: a hidden view, or a window inside one.
+fn keyboard_in_hidden_view(in_window: bool, visible: bool) -> bool {
+    in_window && !visible
+}
+
+/// Whether the app may move the keyboard into the main window: only when
+/// that window or the field over it (`windows`) is in front. `SetFocus`
+/// also activates the window that gets the focus, so a page that became
+/// ready while Settings or another program was in front pulled the main
+/// window over it.
+fn keyboard_is_ours(foreground: HWND, windows: &[HWND]) -> bool {
+    !foreground.is_invalid() && windows.contains(&foreground)
 }
 
 /// Keeps the `limit` longest idle of `candidates` (idle since, tab); whether
