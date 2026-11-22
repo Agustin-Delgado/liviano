@@ -13,7 +13,10 @@
 //! and an engine started only for it is let go too, so an idle window holds
 //! nothing extra — an open field nobody types in included.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     COREWEBVIEW2_PROCESS_FAILED_KIND, COREWEBVIEW2_PROCESS_FAILED_KIND_BROWSER_PROCESS_EXITED,
@@ -65,6 +68,8 @@ pub(super) struct EngineUi {
     /// No new spare before then (one was just taken).
     hold_until: Option<Instant>,
     restarts: Vec<Instant>,
+    /// Page reloads after a lost page process, by tab, within `RESTART_WINDOW`.
+    page_reloads: HashMap<u64, Vec<Instant>>,
     /// Tabs waiting for the strip to settle before their view is made.
     held_wakes: Vec<u64>,
     /// Views made while the strip moved, waiting to be shown.
@@ -107,6 +112,15 @@ fn may_restart(restarts: &mut Vec<Instant>, now: Instant) -> bool {
     }
     restarts.push(now);
     true
+}
+
+/// Whether the page of `tab` loads again after its process ended. A page
+/// that ends it on every load (edge://kill, a page that runs out of memory)
+/// reloaded about three times a second for ever: after `MAX_RESTARTS` in
+/// the window the tab stays asleep until the person selects it again.
+fn reload_after_crash(reloads: &mut HashMap<u64, Vec<Instant>>, tab: u64, now: Instant) -> bool {
+    reloads.retain(|_, times| times.last().is_some_and(|at| now.duration_since(*at) < RESTART_WINDOW));
+    may_restart(reloads.entry(tab).or_default(), now)
 }
 
 unsafe extern "system" fn on_warm_timer(_: HWND, _: u32, _: usize, _: u32) {
@@ -345,7 +359,7 @@ impl App {
             Response::Reload => {
                 let visible = self.visible_tabs().contains(&id);
                 self.discard(id);
-                if visible {
+                if visible && reload_after_crash(&mut self.engine.page_reloads, id, Instant::now()) {
                     self.show_active();
                 }
             }
