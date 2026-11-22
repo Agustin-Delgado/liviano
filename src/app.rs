@@ -41,6 +41,7 @@ mod memory_ui;
 mod nav_ui;
 mod panel_ui;
 mod popups_ui;
+mod power_ui;
 mod private_tabs;
 mod split_ui;
 mod tooltip_ui;
@@ -173,6 +174,7 @@ struct App {
     painted_sheet: Option<tabbar::Sheet>,
     engine: engine_ui::EngineUi,
     memory: memory_ui::MemoryUi,
+    power: power_ui::PowerUi,
 }
 
 thread_local! {
@@ -333,6 +335,7 @@ pub fn run() -> windows::core::Result<()> {
         painted_sheet: None,
         engine: Default::default(),
         memory: Default::default(),
+        power: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -498,6 +501,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         return result;
     }
     if let Some(result) = frame_ui::window_message(hwnd, msg, wparam, lparam) {
+        return result;
+    }
+    if let Some(result) = power_ui::window_message(hwnd, msg, wparam, lparam) {
         return result;
     }
     match msg {
