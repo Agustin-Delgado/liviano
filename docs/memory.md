@@ -23,6 +23,9 @@ recently first. These tabs are never discarded, and are not counted:
 pinned tabs, private tabs, tabs that play sound and sites that you keep
 awake.
 
+The time that the computer sleeps does not count as idle time: after the
+resume, each tab is as idle as it was before the sleep.
+
 Nea closes at most 3 views in one sleep tick, and it does not close a view
 while the strip or the field moves. Closing a view stops the window for
 tens of milliseconds.

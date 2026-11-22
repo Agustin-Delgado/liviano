@@ -4,7 +4,7 @@ You can change all shortcuts in Settings (Ctrl+,).
 
 | Action | Shortcut |
 |---|---|
-| Field | Ctrl+L |
+| Field | Ctrl+L (and F6, Alt+D) |
 | Switch to tab by name | Ctrl+K |
 | New tab / close tab / reopen closed tab | Ctrl+T / Ctrl+W / Ctrl+Shift+T |
 | New private tab | Ctrl+Shift+N |
@@ -26,6 +26,7 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Add tab to new group | Ctrl+Shift+G |
 | Focus left page / focus right page | Alt+Shift+Left / Alt+Shift+Right |
 | Passwords | Ctrl+Alt+L |
+| Full screen | F11 |
 | Settings | Ctrl+, |
 
 To put the tab strip on top or on the side, use Settings → Tabs → Position.
