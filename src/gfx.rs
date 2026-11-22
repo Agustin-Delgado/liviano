@@ -450,17 +450,51 @@ impl Surface {
     }
 }
 
-fn create_target(shared: &Shared) -> windows::core::Result<(ID2D1DCRenderTarget, ID2D1SolidColorBrush)> {
-    let props = D2D1_RENDER_TARGET_PROPERTIES {
+/// Starts Direct2D's software renderer on a thread of its own, while the
+/// window is made. The first drawing target of the process loads and
+/// starts it: 70 ms measured inside the first paint. Made again on the UI
+/// thread afterwards, the target is a few milliseconds. Nothing of it is
+/// kept: only what the process loaded and set up once.
+pub fn warm_up() {
+    let _ = std::thread::Builder::new().name("gfx-warm".into()).stack_size(256 * 1024).spawn(|| {
+        use windows::Win32::Graphics::Gdi::{
+            CreateCompatibleBitmap, CreateCompatibleDC, DeleteDC, DeleteObject, GetDC, ReleaseDC, SelectObject,
+        };
+        unsafe {
+            let Ok(d2d) = D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None) else { return };
+            let Ok(target) = d2d.CreateDCRenderTarget(&target_properties()) else { return };
+            let screen = GetDC(None);
+            let dc = CreateCompatibleDC(Some(screen));
+            let bitmap = CreateCompatibleBitmap(screen, 8, 8);
+            let old = SelectObject(dc, bitmap.into());
+            let rect = RECT { left: 0, top: 0, right: 8, bottom: 8 };
+            if target.BindDC(dc, &rect).is_ok() {
+                target.BeginDraw();
+                target.Clear(Some(&Color::from(Rgb(0, 0, 0)).d2d()));
+                let _ = target.EndDraw(None, None);
+            }
+            SelectObject(dc, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(dc);
+            ReleaseDC(None, screen);
+        }
+    });
+}
+
+fn target_properties() -> D2D1_RENDER_TARGET_PROPERTIES {
+    D2D1_RENDER_TARGET_PROPERTIES {
         r#type: D2D1_RENDER_TARGET_TYPE_SOFTWARE,
         pixelFormat: D2D1_PIXEL_FORMAT { format: DXGI_FORMAT_B8G8R8A8_UNORM, alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED },
         dpiX: 96.0,
         dpiY: 96.0,
         usage: D2D1_RENDER_TARGET_USAGE_GDI_COMPATIBLE,
         minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
-    };
+    }
+}
+
+fn create_target(shared: &Shared) -> windows::core::Result<(ID2D1DCRenderTarget, ID2D1SolidColorBrush)> {
     unsafe {
-        let target = shared.d2d.CreateDCRenderTarget(&props)?;
+        let target = shared.d2d.CreateDCRenderTarget(&target_properties())?;
         let brush = target.CreateSolidColorBrush(&Color::from(Rgb(0, 0, 0)).d2d(), None)?;
         Ok((target, brush))
     }

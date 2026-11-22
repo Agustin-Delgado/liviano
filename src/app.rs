@@ -102,6 +102,8 @@ const WM_APP_LAYOUT: u32 = WM_APP + 2;
 /// The smallest window, in DIPs: the strip and the window buttons still fit.
 const MIN_WINDOW_DIPS: (i32, i32) = (420, 300);
 const WM_APP_REPAINT: u32 = WM_APP + 3;
+/// Posted once, after the window's first paint (see `request_environment`).
+const WM_APP_PAINTED: u32 = WM_APP + 5;
 const MENU_PIN: usize = 10;
 const MENU_DUPLICATE: usize = 11;
 const MENU_KEEP_AWAKE: usize = 12;
@@ -152,6 +154,10 @@ struct App {
     env: Option<ICoreWebView2Environment>,
     env_error: Option<String>,
     env_requested: bool,
+    /// The window painted once (see `request_environment`).
+    painted: bool,
+    /// The engine was asked for before the first paint.
+    env_after_paint: bool,
     tabs: TabList<WebTab>,
     history: History,
     vertical: bool,
@@ -282,6 +288,7 @@ fn wide(text: &str) -> HSTRING {
 }
 
 pub fn run() -> windows::core::Result<()> {
+    gfx::warm_up();
     let data = storage::data_dir();
     let settings: Settings = storage::read_json(&data.join("settings.json"));
     let session: Session = storage::read_json(&data.join("session.json"));
@@ -297,7 +304,9 @@ pub fn run() -> windows::core::Result<()> {
     shield::set_disabled(&settings.shield_disabled);
     shield::set_cosmetic(settings.block_trackers);
 
+    crate::diag::trace(|| "startup: settings and session read".to_string());
     let hwnd = create_window(&session)?;
+    crate::diag::trace(|| "startup: window created".to_string());
     crate::app_icon::apply(hwnd);
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
@@ -307,6 +316,7 @@ pub fn run() -> windows::core::Result<()> {
 
     let mut omnibar = Box::new(Omnibar::create(hwnd, on_omnibar)?);
     crate::omnibar::register(&omnibar);
+    crate::diag::trace(|| "startup: field created".to_string());
 
     let palette = design::palette(settings.theme);
     let scale = design::window_scale(hwnd);
@@ -340,6 +350,8 @@ pub fn run() -> windows::core::Result<()> {
         env: None,
         env_error: None,
         env_requested: false,
+        painted: false,
+        env_after_paint: false,
         tabs,
         history,
         vertical: session.vertical_tabs,
@@ -391,7 +403,9 @@ pub fn run() -> windows::core::Result<()> {
             (false, true) => SW_SHOWMAXIMIZED,
             (false, false) => SW_SHOW,
         };
+        crate::diag::trace(|| "startup: window shown".to_string());
         let _ = ShowWindow(hwnd, show);
+        crate::diag::trace(|| "startup: show returned".to_string());
         SetTimer(Some(hwnd), TIMER_SLEEP, SLEEP_EVERY_MS, None);
         SetTimer(Some(hwnd), TIMER_SAVE, 5_000, None);
         SetTimer(Some(hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
@@ -404,6 +418,7 @@ pub fn run() -> windows::core::Result<()> {
         }
     });
 
+    crate::diag::trace(|| "startup: first layout done".to_string());
     message_loop();
     Ok(())
 }
@@ -596,7 +611,18 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 let _ = EndPaint(hwnd, &ps);
             }
             static PAINTED: std::sync::Once = std::sync::Once::new();
-            PAINTED.call_once(|| crate::diag::trace(|| "first paint".to_string()));
+            PAINTED.call_once(|| {
+                crate::diag::trace(|| "first paint".to_string());
+                unsafe {
+                    let _ = PostMessageW(Some(hwnd), WM_APP_PAINTED, WPARAM(0), LPARAM(0));
+                }
+            });
+            LRESULT(0)
+        }
+        WM_APP_PAINTED => {
+            if with_app(|app| app.first_painted()).is_none() {
+                retry_later(hwnd, WM_APP_PAINTED, WPARAM(0), LPARAM(0));
+            }
             LRESULT(0)
         }
         vault_ui::WM_APP_VAULT => {
@@ -1080,9 +1106,15 @@ impl App {
     }
 
     /// The engine starts with the first tab that needs a page, not with the
-    /// window: with no tabs, no engine process runs at all.
+    /// window: with no tabs, no engine process runs at all. And not before
+    /// the window's first paint: its start holds the UI thread for 25-30 ms,
+    /// and the chrome comes first.
     fn request_environment(&mut self) {
         if self.env_requested {
+            return;
+        }
+        if !self.painted {
+            self.env_after_paint = true;
             return;
         }
         self.env_requested = true;
@@ -1091,6 +1123,14 @@ impl App {
         if let Err(err) = web::create_environment(&storage::engine_dir(), extensions) {
             self.env_error = Some(format!("Cannot start WebView2: {err}"));
             self.invalidate();
+        }
+    }
+
+    /// The window drew itself once: what waited for it starts.
+    fn first_painted(&mut self) {
+        self.painted = true;
+        if std::mem::take(&mut self.env_after_paint) {
+            self.request_environment();
         }
     }
 
