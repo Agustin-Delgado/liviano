@@ -54,6 +54,16 @@ fn source(f: &IWICImagingFactory, encoded: &[u8]) -> Result<(IWICBitmapFrameDeco
     }
 }
 
+/// Images with more pixels than this are refused: 256 MB of pixels.
+const MAX_PIXELS: u64 = 64 * 1024 * 1024;
+
+/// Bytes of 32-bit pixels for `width` × `height`, or None past `MAX_PIXELS`.
+/// In u32 the product overflowed for a narrow, very tall image.
+fn buffer_len(width: u32, height: u32) -> Option<usize> {
+    let pixels = u64::from(width) * u64::from(height);
+    (pixels <= MAX_PIXELS).then(|| usize::try_from(pixels * 4).ok()).flatten()
+}
+
 fn read(f: &IWICImagingFactory, from: &IWICBitmapSource, width: u32, height: u32) -> Result<Pixels> {
     unsafe {
         let scaler = f.CreateBitmapScaler()?;
@@ -67,9 +77,10 @@ fn read(f: &IWICImagingFactory, from: &IWICBitmapSource, width: u32, height: u32
             0.0,
             WICBitmapPaletteTypeCustom,
         )?;
-        let stride = width * 4;
-        let mut data = vec![0u8; (stride * height) as usize];
-        converter.CopyPixels(std::ptr::null(), stride, &mut data)?;
+        let len = buffer_len(width, height)
+            .ok_or_else(|| windows::core::Error::from(windows::Win32::Foundation::E_INVALIDARG))?;
+        let mut data = vec![0u8; len];
+        converter.CopyPixels(std::ptr::null(), width * 4, &mut data)?;
         Ok(Pixels { width, height, data })
     }
 }
