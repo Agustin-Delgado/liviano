@@ -177,6 +177,7 @@ const VK_INSERT: u32 = 0x2D;
 const VK_DELETE: u32 = 0x2E;
 const VK_F1: u32 = 0x70;
 const VK_F5: u32 = 0x74;
+const VK_F6: u32 = 0x75;
 const VK_OEM_PLUS: u32 = 0xBB;
 const VK_OEM_COMMA: u32 = 0xBC;
 const VK_OEM_MINUS: u32 = 0xBD;
@@ -211,6 +212,9 @@ const fn key(c: u8) -> u32 {
 fn defaults() -> Vec<(Chord, Command)> {
     let mut table = vec![
         (chord(true, false, false, key(b'L')), Command::FocusAddress),
+        // The other two chords of every browser for the address field.
+        (chord(false, false, false, VK_F6), Command::FocusAddress),
+        (chord(false, false, true, key(b'D')), Command::FocusAddress),
         (chord(true, false, false, key(b'K')), Command::SwitchTab),
         (chord(true, false, false, key(b'T')), Command::NewTab),
         (chord(true, true, false, key(b'N')), Command::NewPrivateTab),
