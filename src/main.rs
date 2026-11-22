@@ -64,6 +64,18 @@ mod widgets;
 #[rustfmt::skip]
 mod test_credentials;
 
+// Input generators for the fuzz loops.
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/support/fuzz.rs"]
+#[rustfmt::skip]
+mod test_fuzz;
+
+// Fuzz loops over every parser of outside data.
+#[cfg(all(test, nea_tests))]
+#[path = "../tests/unit/fuzz.rs"]
+#[rustfmt::skip]
+mod fuzz_tests;
+
 use windows::Win32::{
     System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx},
     UI::HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
