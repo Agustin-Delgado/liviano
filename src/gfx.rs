@@ -431,6 +431,13 @@ impl Surface {
             draw(&painter);
             target.EndDraw(None, None)
         };
+        self.frame_ended(result);
+        true
+    }
+
+    /// What a frame leaves behind: the pictures it drew, and the target
+    /// only if `EndDraw` succeeded.
+    fn frame_ended(&mut self, result: windows::core::Result<()>) {
         // Keep what this frame drew; a partial repaint that drew none of the
         // icons keeps them all (they are still on screen).
         let mut bitmaps = self.bitmaps.borrow_mut();
@@ -449,7 +456,6 @@ impl Surface {
             self.target = None;
             self.bitmaps.borrow_mut().clear();
         }
-        true
     }
 }
 
