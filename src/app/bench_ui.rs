@@ -379,8 +379,8 @@ impl App {
                 reply.ok(json!({ "closed": ids.len() }));
             }
             Action::Dpi { dpi } => {
-                if !(48..=480).contains(&dpi) {
-                    return reply.error("dpi must be from 48 to 480");
+                if !(96..=480).contains(&dpi) {
+                    return reply.error("dpi must be from 96 (100 %) to 480");
                 }
                 // Posted: the message comes back into the window proc, and
                 // the app is busy with this request now.
