@@ -47,6 +47,7 @@ mod private_tabs;
 mod split_ui;
 mod tooltip_ui;
 mod vault_ui;
+mod views_ui;
 
 pub(crate) use vault_ui::start_import;
 
@@ -179,6 +180,7 @@ struct App {
     memory: memory_ui::MemoryUi,
     power: power_ui::PowerUi,
     fullscreen: fullscreen_ui::FullscreenUi,
+    views: views_ui::ViewsUi,
 }
 
 thread_local! {
@@ -341,6 +343,7 @@ pub fn run() -> windows::core::Result<()> {
         memory: Default::default(),
         power: Default::default(),
         fullscreen: Default::default(),
+        views: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -990,37 +993,6 @@ impl App {
     }
 
     // ---------- tab life cycle ----------
-
-    /// Shows the active tab's view (and its partner's, when split), creating
-    /// them if asleep, and hides the rest.
-    fn show_active(&mut self) {
-        // A minimized window hides its pages (refer to `memory_ui`).
-        let shown = if self.memory.pages_hidden() { Vec::new() } else { self.shown_panes() };
-        let mut wake = Vec::new();
-        for tab in &mut self.tabs.tabs {
-            let bounds = shown.iter().find(|(id, _)| *id == tab.id).map(|(_, r)| *r);
-            match (&mut tab.live, bounds) {
-                (Live::Ready(web), Some(bounds)) => {
-                    let _doing = crate::diag::doing(&"view:show", tab.id);
-                    web.show(bounds)
-                }
-                (Live::Ready(web), None) => {
-                    let _doing = crate::diag::doing(&"view:hide", tab.id);
-                    web.hide()
-                }
-                (Live::Asleep, Some(_)) => wake.push(tab.id),
-                _ => {}
-            }
-        }
-        for id in wake {
-            self.wake(id);
-        }
-        self.keyboard_off_hidden_views();
-        self.update_title();
-        self.autofill_follow();
-        self.place_vault_bar();
-        self.refresh_nav();
-    }
 
     /// A view that went out of sight with the keyboard in it would still get
     /// the keys that the person types (the next page takes the keyboard only

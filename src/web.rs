@@ -136,6 +136,11 @@ pub fn pop() -> Option<Event> {
     QUEUE.with(|q| q.borrow_mut().pop_front())
 }
 
+/// Whether events wait in the queue.
+pub fn queued() -> bool {
+    QUEUE.with(|q| !q.borrow().is_empty())
+}
+
 /// A tab with a web view behind it.
 pub struct WebTab {
     pub controller: ICoreWebView2Controller,
@@ -440,6 +445,11 @@ impl WebTab {
             }
             self.shown = Some(bounds);
         }
+    }
+
+    /// Whether the view is on screen (shown, and not hidden since).
+    pub fn is_shown(&self) -> bool {
+        self.shown.is_some()
     }
 
     pub fn hide(&mut self) {
