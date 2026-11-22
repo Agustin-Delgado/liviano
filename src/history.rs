@@ -95,8 +95,17 @@ impl History {
     pub fn recent(&self, query: &str, limit: usize) -> Vec<&Entry> {
         let query = crate::panels::Query::new(query);
         let mut found: Vec<&Entry> = self.entries.iter().filter(|e| query.matches(&[&e.title, &e.url])).collect();
-        found.sort_by_key(|e| std::cmp::Reverse(e.last));
+        // Only the `limit` most recent are sorted: the history panel opens
+        // on all twenty thousand entries.
+        // Equal times keep the order of the list, as a stable sort did.
+        let newest_first = |a: &&Entry, b: &&Entry| {
+            b.last.cmp(&a.last).then_with(|| std::ptr::from_ref(*a).cmp(&std::ptr::from_ref(*b)))
+        };
+        if found.len() > limit && limit > 0 {
+            found.select_nth_unstable_by(limit - 1, newest_first);
+        }
         found.truncate(limit);
+        found.sort_by(newest_first);
         found
     }
 
