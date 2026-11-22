@@ -3,7 +3,9 @@
 //! At sign-out, restart and shut down, Windows sends `WM_QUERYENDSESSION`
 //! and then `WM_ENDSESSION`, never `WM_CLOSE`: the process stops when
 //! `WM_ENDSESSION` returns. Thus the session is written there, or the
-//! tabs opened since the last save timer are lost.
+//! tabs opened since the last save timer are lost. The window's thread can
+//! be busy then (a modal loop, a long handler): `storage::watch_session_end`
+//! waits for the queued files on a thread that is free.
 //!
 //! Before the computer goes to sleep (`PBT_APMSUSPEND`), the session is
 //! written too: the battery can go empty while it sleeps. The clock of
@@ -48,14 +50,14 @@ pub(super) fn window_message(_hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPA
     match msg {
         WM_QUERYENDSESSION => {
             let _doing = crate::diag::doing(&"query end session", 0);
-            with_app(|app| app.write_now());
+            write_or_flush();
             // Nea never stops the end of the session.
             Some(LRESULT(1))
         }
         WM_ENDSESSION => {
             if wparam.0 != 0 {
                 let _doing = crate::diag::doing(&"end session", 0);
-                with_app(|app| app.write_now());
+                write_or_flush();
                 crate::diag::flush_now();
             }
             Some(LRESULT(0))
@@ -75,6 +77,16 @@ pub(super) fn window_message(_hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPA
             Some(LRESULT(1))
         }
         _ => None,
+    }
+}
+
+/// The session and the history to disk before the process stops. An app
+/// busy in a modal loop (a menu, a dialog) gets the message inside that
+/// loop and cannot make a new session: what it saved last (each change
+/// within 5 s, and before each modal loop) is written then.
+fn write_or_flush() {
+    if with_app(|app| app.write_now()).is_none() {
+        crate::storage::flush_writes(END_SESSION_WRITE_LIMIT);
     }
 }
 

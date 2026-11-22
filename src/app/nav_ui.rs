@@ -187,6 +187,7 @@ impl App {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_ENTRY + i, &wide(label));
             }
             // Its time is the person reading the menu.
+            self.save_before_modal();
             let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(
                 menu,

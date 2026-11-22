@@ -173,9 +173,8 @@ impl App {
     }
 
     fn close_group(&mut self, group: u64) {
-        for id in self.tabs.members(group) {
-            self.close_tab(id);
-        }
+        let members = self.tabs.members(group);
+        self.close_tabs(&members);
     }
 
     /// The commands of the selector and the shortcuts, on the live tab.
@@ -283,6 +282,7 @@ impl App {
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
+            self.save_before_modal();
             let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
                 .0 as usize;

@@ -638,6 +638,7 @@ impl App {
             }
             let _ = ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
+            self.save_before_modal();
             let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, flags, point.x, point.y, None, self.hwnd, None).0 as usize;
             drop(modal);

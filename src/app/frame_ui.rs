@@ -256,6 +256,7 @@ impl App {
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
+            self.save_before_modal();
             let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
                 .0 as usize;

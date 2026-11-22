@@ -86,6 +86,14 @@ pub fn from_env() -> bool {
     std::env::var("NEA_BENCH").is_ok_and(|v| v.trim() == "1")
 }
 
+/// `NEA_BENCH_FRONT=1` with `NEA_BENCH=1`: the app acts as if its window
+/// were in front, so a script measures the focus work of a window in front
+/// without taking the foreground from the person's program.
+pub fn acts_in_front() -> bool {
+    static FRONT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *FRONT.get_or_init(|| from_env() && std::env::var("NEA_BENCH_FRONT").is_ok_and(|v| v.trim() == "1"))
+}
+
 /// The setting, or the environment for a test run.
 pub fn wanted(setting: bool) -> bool {
     setting || from_env()

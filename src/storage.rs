@@ -5,11 +5,25 @@ use std::{
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Condvar, Mutex, OnceLock},
+    sync::{
+        Condvar, Mutex, OnceLock,
+        atomic::{AtomicIsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
 use serde::{Serialize, de::DeserializeOwned};
+use windows::{
+    Win32::{
+        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        System::LibraryLoader::GetModuleHandleW,
+        UI::WindowsAndMessaging::{
+            CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, MSG, RegisterClassW, WM_ENDSESSION,
+            WM_QUERYENDSESSION, WNDCLASSW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_POPUP,
+        },
+    },
+    core::w,
+};
 
 pub const APP_NAME: &str = "Nea";
 /// What the window, the shortcut and the installed entry are called. A debug
@@ -195,6 +209,85 @@ fn run_jobs(jobs: Vec<(PathBuf, Job)>) {
         if let Some(bytes) = job() {
             let _ = write_bytes(&path, &bytes);
         }
+    }
+}
+
+/// How long the end of the session waits for the queued files on the
+/// watcher's thread. Windows gives a program about 5 s before it asks the
+/// person.
+const SESSION_END_WRITE_LIMIT: Duration = Duration::from_secs(3);
+
+static WATCHER: AtomicIsize = AtomicIsize::new(0);
+
+/// Starts a thread that only waits for the end of the Windows session (sign
+/// out, restart, shut down) in a hidden window of its own, and then waits
+/// until the queued files are on disk. The window's thread can be in a
+/// modal loop or a long handler when Windows ends the session: this thread
+/// is free, so what the app queued last (refer to `write_json_later`) is
+/// not cut off when the process stops. It does no other work and never
+/// writes itself, so a broadcast to all windows never waits for a disk.
+/// Only the first call counts.
+pub fn watch_session_end() {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    STARTED.get_or_init(|| {
+        let _ = std::thread::Builder::new().name("session end".into()).stack_size(64 * 1024).spawn(session_end_loop);
+    });
+}
+
+/// The watcher's window, once it is made.
+#[cfg(test)]
+pub fn session_end_window() -> Option<HWND> {
+    let raw = WATCHER.load(Ordering::Acquire);
+    (raw != 0).then_some(HWND(raw as _))
+}
+
+fn session_end_loop() {
+    unsafe {
+        let Ok(module) = GetModuleHandleW(None) else { return };
+        let class = WNDCLASSW {
+            lpfnWndProc: Some(session_end_proc),
+            hInstance: module.into(),
+            lpszClassName: w!("NeaSessionEnd"),
+            ..Default::default()
+        };
+        RegisterClassW(&class);
+        // Top-level and never shown: a message-only window does not get the
+        // end of the session.
+        let Ok(hwnd) = CreateWindowExW(
+            WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE,
+            w!("NeaSessionEnd"),
+            w!(""),
+            WS_POPUP,
+            0,
+            0,
+            0,
+            0,
+            None,
+            None,
+            Some(module.into()),
+            None,
+        ) else {
+            return;
+        };
+        WATCHER.store(hwnd.0 as isize, Ordering::Release);
+        let mut msg = MSG::default();
+        while GetMessageW(&mut msg, None, 0, 0).as_bool() {
+            DispatchMessageW(&msg);
+        }
+    }
+}
+
+unsafe extern "system" fn session_end_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    match msg {
+        // Nea never stops the end of the session.
+        WM_QUERYENDSESSION => LRESULT(1),
+        WM_ENDSESSION => {
+            if wparam.0 != 0 {
+                flush_writes(SESSION_END_WRITE_LIMIT);
+            }
+            LRESULT(0)
+        }
+        _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
 

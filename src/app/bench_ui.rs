@@ -375,8 +375,8 @@ impl App {
                 };
                 for id in &ids {
                     self.bench.loaded.remove(id);
-                    self.close_tab(*id);
                 }
+                self.close_tabs(&ids);
                 reply.ok(json!({ "closed": ids.len() }));
             }
             Action::Dpi { dpi } => {

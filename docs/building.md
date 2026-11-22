@@ -159,7 +159,10 @@ cargo run --release --example bench -- quit
 memory scenarios. `NEA_CREDENTIAL_PREFIX` (for example `NeaTest:`) keeps the
 passwords of a test run separate from the real passwords. When a different
 application is in front, Nea does not take the keyboard. Thus a script run
-does not interrupt a person who types in a different window.
+does not interrupt a person who types in a different window. To measure what
+Nea does in front (for example the focus that goes to the page after a tab
+closes) without taking the foreground, also set `NEA_BENCH_FRONT=1`: with
+`NEA_BENCH=1`, Nea then acts as if it were in front.
 
 ## Diagnostics: crashes and hangs
 

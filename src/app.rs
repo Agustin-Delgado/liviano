@@ -12,8 +12,8 @@ use windows::{
     Win32::{
         Foundation::{HANDLE, HGLOBAL, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
         Graphics::Gdi::{
-            BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, HFONT, InvalidateRect,
-            LOGFONTW, MONITOR_DEFAULTTONULL, MonitorFromRect, PAINTSTRUCT,
+            BeginPaint, CLEARTYPE_QUALITY, CreateFontIndirectW, DeleteObject, EndPaint, GetMonitorInfoW, HFONT,
+            InvalidateRect, LOGFONTW, MONITOR_DEFAULTTONULL, MONITORINFO, MonitorFromRect, PAINTSTRUCT,
         },
         System::{
             DataExchange::{CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData},
@@ -90,6 +90,8 @@ const TIMER_IDLE: usize = 4;
 const IDLE_WORK_AFTER_MS: u32 = 3_000;
 /// The person is away when no key or click came for this long.
 const AWAY_AFTER_MS: u32 = 1_500;
+/// The pause between two steps of the Settings window made ahead.
+const PREPARE_STEP_EVERY_MS: u32 = 32;
 /// Losing this much history to a crash is fine; rewriting it every 5 s is not.
 const HISTORY_SAVE_EVERY: Duration = Duration::from_secs(30);
 /// Engine events left for the next pass (see `drain_events`).
@@ -334,6 +336,7 @@ fn wide(text: &str) -> HSTRING {
 
 pub fn run() -> windows::core::Result<()> {
     gfx::warm_up();
+    storage::watch_session_end();
     let data = storage::data_dir();
     let settings: Settings = storage::read_json(&data.join("settings.json"));
     let session: Session = storage::read_json(&data.join("session.json"));
@@ -506,7 +509,9 @@ fn message_loop() {
 
 /// Where the window opens: the saved place when it is a sane size and still
 /// on a monitor (one that was unplugged leaves it off screen), else the
-/// default. The numbers come from session.json, so they can be anything.
+/// default. The numbers come from session.json, so they can be anything. A
+/// window that only touches a monitor (most of it was on one that is gone,
+/// or the work area became smaller) is moved into that monitor's work area.
 pub(crate) fn window_rect(saved: Option<[i32; 4]>) -> (i32, i32, i32, i32) {
     const DEFAULT: (i32, i32, i32, i32) = (CW_USEDEFAULT, CW_USEDEFAULT, 1280, 860);
     let Some([l, t, r, b]) = saved else { return DEFAULT };
@@ -515,8 +520,64 @@ pub(crate) fn window_rect(saved: Option<[i32; 4]>) -> (i32, i32, i32, i32) {
         return DEFAULT;
     }
     let rect = RECT { left: l, top: t, right: r, bottom: b };
-    let on_screen = unsafe { !MonitorFromRect(&rect, MONITOR_DEFAULTTONULL).is_invalid() };
-    if on_screen { (l, t, w, h) } else { DEFAULT }
+    let monitor = unsafe { MonitorFromRect(&rect, MONITOR_DEFAULTTONULL) };
+    if monitor.is_invalid() {
+        return DEFAULT;
+    }
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return (l, t, w, h);
+    }
+    let fit = fit_in_work_area(rect, info.rcWork);
+    (fit.left, fit.top, fit.right - fit.left, fit.bottom - fit.top)
+}
+
+/// The place a maximized window goes back to, after the scale changed from
+/// `from` to `to` while it was maximized: Windows keeps it in pixels of the
+/// old scale, so the window came back a size that is not its own (half of
+/// it, from 100 % to 200 %). Its corner stays; `None` when nothing changes.
+pub(crate) fn restored_at_scale(normal: RECT, from: f32, to: f32) -> Option<RECT> {
+    if (from - to).abs() < 0.01 || from <= 0.0 {
+        return None;
+    }
+    Some(bench_ui::scaled_window(normal, from, to))
+}
+
+fn scale_restored_place(hwnd: HWND, from: f32, to: f32) {
+    let mut placement = WINDOWPLACEMENT { length: std::mem::size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };
+    unsafe {
+        if GetWindowPlacement(hwnd, &mut placement).is_err() {
+            return;
+        }
+        let Some(normal) = restored_at_scale(placement.rcNormalPosition, from, to) else { return };
+        placement.rcNormalPosition = normal;
+        // Still maximized: only the place it goes back to changes.
+        placement.showCmd = SW_SHOWMAXIMIZED.0 as u32;
+        let _ = SetWindowPlacement(hwnd, &placement);
+    }
+}
+
+/// How much of the top of a window must be on the work area to drag it
+/// back: its height and its width, in pixels.
+const GRAB_HEIGHT: i32 = 40;
+const GRAB_WIDTH: i32 = 160;
+
+/// `rect`, or `rect` moved (and made smaller if it must) into `work` when
+/// its top cannot be reached there to drag it: above the work area, below
+/// it, or with less than `GRAB_WIDTH` of it across.
+pub(crate) fn fit_in_work_area(rect: RECT, work: RECT) -> RECT {
+    let (w, h) = (rect.right - rect.left, rect.bottom - rect.top);
+    let across = rect.right.min(work.right) - rect.left.max(work.left);
+    let top_inside = rect.top >= work.top && rect.top + GRAB_HEIGHT <= work.bottom;
+    let too_large = w > work.right - work.left || h > work.bottom - work.top;
+    if top_inside && across >= GRAB_WIDTH.min(w) && !too_large {
+        return rect;
+    }
+    let w = w.min(work.right - work.left);
+    let h = h.min(work.bottom - work.top);
+    let left = rect.left.clamp(work.left, work.right - w);
+    let top = rect.top.clamp(work.top, work.bottom - h);
+    RECT { left, top, right: left + w, bottom: top + h }
 }
 
 fn create_window(session: &Session) -> windows::core::Result<HWND> {
@@ -795,7 +856,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             LRESULT(0)
         }
         WM_SETTINGCHANGE => {
-            with_app(|app| app.refresh_theme());
+            // It comes during a menu's or a dialog's own loop too, with the
+            // app busy: done then, the change to dark or light was lost
+            // until the next one. Its text is not kept, so it comes back bare.
+            if with_app(|app| app.refresh_theme()).is_none() {
+                retry_later(hwnd, WM_SETTINGCHANGE, WPARAM(0), LPARAM(0));
+            }
             default()
         }
         WM_DPICHANGED => {
@@ -806,7 +872,16 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 0 => unsafe { windows::Win32::UI::HiDpi::GetDpiForWindow(hwnd) },
                 dpi => dpi,
             };
-            with_app(|app| app.refresh_dpi(dpi));
+            let before = with_app(|app| {
+                let before = app.scale;
+                app.refresh_dpi(dpi);
+                before
+            });
+            if let Some(before) = before
+                && unsafe { IsZoomed(hwnd) }.as_bool()
+            {
+                scale_restored_place(hwnd, before, design::scale_for_dpi(dpi));
+            }
             // The system always sends a rect; a message posted by anything
             // else may not have one.
             if let Some(suggested) = unsafe { crate::msg_param::read::<RECT>(lparam) } {
@@ -1112,15 +1187,26 @@ impl App {
     fn refresh_theme(&mut self) {
         self.motion.reduced = !design::animations_enabled();
         crate::anim::refresh_reduced();
-        self.palette = design::palette(self.settings.theme);
-        apply_window_theme(self.hwnd, &self.palette);
-        self.omnibar.set_palette(&self.palette);
-        crate::settings_window::set_palette(&self.palette);
         for tab in &self.tabs.tabs {
             if let Live::Ready(web) = &tab.live {
                 web.apply_theme(self.settings.theme);
             }
         }
+        let palette = design::palette(self.settings.theme);
+        // Windows sends WM_SETTINGCHANGE for many settings (the language, the
+        // environment, a policy…): the windows are coloured again only when
+        // the colours change, so they do not flash and redraw for nothing.
+        if crate::settings_window::palette_key(&palette) == crate::settings_window::palette_key(&self.palette) {
+            return;
+        }
+        self.palette = palette;
+        apply_window_theme(self.hwnd, &self.palette);
+        self.omnibar.set_palette(&self.palette);
+        crate::settings_window::set_palette(&self.palette);
+        // They keep the colours they were shown with: they come back with
+        // the new ones at the next hover.
+        self.hide_card();
+        self.hide_tip();
         self.restyle_vault();
         self.invalidate();
     }
@@ -1264,7 +1350,8 @@ impl App {
 
     fn focus_page(&self) {
         let foreground = unsafe { windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow() };
-        if self.mode.is_some() || !keyboard_is_ours(foreground, &[self.hwnd, self.omnibar.popup]) {
+        let front = keyboard_is_ours(foreground, &[self.hwnd, self.omnibar.popup]) || crate::bench::acts_in_front();
+        if self.mode.is_some() || !front {
             return;
         }
         self.focus_page_now();
@@ -1305,6 +1392,26 @@ impl App {
     }
 
     fn close_tab(&mut self, id: u64) {
+        self.close_tabs(&[id]);
+    }
+
+    /// Closes the tabs, then lays out, shows the views and moves the
+    /// keyboard once, for the tab that is active at the end. One at a time,
+    /// each tab that became active on the way took the keyboard (a call to
+    /// the engine's process) and woke its view: 4 s for 300 tabs.
+    pub(super) fn close_tabs(&mut self, ids: &[u64]) {
+        if ids.is_empty() {
+            return;
+        }
+        for &id in ids {
+            self.close_one(id);
+        }
+        self.relayout();
+        self.focus_page();
+        self.session_dirty = true;
+    }
+
+    fn close_one(&mut self, id: u64) {
         self.fullscreen_tab_leaves(id);
         self.forget_thumb(id);
         self.curtain.closed(id);
@@ -1317,9 +1424,6 @@ impl App {
         if let Some(partner) = heir {
             self.tabs.select(partner);
         }
-        self.relayout();
-        self.focus_page();
-        self.session_dirty = true;
     }
 
     fn navigate_active(&mut self, url: &str) {
@@ -1364,20 +1468,29 @@ impl App {
     fn idle_work(&mut self) {
         let away = system_idle().is_some_and(|idle| idle >= Duration::from_millis(u64::from(AWAY_AFTER_MS)));
         let busy = crate::anim::stats().running || self.mode.is_some();
+        // The work starts while the person is away. Its steps are a few
+        // milliseconds each, so once started they also go on while the
+        // person uses the window (not while something moves or the field
+        // is open).
+        let started = crate::settings_window::building();
         unsafe {
-            if !away || busy {
+            if !(away || started) || busy {
                 SetTimer(Some(self.hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
                 return;
             }
             let _ = KillTimer(Some(self.hwnd), TIMER_IDLE);
         }
-        if !crate::settings_window::prepared() {
-            crate::settings_window::prepare(
-                self.hwnd,
-                &self.settings,
-                &self.palette,
-                apply_settings::on_settings_changed,
-            );
+        let done = crate::settings_window::prepare(
+            self.hwnd,
+            &self.settings,
+            &self.palette,
+            apply_settings::on_settings_changed,
+        );
+        if !done {
+            // The next step soon: the thread is free between two of them.
+            unsafe {
+                SetTimer(Some(self.hwnd), TIMER_IDLE, PREPARE_STEP_EVERY_MS, None);
+            }
         }
     }
 
@@ -1804,6 +1917,7 @@ impl App {
                 }
             }
             Command::ShowHidden => {
+                self.save_before_modal();
                 let frame = self.omnibar_frame();
                 let (x, y, width) = (frame.left, frame.top, frame.width);
                 if let Some(tab) = self.tabs.active_tab()
@@ -2011,6 +2125,7 @@ impl App {
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
+            self.save_before_modal();
             let modal = crate::diag::modal();
             let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
                 .0 as usize;
@@ -2042,9 +2157,7 @@ impl App {
                 MENU_CLOSE_OTHERS => {
                     let others: Vec<u64> =
                         self.tabs.tabs.iter().filter(|t| t.id != id && !t.pinned).map(|t| t.id).collect();
-                    for other in others {
-                        self.close_tab(other);
-                    }
+                    self.close_tabs(&others);
                 }
                 _ => {}
             }
@@ -2341,6 +2454,13 @@ impl App {
             self.history.dirty = false;
             self.history_saved = Instant::now();
         }
+    }
+
+    /// Before a modal loop (a menu, a dialog): the session goes to disk now.
+    /// Windows can end the session while the loop runs, and the app, busy
+    /// inside it, can then write nothing new.
+    fn save_before_modal(&mut self) {
+        self.save(false);
     }
 
     fn session(&self) -> Session {
