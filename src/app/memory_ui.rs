@@ -109,6 +109,18 @@ impl App {
         memory::trim_working_set();
     }
 
+    /// A window that got no input for `IDLE_TRIM_AFTER` gives back the app's
+    /// memory, one time for each pause. Called by the sleep timer.
+    pub(super) fn idle_trim(&mut self) {
+        let Some(quiet) = super::quiet_time() else { return };
+        let now = Instant::now();
+        if memory::idle_trim_due(quiet, self.memory.trimmed_at.map(|at| now.duration_since(at))) {
+            self.memory.trimmed_at = Some(now);
+            crate::diag::trace(|| "idle trim".to_string());
+            memory::trim_working_set();
+        }
+    }
+
     /// The low memory signal: every tab out of sight to its last stage now.
     pub(super) fn low_memory(&mut self) {
         self.sleep_pass(true);

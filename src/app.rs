@@ -215,8 +215,14 @@ fn note_script() {
 /// in a page or anywhere in the session (a page's input never reaches this
 /// thread), and no script request either.
 fn quiet_for(quiet: Duration) -> bool {
-    let script_quiet = LAST_SCRIPT.with(|l| l.get()).is_none_or(|at| at.elapsed() >= quiet);
-    script_quiet && system_idle().is_some_and(|idle| idle >= quiet)
+    quiet_time().is_some_and(|q| q >= quiet)
+}
+
+/// How long no key, click, pointer move or script request came (refer to
+/// `quiet_for`).
+fn quiet_time() -> Option<Duration> {
+    let idle = system_idle()?;
+    Some(LAST_SCRIPT.with(|l| l.get()).map_or(idle, |at| idle.min(at.elapsed())))
 }
 
 /// How long the session had no input.
@@ -1286,6 +1292,7 @@ impl App {
     fn sleep_tick(&mut self) {
         let pressure = memory_load() >= self.settings.memory_pressure_percent;
         self.sleep_pass(pressure);
+        self.idle_trim();
     }
 
     /// Tabs out of sight go to their next stage (lowered, suspended, then
@@ -1336,7 +1343,7 @@ impl App {
             }
         }
         to_discard.extend(
-            crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight)
+            crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight, now)
                 .into_iter()
                 .map(|(since, id)| (since, id, None)),
         );

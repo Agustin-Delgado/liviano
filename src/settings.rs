@@ -41,7 +41,8 @@ pub struct Settings {
     pub discard_after_secs: u64,
     /// Views out of sight that stay live at most (the most recently seen);
     /// the others are discarded at once. A suspended view still holds most
-    /// of its memory.
+    /// of its memory. Views out of sight for `memory::LONG_OUT_OF_SIGHT`
+    /// keep only half of it.
     pub live_tabs_out_of_sight: usize,
     /// System memory load (percent) above which background tabs are discarded at once.
     pub memory_pressure_percent: u32,

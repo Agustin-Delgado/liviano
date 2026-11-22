@@ -104,7 +104,7 @@ table marks the items that this method cannot test.
 | Pinned tabs | Verified. They stay across sessions. |
 | Deferred restore | Verified. At startup, Nea creates only the view of the active tab and of its split pair. |
 | Switch to tab by name | Verified (fuzzy search by title and address). |
-| Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s, suspends them after the time in Settings and discards them later. It keeps at most 8 live views out of sight. When memory is low, it discards them immediately. Refer to [memory.md](memory.md). |
+| Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s, suspends them after the time in Settings and discards them later. It keeps at most 8 live views out of sight, and 4 of the views that were out of sight for 5 min. When memory is low, it discards them immediately. Refer to [memory.md](memory.md). |
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |

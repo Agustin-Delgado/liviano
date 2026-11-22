@@ -36,7 +36,9 @@ use std::time::{Duration, Instant};
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
     System::{
-        Memory::{CreateMemoryResourceNotification, LowMemoryResourceNotification},
+        Memory::{
+            CreateMemoryResourceNotification, HeapOptimizeResources, HeapSetInformation, LowMemoryResourceNotification,
+        },
         ProcessStatus::EmptyWorkingSet,
         Threading::{GetCurrentProcess, INFINITE, WaitForSingleObject},
     },
@@ -53,6 +55,17 @@ pub const MINIMIZED_HIDE_AFTER: Duration = Duration::from_secs(3);
 /// The signal stays on while memory is low, and the sleep timer already
 /// looks at the load every few seconds.
 pub const PRESSURE_RECHECK: Duration = Duration::from_secs(30);
+/// A window on screen that got no input for this long gives back the app's
+/// memory, one time for each such pause. The person is away: the first
+/// paint after it comes back takes the pages back from memory.
+pub const IDLE_TRIM_AFTER: Duration = Duration::from_secs(120);
+
+/// Whether the app gives back its memory now: nothing came (no input and no
+/// script request) for `quiet`, at least `IDLE_TRIM_AFTER`, and the last trim
+/// (`since_trim` ago) came before this pause started. One trim for each pause.
+pub fn idle_trim_due(quiet: Duration, since_trim: Option<Duration>) -> bool {
+    quiet >= IDLE_TRIM_AFTER && since_trim.is_none_or(|t| t > quiet)
+}
 
 /// When a tab out of sight goes to its next stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -120,14 +133,31 @@ pub fn step(facts: &Facts, policy: &Policy, pressure: bool) -> Step {
     Step::Keep
 }
 
+/// A view out of sight for this long counts against half of the cap: the
+/// person went through the recent tabs a while ago, not now.
+pub const LONG_OUT_OF_SIGHT: Duration = Duration::from_secs(5 * 60);
+
 /// Of the tabs out of sight that may be discarded (when each was last on
 /// screen, and its id), the ones beyond the `cap` seen most recently: the
 /// least recently seen first. A suspended view still holds most of its
 /// memory (its commit), so only a cap on their number bounds the total.
-pub fn over_cap(candidates: &[(Instant, u64)], cap: usize) -> Vec<(Instant, u64)> {
+///
+/// The views out of sight for `LONG_OUT_OF_SIGHT` or more keep only half of
+/// the cap (rounded up): eight tabs looked at one after the other stay
+/// live while the person goes back and forth, but not for the rest of the
+/// day. Each one costs approximately 60 MB of commit in the engine.
+pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<(Instant, u64)> {
     let mut newest_first = candidates.to_vec();
     newest_first.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    let mut over = newest_first.split_off(cap.min(newest_first.len()));
+    let long_cap = cap.div_ceil(2);
+    let mut over: Vec<(Instant, u64)> = newest_first
+        .iter()
+        .enumerate()
+        .filter(|&(i, &(since, _))| {
+            i >= cap || (i >= long_cap && now.saturating_duration_since(since) >= LONG_OUT_OF_SIGHT)
+        })
+        .map(|(_, c)| *c)
+        .collect();
     over.reverse();
     over
 }
@@ -151,12 +181,29 @@ pub fn watch_low_memory(hwnd: HWND, message: u32) {
     });
 }
 
-/// Gives the app's working set back to the system. Only the pages in RAM
-/// go, not the memory the app holds (its commit): the pages come back
-/// from the page file when they are used again. For a window that nobody
-/// looks at (minimized) or a system that is low on memory.
+/// `HEAP_OPTIMIZE_RESOURCES_INFORMATION`.
+#[repr(C)]
+struct HeapOptimize {
+    version: u32,
+    flags: u32,
+}
+
+/// Gives the app's memory back to the system. First the heaps release the
+/// free pages that they keep for later allocations (this decreases the
+/// commit), then the working set goes: the pages that stay come back from
+/// the page file when they are used again. For a window that nobody looks
+/// at (minimized, or no input for a long time) or a system that is low on
+/// memory.
 pub fn trim_working_set() {
+    let optimize = HeapOptimize { version: 1, flags: 0 };
     unsafe {
+        // No heap handle: all the heaps of the process.
+        let _ = HeapSetInformation(
+            None,
+            HeapOptimizeResources,
+            Some(&optimize as *const HeapOptimize as *const _),
+            std::mem::size_of::<HeapOptimize>(),
+        );
         let _ = EmptyWorkingSet(GetCurrentProcess());
     }
 }
