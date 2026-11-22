@@ -39,6 +39,10 @@ const HELD_CHECK_MS: u32 = 16;
 const TIMER_HELD: usize = 0x43;
 /// Engine work is held at most this long, motion or not.
 const HOLD_AT_MOST: Duration = Duration::from_millis(600);
+/// Views being made at the same time for tabs out of sight. Each one keeps
+/// the engine's browser process busy: with 200 tabs made at once, each call
+/// to the engine (a hide, a show) waited on it for about a second.
+const MAX_IN_FLIGHT: usize = 2;
 
 /// The id the spare is made under; no tab ever gets it.
 pub(super) const SPARE: u64 = u64::MAX;
@@ -72,6 +76,8 @@ pub(super) struct EngineUi {
     page_reloads: HashMap<u64, Vec<Instant>>,
     /// Tabs waiting for the strip to settle before their view is made.
     held_wakes: Vec<u64>,
+    /// Tabs on screen waiting for the engine to make fewer views.
+    shown_wakes: Vec<u64>,
     /// Views made while the strip moved, waiting to be shown.
     held_ready: Vec<(u64, windows::core::Result<ICoreWebView2Controller>)>,
     /// The tab that took the spare, until its view is wired.
@@ -138,25 +144,93 @@ fn may_release(settling: bool, held_since: Option<Instant>, now: Instant) -> boo
     !settling || held_since.is_some_and(|since| now.duration_since(since) >= HOLD_AT_MOST)
 }
 
+/// One piece of held engine work. Each one holds the UI thread inside the
+/// engine for 20-120 ms: one in each tick, so the window paints and takes
+/// input between them.
+#[derive(Debug, PartialEq, Eq)]
+enum Held {
+    /// A view is made for a tab on screen.
+    Shown,
+    /// The keyboard to the active page.
+    Focus,
+    /// A view that is ready is wired.
+    Ready,
+    /// A view is made for a tab out of sight.
+    Wake,
+    Spare,
+    /// Work is left, but the strip moves or the engine makes enough views now.
+    Wait,
+    Done,
+}
+
+/// The held work, counted.
+#[derive(Clone, Copy, Debug, Default)]
+struct Work {
+    /// Tabs on screen that wait for their view.
+    shown: usize,
+    focus: bool,
+    ready: usize,
+    wakes: usize,
+    spare: bool,
+}
+
+/// The next piece of held work. A page on screen is what the person waits
+/// for: it goes first, also while the strip moves. Then, at rest, the
+/// keyboard, views that are ready, new views and the spare. New views are
+/// made at most `MAX_IN_FLIGHT` at once.
+fn next_held(work: Work, in_flight: usize, at_rest: bool) -> Held {
+    let room = in_flight < MAX_IN_FLIGHT;
+    if work.shown > 0 && room {
+        Held::Shown
+    } else if !at_rest {
+        Held::Wait
+    } else if work.focus {
+        Held::Focus
+    } else if work.ready > 0 {
+        Held::Ready
+    } else if work.wakes > 0 && room && work.shown == 0 {
+        Held::Wake
+    } else if work.wakes > 0 || work.shown > 0 {
+        Held::Wait
+    } else if work.spare {
+        Held::Spare
+    } else {
+        Held::Done
+    }
+}
+
 impl App {
     /// A tab needs its view. Making one holds the UI thread inside the
     /// engine for 50-120 ms. For a tab in the background nobody waits on
     /// the page, so the making waits until the strip is at rest: its slide
     /// never pays for it. A tab on screen is the page the person waits for,
-    /// and goes at once (from the spare when there is one, a few ms).
+    /// and goes at once (from the spare when there is one, a few ms), unless
+    /// the engine already makes `MAX_IN_FLIGHT` views: then it goes first
+    /// when one is done, if it is still on screen then. A quick walk over
+    /// sleeping tabs thus makes the views of the tabs it stops on, not of
+    /// each tab it passes.
     pub(super) fn wake(&mut self, id: u64) {
         let private = self.tabs.get(id).is_some_and(|t| t.private);
         let cheap = !private
             && self.env.is_some()
             && (self.engine.spare.is_some() || (self.engine.making && self.engine.claim.is_none()));
-        if cheap || self.on_screen(id) {
+        let shown = self.on_screen(id);
+        if cheap || (shown && self.in_flight() < MAX_IN_FLIGHT) {
             self.wake_now(id);
             return;
         }
-        if !self.engine.held_wakes.contains(&id) {
-            self.engine.held_wakes.push(id);
+        let list = if shown { &mut self.engine.shown_wakes } else { &mut self.engine.held_wakes };
+        if !list.contains(&id) {
+            list.push(id);
         }
         self.hold();
+    }
+
+    /// Views the engine makes now.
+    fn in_flight(&self) -> usize {
+        let creating = self.tabs.tabs.iter().filter(|t| matches!(t.live, Live::Creating)).count();
+        // A spare that a tab claimed is that tab's view, counted already.
+        creating + usize::from(self.engine.making && self.engine.claim.is_none())
     }
 
     /// A view is ready: shown now, or once the strip is at rest. The spare
@@ -195,29 +269,52 @@ impl App {
         }
     }
 
-    /// Runs the held engine work if the strip is at rest; else looks again soon.
+    /// Runs one piece of the held engine work; the timer looks again soon
+    /// while work is left.
     fn release_held(&mut self) {
         let now = Instant::now();
-        if !may_release(self.something_moves(now), self.engine.held_since, now) {
-            return;
-        }
-        unsafe {
-            let _ = KillTimer(Some(self.hwnd), TIMER_HELD);
-        }
-        self.engine.held_since = None;
-        for (id, result) in std::mem::take(&mut self.engine.held_ready) {
-            self.controller_ready(id, result);
-        }
-        for id in std::mem::take(&mut self.engine.held_wakes) {
-            self.wake_now(id);
-        }
-        if std::mem::take(&mut self.engine.held_spare) {
-            self.make_spare();
-        }
-        if let Some(id) = self.engine.held_focus.take()
-            && self.tabs.active == Some(id)
-        {
-            self.focus_page();
+        // A tab that left the screen before its turn sleeps on.
+        let shown: Vec<u64> = self.shown_panes().iter().map(|(id, _)| *id).collect();
+        self.engine.shown_wakes.retain(|id| shown.contains(id));
+        let work = Work {
+            shown: self.engine.shown_wakes.len(),
+            focus: self.engine.held_focus.is_some(),
+            ready: self.engine.held_ready.len(),
+            wakes: self.engine.held_wakes.len(),
+            spare: self.engine.held_spare,
+        };
+        let at_rest = may_release(self.something_moves(now), self.engine.held_since, now);
+        match next_held(work, self.in_flight(), at_rest) {
+            Held::Shown => {
+                let id = self.engine.shown_wakes.remove(0);
+                self.wake_now(id);
+            }
+            Held::Focus => {
+                if let Some(id) = self.engine.held_focus.take()
+                    && self.tabs.active == Some(id)
+                {
+                    self.focus_page();
+                }
+            }
+            Held::Ready => {
+                let (id, result) = self.engine.held_ready.remove(0);
+                self.controller_ready(id, result);
+            }
+            Held::Wake => {
+                let id = self.engine.held_wakes.remove(0);
+                self.wake_now(id);
+            }
+            Held::Spare => {
+                self.engine.held_spare = false;
+                self.make_spare();
+            }
+            Held::Wait => {}
+            Held::Done => {
+                unsafe {
+                    let _ = KillTimer(Some(self.hwnd), TIMER_HELD);
+                }
+                self.engine.held_since = None;
+            }
         }
     }
 

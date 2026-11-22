@@ -1472,7 +1472,11 @@ impl App {
         }
         self.extensions_view_ready();
         self.show_active();
-        self.focus_page();
+        // Moving the keyboard waits on the engine's process: only for the
+        // page that takes it, not for each view made out of sight.
+        if self.tabs.active == Some(id) {
+            self.focus_page();
+        }
         self.invalidate();
     }
 
