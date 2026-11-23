@@ -270,11 +270,17 @@ function Start-Nea([int]$n, [string[]]$urls) {
     for ($i = 0; $i -lt $n; $i++) { $saved += @{ url = $urls[$i]; title = "Tab $i"; pinned = $false } }
     $session = @{ tabs = $saved; active = 0; vertical_tabs = $false; sidebar_collapsed = $false; window = @(60, 60, 1460, 960); maximized = $false }
     [IO.File]::WriteAllText((Join-Path $dir 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))
+    # The blocker lists are marked fresh, so nothing is downloaded.
+    New-Item -ItemType Directory -Path (Join-Path $dir 'shield') | Out-Null
+    [IO.File]::WriteAllText((Join-Path $dir 'shield\updated'), '')
     $env:NEA_DATA_DIR = $dir
     $env:NEA_BENCH = '1'
     $env:NEA_BENCH_PIPE = 'memory-' + [Guid]::NewGuid().ToString('N').Substring(0, 6)
     $env:NEA_CREDENTIAL_PREFIX = 'nea-memory-test'
-    if ($EngineArgs) { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $EngineArgs }
+    # Without -Heavy, each host other than the loopback resolves to nothing:
+    # the run sends nothing outside this computer.
+    $engine = if ($Heavy) { $EngineArgs } else { ('--host-resolver-rules="MAP * ~NOTFOUND, EXCLUDE 127.0.0.1, EXCLUDE *.localhost" ' + $EngineArgs).Trim() }
+    if ($engine) { $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $engine }
     $process = Start-Process -FilePath $Exe -PassThru
     Connect-Nea -TimeoutSec 20
     $ping = Invoke-Nea ping

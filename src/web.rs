@@ -65,6 +65,8 @@ pub enum Event {
     Vault(u64, crate::vault_watch::Message),
     /// The profile answered an extensions request (see `extension_host`).
     Extension(crate::extension_host::HostEvent),
+    /// Where the page of a tab is scrolled: tab, address, x, y (`read_scroll`).
+    Scrolled(u64, String, i64, i64),
 }
 
 impl Event {
@@ -90,6 +92,7 @@ impl Event {
             Event::Download(_) => &"event:Download",
             Event::Vault(..) => &"event:Vault",
             Event::Extension(_) => &"event:Extension",
+            Event::Scrolled(..) => &"event:Scrolled",
         }
     }
 
@@ -120,7 +123,8 @@ impl Event {
             | Event::NavHistory(id, ..)
             | Event::WebMessage(id, ..)
             | Event::FullScreen(id)
-            | Event::Vault(id, _) => *id,
+            | Event::Vault(id, _)
+            | Event::Scrolled(id, ..) => *id,
             _ => 0,
         }
     }
@@ -192,6 +196,9 @@ pub struct WebTab {
     /// false before the view is wired: no capture, no account menu.
     pub passwords: bool,
     find: Option<ICoreWebView2Find>,
+    /// Shown out of the window, 1 pixel high, since then, so that the
+    /// engine drops what draws it at full size (refer to `park`).
+    parked: Option<std::time::Instant>,
 }
 
 /// `extensions`: whether pages may run browser extensions. Fixed for the
@@ -311,8 +318,16 @@ impl WebTab {
                 controller.SetIsVisible(false)?;
             }
             let shown = parked.then_some(bounds);
-            let tab =
-                WebTab { controller, webview, suspended: false, lowered: false, shown, passwords: true, find: None };
+            let tab = WebTab {
+                controller,
+                webview,
+                suspended: false,
+                lowered: false,
+                shown,
+                passwords: true,
+                find: None,
+                parked: None,
+            };
             tab.apply_theme(theme);
 
             let settings = tab.webview.Settings()?;
@@ -525,6 +540,7 @@ impl WebTab {
                 }
                 self.lowered = false;
             }
+            self.parked = None;
             if self.shown != Some(bounds) {
                 let _doing = crate::diag::doing(&"view:bounds", 0);
                 let _ = self.controller.SetBounds(bounds);
@@ -537,12 +553,14 @@ impl WebTab {
         }
     }
 
-    /// Whether the view is on screen (shown, and not hidden since).
+    /// Whether the view is on screen (shown, and not hidden since). A
+    /// parked view is not: nobody sees it.
     pub fn is_shown(&self) -> bool {
-        self.shown.is_some()
+        self.shown.is_some() && self.parked.is_none()
     }
 
     pub fn hide(&mut self) {
+        self.parked = None;
         if self.shown.take().is_some() {
             unsafe {
                 let _ = self.controller.SetIsVisible(false);
@@ -570,6 +588,34 @@ impl WebTab {
         self.lowered = true;
     }
 
+    /// Before a suspend: the hidden view is shown again out of the window
+    /// (nobody sees it), as high as one pixel and as wide as before. The
+    /// engine keeps the surfaces of a hidden view at the size it was last
+    /// drawn at, approximately 11 MB in the GPU process at 1400 x 900; it
+    /// draws one frame at the new size and lets them go. The width stays,
+    /// so the text of the page keeps its lines and its scroll position.
+    pub fn park(&mut self, now: std::time::Instant) {
+        if self.shown.is_some() || self.suspended {
+            return;
+        }
+        let mut bounds = RECT::default();
+        unsafe {
+            let _ = self.controller.Bounds(&mut bounds);
+        }
+        let parked = crate::memory::parked_bounds(bounds);
+        unsafe {
+            let _ = self.controller.SetBounds(parked);
+            let _ = self.controller.SetIsVisible(true);
+        }
+        self.shown = Some(parked);
+        self.parked = Some(now);
+    }
+
+    /// How long the view is parked, or `None` when it is not.
+    pub fn parked_for(&self, now: std::time::Instant) -> Option<std::time::Duration> {
+        self.parked.map(|at| now.saturating_duration_since(at))
+    }
+
     /// Second stage of sleeping: the engine stops timers and scripts and
     /// trims memory. Fails on its own if the page plays audio.
     pub fn suspend(&mut self) {
@@ -592,6 +638,31 @@ impl WebTab {
             }
         }
         playing.as_bool()
+    }
+
+    /// Asks where the page is scrolled; the answer comes as `Event::Scrolled`.
+    pub fn read_scroll(&self, id: u64) {
+        let url = self.source();
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(move |result, json| {
+            if result.is_ok()
+                && let Some((x, y)) = parse_scroll(&json)
+            {
+                push(Event::Scrolled(id, url, x, y));
+            }
+            Ok(())
+        }));
+        unsafe {
+            let _ = self.webview.ExecuteScript(&HSTRING::from(SCROLL_SCRIPT), &handler);
+        }
+    }
+
+    /// Scrolls a page that just loaded to (`x`, `y`), unless it scrolled
+    /// already on its own (or the person did).
+    pub fn restore_scroll(&self, x: i64, y: i64) {
+        let handler = ExecuteScriptCompletedHandler::create(Box::new(|_, _| Ok(())));
+        unsafe {
+            let _ = self.webview.ExecuteScript(&HSTRING::from(restore_scroll_script(x, y)), &handler);
+        }
     }
 
     pub fn back(&self) {
@@ -750,6 +821,24 @@ impl WebTab {
             let _ = self.controller.Close();
         }
     }
+}
+
+/// The page's scroll position, as the JSON array `[x, y]` in pixels.
+const SCROLL_SCRIPT: &str = "[Math.round(window.scrollX), Math.round(window.scrollY)]";
+
+/// The answer of `SCROLL_SCRIPT`, or `None` when it is not two numbers.
+pub fn parse_scroll(json: &str) -> Option<(i64, i64)> {
+    let values: Vec<f64> = serde_json::from_str(json).ok()?;
+    match values[..] {
+        [x, y] if x.is_finite() && y.is_finite() => Some((x as i64, y as i64)),
+        _ => None,
+    }
+}
+
+/// Goes to (`x`, `y`) only from the top: a page that the person (or the
+/// page) scrolled already stays where it is.
+pub fn restore_scroll_script(x: i64, y: i64) -> String {
+    format!("if (!window.scrollX && !window.scrollY) window.scrollTo({x}, {y});")
 }
 
 /// What the engine says about a process that failed, for the log.

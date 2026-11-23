@@ -203,6 +203,8 @@ struct App {
     painted_sheet: Option<tabbar::Sheet>,
     engine: engine_ui::EngineUi,
     memory: memory_ui::MemoryUi,
+    /// Where the pages were scrolled when they left the screen (`memory::ScrollMemo`).
+    scrolls: crate::memory::ScrollMemo,
     power: power_ui::PowerUi,
     fullscreen: fullscreen_ui::FullscreenUi,
 }
@@ -435,6 +437,7 @@ pub fn run() -> windows::core::Result<()> {
         painted_sheet: None,
         engine: Default::default(),
         memory: Default::default(),
+        scrolls: Default::default(),
         power: Default::default(),
         fullscreen: Default::default(),
     };
@@ -1254,6 +1257,7 @@ impl App {
             return;
         }
         let private = tab.private;
+        self.scrolls.woke(id);
         if !private && self.take_spare(id) {
             if let Some(tab) = self.tabs.get_mut(id) {
                 tab.live = Live::Creating;
@@ -1329,6 +1333,9 @@ impl App {
         }
         if let Some(leaving) = self.tabs.active {
             self.capture_thumb(leaving);
+            if let Some(Live::Ready(web)) = self.tabs.get(leaving).map(|t| &t.live) {
+                web.read_scroll(leaving);
+            }
             self.fullscreen_tab_leaves(leaving);
         }
         // A tab of a folded group (Ctrl+K, Ctrl+1…8) unfolds it.
@@ -1414,6 +1421,7 @@ impl App {
     fn close_one(&mut self, id: u64) {
         self.fullscreen_tab_leaves(id);
         self.forget_thumb(id);
+        self.scrolls.forget(id);
         self.curtain.closed(id);
         let heir = self.unpair_closing(id);
         if let Some(tab) = self.tabs.close(id)
@@ -1545,10 +1553,13 @@ impl App {
                 suspended: web.suspended,
             };
             let step = crate::memory::step(&facts, &policy, pressure);
+            // A page on screen in a minimized window comes back first: it
+            // keeps what draws it (refer to `memory::park_step`).
+            let park = !pressure && !shown;
             match step {
                 crate::memory::Step::Discard => to_discard.push((tab.last_active, tab.id, Some(facts))),
                 crate::memory::Step::Keep => {}
-                step => stages.push((tab.last_active, tab.id, step)),
+                step => stages.push((tab.last_active, tab.id, step, park)),
             }
             if step != crate::memory::Step::Discard && !tab.pinned && !tab.private && !awake && !shown {
                 capped.push((tab.last_active, tab.id));
@@ -1587,7 +1598,7 @@ impl App {
                     facts.playing_audio = true;
                     let step = crate::memory::step(&facts, &policy, pressure);
                     if step != crate::memory::Step::Keep {
-                        stages.insert(0, (now, id, step));
+                        stages.insert(0, (now, id, step, !pressure));
                     }
                 }
                 continue;
@@ -1607,10 +1618,21 @@ impl App {
             more |= !stages.is_empty();
         } else {
             more |= stages.len() > STAGES_PER_TICK;
-            for (_, id, step) in stages.into_iter().take(STAGES_PER_TICK) {
+            for (_, id, step, park) in stages.into_iter().take(STAGES_PER_TICK) {
                 if let Some(Live::Ready(web)) = self.tabs.get_mut(id).map(|t| &mut t.live) {
                     match step {
-                        crate::memory::Step::Suspend => web.suspend(),
+                        crate::memory::Step::Suspend => {
+                            let parked = web.parked_for(now);
+                            match crate::memory::park_step(park, parked) {
+                                crate::memory::Park::Start => {
+                                    let _doing = crate::diag::doing(&"view:park", id);
+                                    web.park(now);
+                                    more = true;
+                                }
+                                crate::memory::Park::Wait => more = true,
+                                crate::memory::Park::Done => web.suspend(),
+                            }
+                        }
                         crate::memory::Step::Lower => web.lower(),
                         crate::memory::Step::Keep | crate::memory::Step::Discard => {}
                     }
@@ -1696,6 +1718,11 @@ impl App {
                 if ok && self.visible_tabs().contains(&id) {
                     self.capture_thumb(id);
                 }
+                if let Some(Live::Ready(web)) = self.tabs.get(id).map(|t| &t.live)
+                    && let Some((x, y)) = self.scrolls.arrived(id, &web.source(), ok)
+                {
+                    web.restore_scroll(x, y);
+                }
                 self.invalidate();
             }
             Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
@@ -1723,6 +1750,11 @@ impl App {
             Event::FullScreen(id) => self.page_fullscreen(id),
             Event::Download(download) => self.on_download(download),
             Event::Vault(id, message) => self.on_vault_message(id, message),
+            Event::Scrolled(id, url, x, y) => {
+                if self.tabs.get(id).is_some() {
+                    self.scrolls.left(id, &url, x, y);
+                }
+            }
             Event::Extension(event) => self.on_extension_event(event),
         }
     }

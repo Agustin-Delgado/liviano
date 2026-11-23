@@ -12,8 +12,31 @@ A tab that is not on screen goes through these stages:
 | Stage | When | What the engine does | Cost to come back |
 |---|---|---|---|
 | Lowered | 20 s after the tab left the screen | Memory target level "low": it drops caches and decoded images. Scripts and timers continue. | A few milliseconds |
-| Suspended | After the "suspend" setting (60 s) | `TrySuspend`: scripts and timers stop, and the working set is trimmed | A resume |
-| Discarded | After the "discard" setting (15 min) | The view and its renderer close. Only the address and the title stay. | The page loads again |
+| Suspended | After the "suspend" setting (60 s) | First the view is parked (see below). Then `TrySuspend`: scripts and timers stop, and the working set is trimmed | A resume |
+| Discarded | After the "discard" setting (15 min) | The view and its renderer close. The address, the title and the scroll position stay. | The page loads again, at the same scroll position |
+
+### Parked before the suspend
+
+The engine keeps the surfaces of a hidden view at the size that it last
+drew (DirectComposition surfaces in the GPU process, 4 to 11 MB for
+each view at 1400 × 900, as the page uses more or fewer layers). A smaller size or another parent window
+does not free them while the view is hidden: the engine lets them go only
+after it draws the view at the new size, and it draws only a visible view.
+Thus, when a view is due for its suspend, Nea first parks it: the view is
+visible again, but 1000 pixels above the client area of the window (the
+system clips it away, so nobody sees it), 1 pixel high and as wide as
+before. On the next sleep tick (200 ms or more later) Nea hides and
+suspends it. A longer park frees no more (10 tabs, GPU process after
+90 s: 145 MB with 200 ms, 600 ms and 1500 ms; 182 to 192 MB without a
+park). The width stays the same, so the text keeps its lines and
+the page keeps its scroll position.
+
+The page sees this: one `visibilitychange` to "visible" and back to
+"hidden" in less than a second, and one `resize` (height 1). When the tab
+comes back, it gets one more `resize`. The first frame after the return
+took 15 to 46 ms (before: 15 to 174 ms; the views without a park were
+slower to come back, not faster). Under memory pressure, and for a page
+on screen in a minimized window, there is no park.
 
 A suspended view gives back its working set, but it keeps most of its
 commit (approximately 50 MB for each page in the test). Thus Nea also keeps
@@ -29,7 +52,7 @@ stay live while you go back and forth, but not for the rest of the day.
 With 10 tabs, this decreases the commit after 5 min from 740 MB to 512 MB.
 Each live view out of sight costs approximately 64 MB of commit: 50 MB in
 its renderer, 8.5 MB in the GPU process and 5.5 MB in the browser process
-(1400 × 900 window).
+(1400 × 900 window). After the park, the GPU part is approximately 0.
 
 The time that the computer sleeps does not count as idle time: after the
 resume, each tab is as idle as it was before the sleep.
@@ -45,6 +68,28 @@ a pointer move (except when memory is low).
 Nea also makes at most 2 views at the same time. A tab on screen goes
 before the tabs out of sight. When a tab leaves the screen before its view
 is started, it stays asleep.
+
+## Back to a discarded tab
+
+A discarded tab loads its page again when it comes back. Its back and
+forward history is lost (WebView2 cannot keep it), and so are the form
+fields and the state of the page's scripts. Nea keeps the scroll
+position: when a tab leaves the screen, Nea reads `scrollX` and `scrollY`
+of the page. When the view is made again after a discard and the page
+loads at the same address, Nea scrolls it there, if the page is still at
+the top. Only the page itself scrolls back, not a box that scrolls inside
+it. The hover card keeps its last picture of the page.
+
+## Same site, one environment
+
+All the tabs share one WebView2 environment and one profile (private tabs
+use a second profile in the same browser process). Thus there is one
+browser process, one GPU process and one network service. Each tab that
+the person opens gets its own renderer, also for the same site: 4 tabs of
+one site had 4 renderers (approximately 64 MB each with the test page).
+`--process-per-site` puts them in one renderer, with the costs above. The
+engine's feature `ProcessPerSiteUpToMainFrameThreshold` is in the engine,
+but it changed nothing (4 renderers with a threshold of 4).
 
 ## Minimized window
 
@@ -100,10 +145,40 @@ does these steps immediately:
   | `--enable-low-end-device-mode` | 741 MB | 16-bit textures and smaller caches: the pages look worse |
   | `--enable-features=InvisibleWindowSwapchainRecreate` | 767 MB | No change |
 
-- No smaller bounds for a hidden view. The GPU commit of a live view
+- No smaller bounds while hidden. The GPU commit of a live view
   increases with the size of the window (8.5 MB for each view at
   1400 × 900, 4 MB at 700 × 500), but the engine keeps it while the view is
-  hidden, also when the view is made 1 pixel high. Only a discard frees it.
+  hidden, also when the view is made 1 pixel high or 0 × 0, or moved to
+  another parent window (pass 3, 10 tabs: GPU 190 and 192 MB, before 179
+  to 192 MB). Only a view that draws at the new size frees it: refer to
+  "Parked before the suspend".
+- No `--disable-direct-composition` and no `--in-process-gpu`. Both save
+  much memory (10 tabs: 618 MB and 609 MB of commit, before 745 MB; 1 tab:
+  199 MB and 173 MB, before 247 MB): without DirectComposition, the GPU
+  process does not keep surfaces for hidden views, and `--in-process-gpu`
+  also turns DirectComposition off. But the pages lose frames: a page that
+  scrolls at 120 Hz dropped 2 to 19 frames out of 960 (before: 0 or 1),
+  and 3 to 104 with `--in-process-gpu`. `--in-process-gpu` also puts the
+  GPU driver in the browser process: a GPU crash then ends the engine and
+  reloads all the tabs. And without DirectComposition there are no
+  hardware overlays for video.
+- No other engine switches of pass 3 (1 tab, total commit, 247 to 250 MB
+  without a switch): `--enable-features=NetworkServiceInProcess` 248,
+  `--gpu-rasterization-msaa-sample-count=0` 248,
+  `--disable-accelerated-2d-canvas` 249, `--enable-zero-copy` 247,
+  `--disable-gpu-shader-disk-cache` 247, `--disable-features=SkiaGraphite`
+  246, `--js-flags=--max-semi-space-size=2` 247. With 10 tabs,
+  `--disable-features=DCompPresenter` 746 (before 745). The browser
+  process loads only the engine and its telemetry DLLs (`telclient.dll`,
+  `oneds.dll`, 7.5 MB of image); there is nothing else to cut there.
+- No memory target "low" for the tab on screen. Set after 1 min on a
+  visible page, it decreased the working set of the tree from 165 MB to
+  100 MB, but it increased the commit from 281 MB to 312 MB, and the page
+  lost a few more frames. The working set comes back when the page draws.
+- No forced purge through DevTools (`Memory.simulatePressureNotification`
+  "critical" and `HeapProfiler.collectGarbage` at the "lowered" stage):
+  with 10 tabs, the renderers kept 447 MB (before 446 to 450 MB), and the
+  GPU process increased by 8 MB.
 
 ## Leaks
 
@@ -130,8 +205,14 @@ have limits.
 
 `tools/memory.ps1` measures the private working set and the commit of the
 process tree of the instance that it starts, by process type. It serves
-local pages on the loopback interface only. With `-Heavy`, it also opens
+local pages on the loopback interface only. Without `-Heavy`, it sends
+nothing outside the computer: the blocker lists are marked fresh, and the
+engine resolves only the loopback addresses. With `-Heavy`, it also opens
 some real pages if they are reachable.
+
+The idle phases depend on the person: Nea's idle trim waits for 2 min with
+no input in the whole session (`GetLastInputInfo`). A run while somebody
+uses the computer does not get it.
 
 ```powershell
 tools\memory.ps1 -Exe C:\Temp\nearam\release\nea.exe -Heavy -Out C:\Temp\memory.json
@@ -197,3 +278,44 @@ With 10 tabs, the live views out of sight cost 455 MB of the 766 MB (9
 renderers), the GPU process 182 MB and the browser process 88 MB. The app
 process is 17 MB. The working set while minimized changes much from run to
 run, because the engine trims its processes when it wants to.
+
+### Pass 3
+
+2026-11-22, same engine, computer and pages, but no real pages: the run
+is offline (tabs 2 to 5 are local pages too). "Before" is commit be0afe8
+(release 0.1.5). Each value is the mean of two runs of each build, one
+after the other (before, after, before, after). The change is the park
+before the suspend: it shows in the phases after the suspend (idle 5 min,
+minimized), in the GPU process.
+
+| Tabs | Phase | Before | After |
+|---:|---|---:|---:|
+| 1 | idle | 154 / 235 | 153 / 234 |
+| 1 | idle 5 min | 143 / 222 | 142 / 221 |
+| 1 | minimized | 5 / 211 | 6 / 209 |
+| 1 | after churn | 131 / 279 | 92 / 270 |
+| 10 | idle | 408 / 771 | 440 / 776 |
+| 10 | idle 5 min | 318 / 510 | 201 / 486 |
+| 10 | minimized | 16 / 497 | 81 / 472 |
+| 10 | after churn | 212 / 827 | 223 / 812 |
+| 40 | idle | 527 / 858 | 528 / 846 |
+| 40 | idle 5 min | 363 / 591 | 240 / 553 |
+| 40 | minimized | 21 / 576 | 14 / 538 |
+| 40 | after churn | 239 / 821 | 278 / 837 |
+
+GPU process commit with 10 tabs after 5 min: 150 MB before, 127 to 136 MB
+after; with 40 tabs, 168 to 210 MB before, 144 to 176 MB after. The
+working set after 5 min is also smaller (by approximately 120 MB, in the
+renderers), but it changes from run to run more than the commit. The
+"minimized" and "after churn" working sets change much from run to run
+(the engine trims when it wants to).
+
+A smaller cap is a choice, not a default. With `live_tabs_out_of_sight`
+set to 4 (2 after 5 min), the same run gave, with 10 tabs: idle
+329 / 535 (default 440 / 776), idle 5 min 55 / 371 (201 / 486); with 40
+tabs: idle 387 / 637 (528 / 846), idle 5 min 239 / 481 (240 / 553). The
+cost: more tabs are discarded, and a discarded tab loads its page again
+when it comes back (approximately 160 ms for the local test page, more
+for a real page; a suspended view shows in 15 to 46 ms). It also loses its
+back and forward history, its form fields and the state of its scripts.
+Its scroll position comes back.

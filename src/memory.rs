@@ -9,10 +9,12 @@
 //!    again (caches, decoded images, garbage). Scripts and timers go on.
 //!    Coming back costs a few milliseconds of decoding.
 //! 2. Suspended, after the "suspend" setting: scripts and timers stop, and
-//!    the engine trims the page's memory. Coming back is a resume.
+//!    the engine trims the page's memory. Coming back is a resume. Just
+//!    before, the view is parked (`park_step`), so that the GPU process
+//!    lets go of the surfaces that drew it.
 //! 3. Discarded, after the "discard" setting: the view and its renderer are
-//!    closed and only the address and the title stay. Coming back loads
-//!    the page again.
+//!    closed and only the address, the title and the scroll position
+//!    (`ScrollMemo`) stay. Coming back loads the page again.
 //!
 //! Stage 2 gives back the working set but not the commit: a suspended view
 //! still holds tens of megabytes. Thus the "live tabs out of sight" setting
@@ -31,7 +33,10 @@
 //! once, the app gives back its own working set, and no spare view is
 //! made ahead of time.
 
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    time::{Duration, Instant},
+};
 
 use windows::Win32::{
     Foundation::{HWND, LPARAM, WPARAM},
@@ -133,6 +138,51 @@ pub fn step(facts: &Facts, policy: &Policy, pressure: bool) -> Step {
     Step::Keep
 }
 
+/// A view is parked this long before it is suspended: time for the engine
+/// to draw one frame at the small size. Each sleep tick that has work left
+/// comes 250 ms or more after the last one.
+pub const PARK_FOR: Duration = Duration::from_millis(200);
+
+/// The next part of a suspend for one view.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Park {
+    /// Park the view now.
+    Start,
+    /// The view is parked; the frame at the small size may not be drawn yet.
+    Wait,
+    /// Suspend the view now.
+    Done,
+}
+
+/// The engine keeps the surfaces of a hidden view at the size that it last
+/// drew (approximately 11 MB of GPU process commit for each view at
+/// 1400 x 900). It lets them go only after it draws the view at a new
+/// size, and it draws only a visible view. Thus a view that is due for a
+/// suspend is first parked (`WebTab::park`): visible again, but out of the
+/// window and 1 pixel high. After `PARK_FOR`, it is hidden and suspended.
+/// `may_park` is false under memory pressure (each tab goes to its last
+/// stage at once) and for a page on screen in a minimized window (it comes
+/// back first, at its size).
+pub fn park_step(may_park: bool, parked_for: Option<Duration>) -> Park {
+    match parked_for {
+        _ if !may_park => Park::Done,
+        None => Park::Start,
+        Some(time) if time < PARK_FOR => Park::Wait,
+        Some(_) => Park::Done,
+    }
+}
+
+/// Where a view is parked, from its bounds in the window: above the
+/// window's client area, where the system clips it away, with the same
+/// width and 1 pixel high.
+pub fn parked_bounds(bounds: windows::Win32::Foundation::RECT) -> windows::Win32::Foundation::RECT {
+    let width = (bounds.right - bounds.left).max(1);
+    windows::Win32::Foundation::RECT { left: 0, top: -PARK_OFFSET, right: width, bottom: -PARK_OFFSET + 1 }
+}
+
+/// How far above the client area a parked view is.
+const PARK_OFFSET: i32 = 1000;
+
 /// A view out of sight for this long counts against half of the cap: the
 /// person went through the recent tabs a while ago, not now.
 pub const LONG_OUT_OF_SIGHT: Duration = Duration::from_secs(5 * 60);
@@ -160,6 +210,58 @@ pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<
         .collect();
     over.reverse();
     over
+}
+
+/// Where each page was scrolled when it last left the screen. A tab that
+/// was discarded since loads its page again when it comes back, and the
+/// page then goes to the same place: the return is a reload, but the
+/// person does not have to look for where they were. Only the position of
+/// the page itself is kept (not of a box that scrolls inside it), and only
+/// while the address is the same.
+#[derive(Default)]
+pub struct ScrollMemo {
+    saved: HashMap<u64, SavedScroll>,
+}
+
+struct SavedScroll {
+    url: String,
+    x: i64,
+    y: i64,
+    /// The view was made again after a discard: its next load restores.
+    woken: bool,
+}
+
+impl ScrollMemo {
+    /// The page of tab `id` (at `url`) was at (`x`, `y`) when it left the
+    /// screen. The top left corner needs nothing.
+    pub fn left(&mut self, id: u64, url: &str, x: i64, y: i64) {
+        if x <= 0 && y <= 0 {
+            self.saved.remove(&id);
+            return;
+        }
+        self.saved.insert(id, SavedScroll { url: url.to_string(), x, y, woken: false });
+    }
+
+    /// The tab gets a new view after a discard: its page loads again.
+    pub fn woke(&mut self, id: u64) {
+        if let Some(saved) = self.saved.get_mut(&id) {
+            saved.woken = true;
+        }
+    }
+
+    /// A page of tab `id` finished loading at `url`. After a discard, the
+    /// place to go to, once: a later load (a link, a reload) keeps its own.
+    pub fn arrived(&mut self, id: u64, url: &str, ok: bool) -> Option<(i64, i64)> {
+        if !self.saved.get(&id)?.woken {
+            return None;
+        }
+        let saved = self.saved.remove(&id)?;
+        (ok && saved.url == url).then_some((saved.x, saved.y))
+    }
+
+    pub fn forget(&mut self, id: u64) {
+        self.saved.remove(&id);
+    }
 }
 
 /// Posts `message` to `hwnd` each time Windows signals that the system is
