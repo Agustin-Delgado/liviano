@@ -71,7 +71,7 @@ from `secure.fanboy.co.nz`, which it downloads with the other lists.
 
 Nea has no accounts, no sync, no telemetry and no crash reports. Nea sends
 only these items to the network: the pages that you open, their icons and the
-daily update check. You can turn off the update check. The field sends
+update check. You can turn off the update check. The field sends
 nothing until you press Enter. The suggestions come from the local history.
 
 | Data | Location |

@@ -83,6 +83,8 @@ use windows::Win32::{
 };
 
 fn main() -> windows::core::Result<()> {
+    // "Restart to update": the instance that started this one closes first.
+    updater::wait_for_previous();
     unsafe {
         CoInitializeEx(None, COINIT_APARTMENTTHREADED).ok()?;
         // The manifest already asks for this; the call covers a build without it.
@@ -101,5 +103,11 @@ fn main() -> windows::core::Result<()> {
         return Ok(());
     }
     diag::install(&storage::data_dir());
-    app::run()
+    app::run()?;
+    // The window closed and saved the session: the new instance applies
+    // the update before its window exists.
+    if updater::restart_requested() {
+        updater::relaunch();
+    }
+    Ok(())
 }

@@ -61,7 +61,8 @@ The method, the versions and the other scenarios are in
 - **Chrome extensions** from the Web Store, with
   [known limitations](docs/extensions.md).
 - **Light, dark or system theme.** The animations obey the Windows setting.
-- **Daily updates** with an Ed25519 signature.
+- **Signed updates** with an Ed25519 signature. Nea checks every 4 hours
+  and shows **Update** when a new version is ready.
 
 The status of each feature and the screenshots are in
 [docs/features.md](docs/features.md). The [showcase](docs/showcase/README.md)
@@ -103,8 +104,12 @@ that the file is the published one, compare its SHA-256 hash with
 Get-FileHash .\nea.exe -Algorithm SHA256
 ```
 
-Nea checks for updates once a day. It installs an update only if the Ed25519
-signature of the update is correct.
+Nea checks for updates soon after it starts and then every 4 hours. It keeps
+an update only if the Ed25519 signature of the update is correct. When an
+update is ready, a small **Update** button shows next to the gear. Click it
+(or select **Restart to update** in the menu of the tab strip) to restart
+Nea. Nea saves your tabs, starts the new version and opens your tabs again.
+If you do not click it, Nea installs the update at the next start.
 
 ### Build from the source code
 
@@ -145,7 +150,7 @@ You can change all shortcuts in Settings. The full list is in
 
 Nea has no accounts, no sync, no telemetry and no crash reports. Nea sends
 only these items to the network: the pages that you open, their icons, the
-filter lists and the daily update check. You can turn off the update check.
+filter lists and the update check. You can turn off the update check.
 
 - **Ads and trackers:** Nea blocks them at the network level with EasyList and
   EasyPrivacy.
@@ -176,7 +181,7 @@ a review before the merge.
 
 Privacy: this program will not transfer any information to other networked
 systems unless specifically requested by the user or the person installing
-or operating it. The pages that you open, the filter lists and the daily
+or operating it. The pages that you open, the filter lists and the
 update check are the only network traffic. [Privacy](#privacy) and
 [docs/privacy.md](docs/privacy.md) give the details.
 

@@ -247,12 +247,17 @@ impl App {
         const TAB_LAYOUT: usize = 1;
         const SIDEBAR: usize = 2;
         const NEW_TAB: usize = 3;
+        const RESTART: usize = 4;
         let chosen = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("New tab"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, TAB_LAYOUT, &wide(layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));
+            if let Some(version) = &self.update {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                let _ = AppendMenuW(menu, MF_STRING, RESTART, &wide(&super::update_ui::restart_label(version)));
+            }
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
@@ -268,6 +273,7 @@ impl App {
             TAB_LAYOUT => self.run(Command::ToggleTabLayout),
             SIDEBAR => self.run(Command::ToggleSidebar),
             NEW_TAB => self.run(Command::NewTab),
+            RESTART => self.restart_to_update(),
             _ => {}
         }
     }

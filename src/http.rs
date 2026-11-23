@@ -96,6 +96,32 @@ fn open(handle: *mut core::ffi::c_void, what: &str) -> Result<Handle, String> {
 /// Streams the body of a 200 response into `sink`, at most `limit` bytes.
 /// Redirects are followed (WinHTTP never follows https to http).
 pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
+    match fetch(url, limit, sink, None)? {
+        Fetched::Body { written, .. } => Ok(written),
+        Fetched::NotModified => Err("HTTP 304".into()),
+    }
+}
+
+/// The result of a conditional GET.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Fetched {
+    /// The server sent the body (status 200). `etag` is its `ETag` header,
+    /// or empty.
+    Body { written: u64, etag: String },
+    /// The entity tag of the request is still current (status 304). The
+    /// server sent no body.
+    NotModified,
+}
+
+/// An entity tag that can go into a request header: printable ASCII only,
+/// so that a changed state file cannot add a header line.
+pub fn valid_etag(etag: &str) -> bool {
+    !etag.is_empty() && etag.len() <= 256 && etag.bytes().all(|b| (0x21..=0x7e).contains(&b))
+}
+
+/// The same as `get`, but with `If-None-Match: <etag>` when `etag` is a
+/// valid tag. Then a 304 response is `Fetched::NotModified`.
+pub fn fetch(url: &str, limit: u64, sink: &mut dyn Write, etag: Option<&str>) -> Result<Fetched, String> {
     let parsed = parse(url).ok_or_else(|| format!("invalid address: {url}"))?;
     if !allowed(&parsed) {
         return Err(format!("https only: {url}"));
@@ -122,7 +148,10 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             ),
             "WinHttpOpenRequest",
         )?;
-        WinHttpSendRequest(request.0, None, None, 0, 0, 0).map_err(|e| format!("no connection ({})", e.code()))?;
+        let header: Option<Vec<u16>> =
+            etag.filter(|t| valid_etag(t)).map(|t| format!("If-None-Match: {t}").encode_utf16().collect());
+        WinHttpSendRequest(request.0, header.as_deref(), None, 0, 0, 0)
+            .map_err(|e| format!("no connection ({})", e.code()))?;
         WinHttpReceiveResponse(request.0, std::ptr::null_mut()).map_err(|e| format!("no response ({})", e.code()))?;
         let mut status = 0u32;
         let mut size = std::mem::size_of::<u32>() as u32;
@@ -135,9 +164,13 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             std::ptr::null_mut(),
         )
         .map_err(|e| e.to_string())?;
+        if status == 304 && header.is_some() {
+            return Ok(Fetched::NotModified);
+        }
         if status != 200 {
             return Err(format!("HTTP {status}"));
         }
+        let etag = header_text(request.0, WINHTTP_QUERY_ETAG).filter(|t| valid_etag(t)).unwrap_or_default();
         let mut buffer = vec![0u8; 64 * 1024];
         let mut total = 0u64;
         loop {
@@ -145,7 +178,7 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             WinHttpReadData(request.0, buffer.as_mut_ptr() as *mut _, buffer.len() as u32, &mut read)
                 .map_err(|e| e.to_string())?;
             if read == 0 {
-                return Ok(total);
+                return Ok(Fetched::Body { written: total, etag });
             }
             total += read as u64;
             if total > limit {
@@ -154,6 +187,28 @@ pub fn get(url: &str, limit: u64, sink: &mut dyn Write) -> Result<u64, String> {
             sink.write_all(&buffer[..read as usize]).map_err(|e| e.to_string())?;
         }
     }
+}
+
+/// The text of one response header, if the response has it.
+///
+/// # Safety
+/// `request` is an open WinHTTP request that has its response.
+unsafe fn header_text(request: *mut core::ffi::c_void, query: u32) -> Option<String> {
+    let mut buffer = [0u16; 512];
+    let mut size = std::mem::size_of_val(&buffer) as u32;
+    unsafe {
+        WinHttpQueryHeaders(
+            request,
+            query,
+            PCWSTR::null(),
+            Some(buffer.as_mut_ptr() as *mut _),
+            &mut size,
+            std::ptr::null_mut(),
+        )
+        .ok()?;
+    }
+    let len = (size as usize / 2).min(buffer.len());
+    String::from_utf16(&buffer[..len]).ok()
 }
 
 #[cfg(all(test, nea_tests))]

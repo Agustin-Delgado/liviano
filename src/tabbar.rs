@@ -33,6 +33,9 @@ pub enum Hit {
     /// The zoom level of the page, shown when it is not 100 %. A click sets
     /// it back to 100 %.
     Zoom,
+    /// "Update", shown when a verified update waits. A click restarts the
+    /// app into the new version.
+    Update,
 }
 
 /// The page's own buttons, after the window's.
@@ -236,6 +239,9 @@ pub struct Layout {
     /// The zoom level of the live page, when it is not 100 %: left of the
     /// gear and the extensions, on their row.
     pub zoom: Option<ZoomChip>,
+    /// The update chip, when a verified update waits for a restart: left of
+    /// the zoom chip (or of what the zoom chip goes beside).
+    pub update: Option<Rect>,
 }
 
 /// The zoom level and where it shows.
@@ -274,9 +280,8 @@ pub fn layout(tabs: &[TabInfo], width: i32, height: i32, vertical: bool, collaps
     layout_with(tabs, &[], width, height, vertical, collapsed, m, None, None)
 }
 
-/// `extensions`: with `Some(pinned)`, the strip also holds the extensions
-/// button and that many pinned extensions (as many as fit). `zoom`: the
-/// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
+/// `layout_chrome` with no update chip.
+#[cfg(all(test, nea_tests))]
 #[allow(clippy::too_many_arguments)]
 pub fn layout_with(
     tabs: &[TabInfo],
@@ -288,6 +293,26 @@ pub fn layout_with(
     m: &Metrics,
     extensions: Option<usize>,
     zoom: Option<u32>,
+) -> Layout {
+    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false)
+}
+
+/// `extensions`: with `Some(pinned)`, the strip also holds the extensions
+/// button and that many pinned extensions (as many as fit). `zoom`: the
+/// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
+/// `update`: the update chip shows (a verified update waits for a restart).
+#[allow(clippy::too_many_arguments)]
+pub fn layout_chrome(
+    tabs: &[TabInfo],
+    groups: &[GroupInfo],
+    width: i32,
+    height: i32,
+    vertical: bool,
+    collapsed: bool,
+    m: &Metrics,
+    extensions: Option<usize>,
+    zoom: Option<u32>,
+    update: bool,
 ) -> Layout {
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
@@ -310,26 +335,48 @@ pub fn layout_with(
             ..Default::default()
         };
         place_zoom(&mut layout, zoom, m);
+        place_update(&mut layout, update, m);
         return layout;
     }
+    let chips = chips_room(zoom.is_some(), update, m);
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
     } else {
-        layout_horizontal(tabs, groups, width, height, m, extensions, zoom.is_some())
+        layout_horizontal(tabs, groups, width, height, m, extensions, chips)
     };
     if let Some(pinned) = extensions {
-        place_extensions(&mut layout, pinned, if zoom.is_some() { zoom_room(m) } else { 0 }, m);
+        place_extensions(&mut layout, pinned, chips, m);
     }
     place_zoom(&mut layout, zoom, m);
+    place_update(&mut layout, update, m);
     layout
 }
 
 /// The zoom chip's width: room for "500%" in the caption type.
 const ZOOM_W: i32 = 40;
+/// The update chip's width: room for "Update" in the caption type, with
+/// the air of the zoom chip on each side.
+const UPDATE_W: i32 = 52;
 
 /// What the zoom chip takes from a row: its width and the gap after it.
 fn zoom_room(m: &Metrics) -> i32 {
     m.px(ZOOM_W) + m.px(2)
+}
+
+/// What the chips that show take from a row, gaps included.
+fn chips_room(zoom: bool, update: bool, m: &Metrics) -> i32 {
+    (if zoom { zoom_room(m) } else { 0 }) + if update { m.px(UPDATE_W) + m.px(2) } else { 0 }
+}
+
+/// The leftmost of the gear, the extensions button and the pinned
+/// extensions: the chips go to its left.
+fn leftmost_control(layout: &Layout) -> Rect {
+    layout
+        .extension_marks
+        .first()
+        .copied()
+        .or((layout.extensions.width() > 0).then_some(layout.extensions))
+        .unwrap_or(layout.settings)
 }
 
 /// The zoom chip goes just left of the leftmost of the gear, the extensions
@@ -337,14 +384,19 @@ fn zoom_room(m: &Metrics) -> i32 {
 fn place_zoom(layout: &mut Layout, zoom: Option<u32>, m: &Metrics) {
     let Some(percent) = zoom else { return };
     let gear = layout.settings;
-    let leftmost = layout
-        .extension_marks
-        .first()
-        .copied()
-        .or((layout.extensions.width() > 0).then_some(layout.extensions))
-        .unwrap_or(gear);
-    let right = leftmost.left - m.px(2);
+    let right = leftmost_control(layout).left - m.px(2);
     layout.zoom = Some(ZoomChip { rect: Rect::new(right - m.px(ZOOM_W), gear.top, right, gear.bottom), percent });
+}
+
+/// The update chip goes left of the zoom chip, or where the zoom chip
+/// goes when it does not show, with the same gap.
+fn place_update(layout: &mut Layout, update: bool, m: &Metrics) {
+    if !update {
+        return;
+    }
+    let gear = layout.settings;
+    let right = layout.zoom.map_or_else(|| leftmost_control(layout), |z| z.rect).left - m.px(2);
+    layout.update = Some(Rect::new(right - m.px(UPDATE_W), gear.top, right, gear.bottom));
 }
 
 /// The gear's width (the extensions button's).
@@ -387,7 +439,7 @@ fn shown_marks(pinned: usize, room: i32, m: &Metrics) -> usize {
 /// The button just left of the gear, its twin: the same size, on the same
 /// row, with the gap that separates back, forward and reload. Pinned ones go
 /// to its left. In the column they stop at its pad, with `reserve` kept
-/// free before it (for the zoom chip).
+/// free before it (for the chips).
 fn place_extensions(layout: &mut Layout, pinned: usize, reserve: i32, m: &Metrics) {
     let (mark_w, gap) = (m.px(28), m.px(2));
     let gear = layout.settings;
@@ -416,7 +468,7 @@ fn layout_horizontal(
     height: i32,
     m: &Metrics,
     extensions: Option<usize>,
-    zoomed: bool,
+    chips: i32,
 ) -> Layout {
     // The strip's edge margin: the air above and under its controls, also
     // left of the capsule and right of the gear. The strip is the controls
@@ -449,11 +501,8 @@ fn layout_horizontal(
     let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
     let start = nav[2].right + pad;
     let settings = Rect::new(width - edge - m.px(SETTINGS_W), item_top, width - edge, item_bottom);
-    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m))
-        + if zoomed { zoom_room(m) } else { 0 }
-        + m.px(SETTINGS_W + 2)
-        + edge
-        + m.px(DRAG_ROOM);
+    let reserved =
+        extensions.map_or(0, |n| extensions_width(n, width, m)) + chips + m.px(SETTINGS_W + 2) + edge + m.px(DRAG_ROOM);
     let available = width - start - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
@@ -619,6 +668,9 @@ impl Layout {
         }
         if self.zoom.is_some_and(|z| z.rect.contains(x, y)) {
             return Some(Hit::Zoom);
+        }
+        if self.update.is_some_and(|r| r.contains(x, y)) {
+            return Some(Hit::Update);
         }
         if !self.strip.contains(x, y) {
             return None;
@@ -1098,6 +1150,9 @@ fn paint_controls(g: &Painter, p: &Paint) {
     if let Some(zoom) = p.layout.zoom {
         paint_zoom(g, zoom, p);
     }
+    if let Some(update) = p.layout.update {
+        paint_update(g, update, p);
+    }
     for (button, rect) in NavButton::ALL.into_iter().zip(p.layout.nav) {
         if rect.width() == 0 {
             continue;
@@ -1129,6 +1184,20 @@ fn paint_zoom(g: &Painter, zoom: ZoomChip, p: &Paint) {
     g.round(rect, size::RADIUS_CONTROL * p.scale, ground);
     let font = Font::new(size::CAPTION * p.scale, size::MEDIUM, Align::Center);
     g.text(&format!("{}%", zoom.percent), rect, font, pal.ink_muted.mix(pal.ink, over));
+}
+
+/// The update chip: the zoom chip's shape and ground, with "Update" in the
+/// brand ink. It is the only brand ink on the strip at rest, but it is
+/// small, and it is there only while an update waits.
+fn paint_update(g: &Painter, update: Rect, p: &Paint) {
+    let pal = p.palette;
+    let rect: RectF = update.into();
+    let over = p.motion.hover(HoverKey::Update);
+    let pressed = p.motion.pressed(HoverKey::Update);
+    let ground = pal.tab_tile.mix(pal.tab_hover, over).mix(pal.pin_live, pressed);
+    g.round(rect, size::RADIUS_CONTROL * p.scale, ground);
+    let font = Font::new(size::CAPTION * p.scale, size::MEDIUM, Align::Center);
+    g.text("Update", rect, font, pal.accent.mix(pal.accent_hover, over));
 }
 
 /// Back and forward as Safari draws them (an open chevron), reload as a
@@ -1262,6 +1331,7 @@ pub enum HoverKey {
     Nav(NavButton),
     Settings,
     Zoom,
+    Update,
 }
 
 impl HoverKey {
@@ -1277,6 +1347,7 @@ impl HoverKey {
             Hit::Nav(b) => [Some(HoverKey::Nav(b)), None],
             Hit::Settings => [Some(HoverKey::Settings), None],
             Hit::Zoom => [Some(HoverKey::Zoom), None],
+            Hit::Update => [Some(HoverKey::Update), None],
         }
     }
 }
@@ -1672,6 +1743,9 @@ impl Motion {
             control(HoverKey::PinnedExtension(i), *mark);
         }
         control(HoverKey::Settings, layout.settings);
+        if let Some(update) = layout.update {
+            control(HoverKey::Update, update);
+        }
         for (button, rect) in NavButton::ALL.into_iter().zip(layout.nav) {
             control(HoverKey::Nav(button), rect);
         }

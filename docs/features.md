@@ -130,7 +130,7 @@ table marks the items that this method cannot test.
 | Private tabs | Verified. They have their own InPrivate profile. Nea writes nothing to the history, the session, Ctrl+Shift+T or settings.json. |
 | Chrome extensions | Verified: install with the "Add to Chrome" button of the Chrome Web Store (Nea asks first), load, remove, the button and pinned extensions. The limitations are in [docs/extensions.md](extensions.md). |
 | Find in page | Verified. |
-| Signed daily updates | Done, with unit tests. The updater uses the releases of this repository. It finds nothing until a release exists. |
+| Signed updates | Verified. Nea checks soon after it starts and then every 4 hours. When a verified update is ready, the **Update** chip next to the gear (and **Restart to update** in the menu of the tab strip) restarts Nea into the new version and opens the tabs again. A development build never downloads or installs an update. The updater uses the releases of this repository. |
 | Script control | Verified. Read [building.md](building.md#script-control). |
 | Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. |
 

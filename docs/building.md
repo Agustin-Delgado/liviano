@@ -103,7 +103,8 @@ and on a manual run, on `windows-latest`:
 
 The development build shows its name in the window title, the shortcut and
 Settings. It does not check for updates. The only exception is an explicit
-`update_url` in `settings.json`.
+`update_url` in `settings.json`. A build that runs from a cargo target folder
+never downloads or installs an update (refer to [Updates](#updates)).
 
 `build.ps1` builds, signs and packages all files into `dist\`:
 
@@ -231,19 +232,54 @@ entries. Then it shows the slow handlers and the contents of `hang.log`.
 
 ## Updates
 
-Once a day, Nea reads a manifest (`latest.json`) in the background. If the
-manifest shows a higher version, Nea downloads the package to
+Nea reads a manifest (`latest.json`) in the background, on its own thread.
+The first check is 20 seconds after Nea starts. Then Nea checks every 4
+hours while it runs. If a check ran less than 10 minutes before the start,
+the start does not check again. Each check sends the `ETag` of the last
+manifest. If the manifest did not change, the server sends 304 and no body.
+
+If the manifest shows a higher version, Nea downloads the package to
 `%LOCALAPPDATA%\Nea\update`. Then it verifies the Ed25519 signature with the
 public key in the program. If the signature is not correct, Nea deletes the
 package.
 
-Nea never restarts automatically. The next time Nea starts, it replaces the
-executable before it shows the window. It keeps the previous executable as
-`nea.old` and deletes it at the next start.
+Nea never restarts automatically. When a verified package is ready, a small
+**Update** chip shows next to the gear (left of the zoom chip). Its tooltip
+shows the version, for example "Restart to update to 0.1.8". The menu of
+the tab strip (right-click an empty area) has the same item. A click does
+these steps:
 
-If the manifest does not respond, Nea tries again the next day. To turn off
-the check, use Settings → Updates. That page also shows the installed
-version.
+1. Nea closes the window as a normal close does. It writes the session and
+   closes the pages.
+2. Nea starts its executable again with the same command-line arguments.
+   The new process gets the ID of the old process in `NEA_RESTART_WAIT`. It
+   waits until the old process stops (20 seconds at most), because the old
+   process holds the profile and the session file until it stops.
+3. The new process replaces the executable before it shows the window, and
+   starts the new version. The new version opens the saved tabs again.
+   Private tabs do not come back, as after a normal close.
+
+If you do not click the chip, the next start installs the update in the same
+way. Nea keeps the previous executable as `nea.old` and deletes it at the
+next start.
+
+If the manifest does not respond, Nea tries again at the next check. Nea
+writes the result of the last check to `update.json` in the data folder
+(`last_result`). To turn off the check, use Settings → Updates. That page
+also shows the installed version.
+
+A build that runs from a cargo target folder never downloads a package and
+never replaces its executable. Nea finds such a build from its path: a
+`target\release` or `target\debug` folder with a `Cargo.toml` above it, or a
+folder that has the cargo folders `deps` and `.fingerprint` next to the
+executable. Then `last_result` tells the reason.
+
+To test the update flow, use a temporary data folder (`NEA_DATA_DIR`), a
+copy of a release build outside the target folder, and an `update_url` in
+`settings.json` that points to a server on `127.0.0.1`. Plain `http` is
+permitted only for this computer. Sign the test package with a test key, and
+build the test copy with the public half of that key in
+`keys/update-public.hex`. Do not commit that change.
 
 ### Sign a release
 

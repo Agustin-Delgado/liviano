@@ -70,6 +70,7 @@ impl App {
         match hit {
             Hit::Settings => Some(with_chord("Settings", Command::Settings)),
             Hit::Zoom => Some(with_chord("Reset zoom to 100%", Command::ResetZoom)),
+            Hit::Update => self.update.as_deref().map(super::update_ui::restart_label),
             Hit::NewTab if !self.layout.vertical => Some(with_chord("New tab", Command::NewTab)),
             Hit::Extensions => Some("Extensions".to_string()),
             Hit::Group(group) => self.group_tip(group),
@@ -84,6 +85,7 @@ impl App {
         match hit {
             Hit::Settings => Some(self.layout.settings),
             Hit::Zoom => self.layout.zoom.map(|z| z.rect),
+            Hit::Update => self.layout.update,
             Hit::NewTab => Some(self.layout.new_tab),
             Hit::Extensions => Some(self.layout.extensions),
             Hit::Group(group) => self.group_tip_anchor(group),

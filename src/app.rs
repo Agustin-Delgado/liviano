@@ -46,6 +46,7 @@ mod power_ui;
 mod private_tabs;
 mod split_ui;
 mod tooltip_ui;
+mod update_ui;
 mod vault_ui;
 mod views_ui;
 
@@ -182,6 +183,9 @@ struct App {
     tracking_mouse: bool,
     drag: Option<u64>,
     session_dirty: bool,
+    /// The version of the verified update that waits for a restart: the
+    /// update chip shows while it is set (refer to `update_ui`).
+    update: Option<String>,
     history_saved: Instant,
     panels: panel_ui::Panels,
     curtain: Curtain,
@@ -361,6 +365,7 @@ pub fn run() -> windows::core::Result<()> {
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
     crate::diag::set_window(hwnd);
+    crate::updater::notify(hwnd.0 as isize, update_ui::WM_APP_UPDATE);
     crate::updater::start(&settings);
     let bench_on = crate::bench::wanted(settings.bench_enabled);
 
@@ -421,6 +426,7 @@ pub fn run() -> windows::core::Result<()> {
         tracking_mouse: false,
         drag: None,
         session_dirty: false,
+        update: None,
         history_saved: Instant::now(),
         panels: Default::default(),
         curtain: Curtain::load(&data),
@@ -689,6 +695,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         memory_ui::WM_APP_LOW_MEMORY => {
             let _doing = crate::diag::doing(&"low memory", 0);
             with_app(|app| app.low_memory());
+            LRESULT(0)
+        }
+        update_ui::WM_APP_UPDATE => {
+            if with_app(|app| app.update_changed()).is_none() {
+                retry_later(hwnd, update_ui::WM_APP_UPDATE, WPARAM(0), LPARAM(0));
+            }
             LRESULT(0)
         }
         crate::bench::WM_APP_BENCH => {
@@ -1005,7 +1017,7 @@ impl App {
         }
         let (width, height) = self.client_size();
         let metrics = Metrics { scale: self.scale };
-        self.layout = tabbar::layout_with(
+        self.layout = tabbar::layout_chrome(
             &self.tab_infos(),
             &self.group_infos(),
             width,
@@ -1015,6 +1027,7 @@ impl App {
             &metrics,
             self.extension_slots(),
             self.zoom_shown(),
+            self.update.is_some(),
         );
         if self.fullscreen.on() {
             self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
@@ -2137,6 +2150,11 @@ impl App {
             Some(Hit::Zoom) => {
                 self.close_omnibar();
                 self.reset_zoom();
+            }
+            Some(Hit::Update) => {
+                self.motion.press(tabbar::HoverKey::Update);
+                self.close_omnibar();
+                self.restart_to_update();
             }
             Some(Hit::PinnedExtension(nth)) => {
                 self.close_omnibar();
