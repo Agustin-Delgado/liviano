@@ -4,7 +4,7 @@
 
 use std::{
     cell::{Cell, RefCell},
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     rc::Rc,
 };
 
@@ -40,9 +40,12 @@ pub enum Event {
     NavigationStarting(u64),
     NavigationCompleted(u64, bool),
     /// A page asked for a new window: tab, address, whether a click or a
-    /// key was behind it. The engine's window is never opened: the app
-    /// opens a tab or blocks it.
-    NewWindow(u64, String, bool),
+    /// key was behind it, and the request that the engine holds until the
+    /// app answers it (`answer_new_window`). The engine's window is never
+    /// opened: the app opens a tab or blocks it.
+    NewWindow(u64, String, bool, NewWindowRequest),
+    /// The page of this tab called `window.close()`.
+    CloseRequested(u64),
     /// A process of the engine died or hung: tab, engine number, and the
     /// kind, which says which process.
     ProcessFailed(u64, u64, COREWEBVIEW2_PROCESS_FAILED_KIND),
@@ -85,6 +88,7 @@ impl Event {
             Event::NavigationStarting(_) => &"event:NavigationStarting",
             Event::NavigationCompleted(..) => &"event:NavigationCompleted",
             Event::NewWindow(..) => &"event:NewWindow",
+            Event::CloseRequested(_) => &"event:CloseRequested",
             Event::ProcessFailed(..) => &"event:ProcessFailed",
             Event::PageClicked(_) => &"event:PageClicked",
             Event::FindChanged(_) => &"event:FindChanged",
@@ -121,6 +125,7 @@ impl Event {
             | Event::NavigationStarting(id)
             | Event::NavigationCompleted(id, _)
             | Event::NewWindow(id, ..)
+            | Event::CloseRequested(id)
             | Event::ProcessFailed(id, ..)
             | Event::PageClicked(id)
             | Event::FindChanged(id)
@@ -136,8 +141,23 @@ impl Event {
     }
 }
 
+/// A `window.open` (or a link to a new window) that the engine holds open
+/// with a deferral until the app gives it the view of the new tab.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NewWindowRequest {
+    pub id: u64,
+    /// The page asked for a window of a given size: a sign-in pop-up, as
+    /// "Sign in with Google" and the other identity providers open it.
+    pub popup: bool,
+}
+
+type HeldNewWindow = (ICoreWebView2NewWindowRequestedEventArgs, ICoreWebView2Deferral);
+
 thread_local! {
     static QUEUE: RefCell<VecDeque<Event>> = const { RefCell::new(VecDeque::new()) };
+    /// The new-window requests that wait for an answer, by `NewWindowRequest::id`.
+    static NEW_WINDOWS: RefCell<HashMap<u64, HeldNewWindow>> = RefCell::new(HashMap::new());
+    static NEXT_NEW_WINDOW: Cell<u64> = const { Cell::new(1) };
     static WINDOW: Cell<isize> = const { Cell::new(0) };
     static GENERATION: Cell<u64> = const { Cell::new(0) };
 }
@@ -207,6 +227,13 @@ pub struct WebTab {
     parked: Option<std::time::Instant>,
 }
 
+/// The engine switches of Nea. FedCM (`navigator.credentials.get` with
+/// `identity`) is off: WebView2 shows no account chooser for it, so a
+/// request stayed open with no end (measured with a local identity
+/// provider). Without it, a site gets `NotSupportedError` at once and uses
+/// its other sign-in path (the pop-up or the iframes of the provider).
+pub const ENGINE_ARGUMENTS: &str = "--disable-features=FedCm";
+
 /// `extensions`: whether pages may run browser extensions. Fixed for the
 /// environment's life, and each extension adds processes, so it is on only
 /// when one is enabled.
@@ -214,6 +241,7 @@ pub fn create_environment(data_dir: &std::path::Path, extensions: bool) -> Resul
     let options = CoreWebView2EnvironmentOptions::default();
     unsafe {
         options.set_are_browser_extensions_enabled(extensions);
+        options.set_additional_browser_arguments(ENGINE_ARGUMENTS.to_string());
     }
     let options: ICoreWebView2EnvironmentOptions = options.into();
     let generation = next_generation();
@@ -276,6 +304,43 @@ pub fn watch_browser(env: &ICoreWebView2Environment, generation: u64) {
     unsafe {
         let _ = env5.add_BrowserProcessExited(&handler, &mut token);
     }
+}
+
+/// Keeps the engine waiting on a new-window request until the app answers
+/// it. Without the deferral, the page got no window back: `window.open`
+/// returned `null`, the new page had no `window.opener`, and a sign-in
+/// pop-up could not give its result to the page that opened it.
+fn hold_new_window(args: &ICoreWebView2NewWindowRequestedEventArgs) -> NewWindowRequest {
+    let id = NEXT_NEW_WINDOW.with(|n| {
+        let id = n.get();
+        n.set(id + 1);
+        id
+    });
+    let mut popup = BOOL(0);
+    unsafe {
+        if let Ok(features) = args.WindowFeatures() {
+            let _ = features.HasSize(&mut popup);
+        }
+        if let Ok(deferral) = args.GetDeferral() {
+            NEW_WINDOWS.with(|w| w.borrow_mut().insert(id, (args.clone(), deferral)));
+        }
+    }
+    NewWindowRequest { id, popup: popup.as_bool() }
+}
+
+/// Answers a held new-window request. With `view`, the page that asked
+/// gets that view as its new window (with `window.opener`), and the engine
+/// loads the address in it. Without, the request ends with no window (a
+/// blocked pop-up). True when the view became the new window. False also
+/// when the request is unknown or belongs to an engine that ended: the
+/// caller then loads the address itself.
+pub fn answer_new_window(request: u64, view: Option<&ICoreWebView2>) -> bool {
+    let Some((args, deferral)) = NEW_WINDOWS.with(|w| w.borrow_mut().remove(&request)) else { return false };
+    let adopted = view.is_some_and(|view| unsafe { args.SetNewWindow(view).is_ok() });
+    unsafe {
+        let _ = deferral.Complete();
+    }
+    adopted
 }
 
 fn modifiers_down() -> (bool, bool, bool) {
@@ -399,8 +464,16 @@ impl WebTab {
                         let mut user = BOOL(0);
                         let _ = args.IsUserInitiated(&mut user);
                         args.SetHandled(true)?;
-                        push(Event::NewWindow(id, take_pwstr(uri), user.as_bool()));
+                        let request = hold_new_window(&args);
+                        push(Event::NewWindow(id, take_pwstr(uri), user.as_bool(), request));
                     }
+                    Ok(())
+                })),
+                &mut token,
+            )?;
+            tab.webview.add_WindowCloseRequested(
+                &WindowCloseRequestedEventHandler::create(Box::new(move |_, _| {
+                    push(Event::CloseRequested(id));
                     Ok(())
                 })),
                 &mut token,

@@ -1482,6 +1482,7 @@ impl App {
         self.scrolls.forget(id);
         self.curtain.closed(id);
         let heir = self.unpair_closing(id);
+        self.opening_closed(id);
         if let Some(tab) = self.tabs.close(id)
             && let Live::Ready(web) = tab.live
         {
@@ -1516,6 +1517,8 @@ impl App {
             return;
         }
         self.fullscreen_tab_leaves(id);
+        // Loaded again later, the page is no longer the window a page opened.
+        self.popups.openings.forget_page(id);
         if let Some(tab) = self.tabs.get_mut(id) {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
@@ -1589,7 +1592,9 @@ impl App {
         let mut stages = Vec::new();
         // Live views out of sight that may still be discarded: what the cap counts.
         let mut capped = Vec::new();
-        let keep_awake: Vec<bool> = self.tabs.tabs.iter().map(|t| self.keeps_awake(&t.url)).collect();
+        // A page that waits for its sign-in pop-up stays live too.
+        let keep_awake: Vec<bool> =
+            self.tabs.tabs.iter().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
         // Both pages of the pair on screen are in use: their idle time starts
         // when they leave the screen, or when the window is minimized.
         let visible = self.visible_tabs();
@@ -1783,7 +1788,8 @@ impl App {
                 }
                 self.invalidate();
             }
-            Event::NewWindow(from, url, user_initiated) => self.new_window(from, url, user_initiated),
+            Event::NewWindow(from, url, user_initiated, request) => self.new_window(from, url, user_initiated, request),
+            Event::CloseRequested(id) => self.page_closed_itself(id),
             Event::ProcessFailed(id, _, kind) => self.process_failed(id, kind),
             Event::PageClicked(id) => self.page_focused(id),
             Event::HistoryChanged(id) => {
@@ -1874,7 +1880,14 @@ impl App {
                     web.set_zoom(tab.zoom);
                 }
                 let url = if tab.url.is_empty() { "about:blank".to_string() } else { tab.url.clone() };
-                web.navigate(&url);
+                // A tab that a page opened gets its page from the engine.
+                if !self.answer_opening(id, &web.webview) {
+                    web.navigate(&url);
+                }
+                let Some(tab) = self.tabs.get_mut(id) else {
+                    web.close();
+                    return;
+                };
                 tab.live = Live::Ready(web);
             }
             Err(_) => {

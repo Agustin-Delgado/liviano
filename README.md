@@ -190,6 +190,7 @@ update check are the only network traffic. [Privacy](#privacy) and
 - [Features](docs/features.md): what Nea does, how it looks and what is verified.
 - [Shortcuts](docs/shortcuts.md).
 - [Privacy and data](docs/privacy.md).
+- [Sign-in with Google](docs/sign-in.md): one sign-in for all sites, and what Nea cannot sync.
 - [Build, install and publish](docs/building.md): `build.ps1`, script control,
   diagnostics and updates.
 - [Memory benchmarks](docs/benchmarks.md).

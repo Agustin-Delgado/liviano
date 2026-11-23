@@ -120,7 +120,8 @@ table marks the items that this method cannot test.
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
 | Floating video | Uses the Picture-in-Picture of the engine. Not verified in this pass, because it needs a page with video. |
 | Ad and tracker blocking | Verified, with an exception for each site in the tab menu. It uses EasyList and EasyPrivacy. A small built-in list applies while they download. Read [privacy.md](privacy.md). |
-| Pop-ups | Verified with local pages. Nea blocks pop-ups that nobody asked for and ad pop-ups. You can allow pop-ups for one site from the tab menu. |
+| Pop-ups | Verified with local pages. Nea blocks pop-ups that nobody asked for and ad pop-ups. You can allow pop-ups for one site from the tab menu. A pop-up opens as a tab that keeps its `window.opener`, and it can close itself. |
+| Sign in to Google one time | Verified without an account: the session cookies stay after a restart, a discard and an engine restart. "Sign in with Google" pop-ups, the Google button and One Tap work with strict tracking prevention. No Chrome Sync. Read [sign-in.md](sign-in.md). |
 | Trackers and cookie banners | Verified. Nea uses the strict tracking prevention of the engine. It hides banners before the first frame (EasyList Cookie List). |
 | Passwords in Credential Manager | Verified. Nea offers to save a password after a sign-in. It never fills in a password without your action. Ctrl+Alt+L opens the panel. |
 | Password import from other browsers | Done for Chrome, Edge, Brave, Vivaldi, Opera, Arc and CSV, all on the local computer. Not verified in this pass, because the tests do not read real profiles. |

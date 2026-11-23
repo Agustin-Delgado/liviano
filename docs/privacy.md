@@ -20,7 +20,8 @@ change the tracking prevention of the engine.
   address as an ad. The lists use `$popup` rules or block a full ad server.
   This stops the popunders that open on the first click.
 - Sign-in pop-ups open (Google, Microsoft, Facebook, Apple, GitHub, PayPal). A
-  test with the real lists checks this.
+  test with the real lists checks this. The pop-up keeps its `window.opener`
+  and can close itself. Refer to [sign-in.md](sign-in.md).
 - When Nea blocks a pop-up, the page shows "Pop-up blocked". To allow pop-ups
   for the site, select "Allow pop-ups on this site" in the tab menu.
 - In a private tab, this permission stays until Nea closes. Nea does not save
@@ -36,7 +37,9 @@ tracking prevention.
 - Measurements show that this level stops scripts from Facebook, Google
   Analytics and Hotjar on other sites. The balanced level, the engine default,
   did not stop them.
-- Sign-ins from Google, Microsoft, GitHub and Amazon continue to work.
+- Sign-ins from Google, Microsoft, GitHub and Amazon continue to work. The
+  Google button and One Tap on other sites can read the `accounts.google.com`
+  cookies (measured), so Nea has no exception for Google.
 - The engine blocks the cookies and the storage of these trackers. It does
   not block the cookies of the site that you visit, such as session cookies.
 - The engine has no site exceptions for this level. The ad blocking exception
