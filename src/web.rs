@@ -59,6 +59,10 @@ pub enum Event {
     Command(Command),
     /// The page of this tab entered or left a full screen element.
     FullScreen(u64),
+    /// The engine changed the zoom factor of this tab's view: the person
+    /// zoomed (Ctrl+wheel, Ctrl+= and Ctrl+-, which the engine handles), or
+    /// a navigation went to a site with a different level.
+    ZoomChanged(u64, f64),
     /// A download started, progressed or ended (see `download_watch`).
     Download(crate::downloads::Download),
     /// The saved-passwords script of a tab said something (see `vault_watch`).
@@ -89,6 +93,7 @@ impl Event {
             Event::WebMessage(..) => &"event:WebMessage",
             Event::Command(_) => &"event:Command",
             Event::FullScreen(_) => &"event:FullScreen",
+            Event::ZoomChanged(..) => &"event:ZoomChanged",
             Event::Download(_) => &"event:Download",
             Event::Vault(..) => &"event:Vault",
             Event::Extension(_) => &"event:Extension",
@@ -123,6 +128,7 @@ impl Event {
             | Event::NavHistory(id, ..)
             | Event::WebMessage(id, ..)
             | Event::FullScreen(id)
+            | Event::ZoomChanged(id, _)
             | Event::Vault(id, _)
             | Event::Scrolled(id, ..) => *id,
             _ => 0,
@@ -445,6 +451,17 @@ impl WebTab {
                 })),
                 &mut token,
             )?;
+            tab.controller.add_ZoomFactorChanged(
+                &ZoomFactorChangedEventHandler::create(Box::new(move |sender, _| {
+                    let mut factor = 1.0;
+                    if let Some(controller) = sender {
+                        controller.ZoomFactor(&mut factor)?;
+                    }
+                    push(Event::ZoomChanged(id, factor));
+                    Ok(())
+                })),
+                &mut token,
+            )?;
             tab.controller.add_AcceleratorKeyPressed(
                 &AcceleratorKeyPressedEventHandler::create(Box::new(move |_, args| {
                     let Some(args) = args else { return Ok(()) };
@@ -565,6 +582,15 @@ impl WebTab {
             unsafe {
                 let _ = self.controller.SetIsVisible(false);
             }
+        }
+    }
+
+    /// The engine keeps the zoom in the view. A navigation to a different
+    /// site can change it, and then the engine sends `ZoomChanged`. It sends
+    /// none for this call.
+    pub fn set_zoom(&self, factor: f64) {
+        unsafe {
+            let _ = self.controller.SetZoomFactor(factor);
         }
     }
 

@@ -28,6 +28,10 @@ pub struct Tab<W> {
     pub test: bool,
     /// The tab group it belongs to (`tab_groups`).
     pub group: Option<u64>,
+    /// The zoom factor of its page (1.0 is 100 %). The engine keeps it in
+    /// the view; the tab keeps it for the next view after a sleep or a
+    /// crash. It is not saved in the session.
+    pub zoom: f64,
 }
 
 impl<W> Tab<W> {
@@ -129,6 +133,7 @@ impl<W> TabList<W> {
                 last_active: Instant::now(),
                 test: false,
                 group: None,
+                zoom: 1.0,
             },
         );
         if !pinned && at.is_some() {

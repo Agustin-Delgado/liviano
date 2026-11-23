@@ -623,6 +623,8 @@ impl App {
             "scale": self.scale,
             "content": [content.left, content.top, content.right, content.bottom],
             "fullscreen": self.fullscreen.on(),
+            "zoom": self.tabs.active_tab().map(|t| (t.zoom * 100.0).round()),
+            "zoom_chip": self.layout.zoom.map(|z| json!({ "percent": z.percent, "rect": [z.rect.left, z.rect.top, z.rect.right, z.rect.bottom] })),
         })
     }
 }

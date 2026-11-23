@@ -988,6 +988,21 @@ impl App {
 
     fn relayout(&mut self) {
         self.tidy_pairs();
+        self.lay_out();
+        self.show_active();
+        self.place_omnibar();
+        self.invalidate();
+    }
+
+    /// The strip's geometry for the client area of now. A minimized window
+    /// keeps the last one: its client area is 0 x 0, and a layout of that
+    /// size has no column. Restored, the window then went from no column to
+    /// a column, which is the user showing it again, and the column slid
+    /// in. `WM_SIZE` lays out again when the window comes back.
+    fn lay_out(&mut self) {
+        if unsafe { IsIconic(self.hwnd) }.as_bool() {
+            return;
+        }
         let (width, height) = self.client_size();
         let metrics = Metrics { scale: self.scale };
         self.layout = tabbar::layout_with(
@@ -999,13 +1014,42 @@ impl App {
             self.collapsed,
             &metrics,
             self.extension_slots(),
+            self.zoom_shown(),
         );
         if self.fullscreen.on() {
             self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
         }
-        self.show_active();
-        self.place_omnibar();
-        self.invalidate();
+    }
+
+    /// The percent of the zoom chip: the zoom of the live page, when it is
+    /// not 100 %.
+    fn zoom_shown(&self) -> Option<u32> {
+        self.tabs.active_tab().and_then(|t| tabbar::zoom_percent(t.zoom))
+    }
+
+    /// The engine changed the zoom of a view. The chip of the live page
+    /// shows the new level, and flashes as a press does, so that each step
+    /// of Ctrl+wheel is seen.
+    fn zoom_changed(&mut self, id: u64, factor: f64) {
+        let Some(tab) = self.tabs.get_mut(id) else { return };
+        if tab.zoom == factor {
+            return;
+        }
+        tab.zoom = factor;
+        if self.tabs.active == Some(id) {
+            self.relayout_soft();
+            self.motion.press(tabbar::HoverKey::Zoom);
+        }
+    }
+
+    /// Ctrl+0 and a click on the chip: the live page back to 100 %.
+    fn reset_zoom(&mut self) {
+        let Some(id) = self.tabs.active else { return };
+        if let Some(Live::Ready(web)) = self.tabs.get(id).map(|t| &t.live) {
+            web.set_zoom(1.0);
+        }
+        // The engine sends no `ZoomChanged` for a change that the app makes.
+        self.zoom_changed(id, 1.0);
     }
 
     fn invalidate(&self) {
@@ -1341,7 +1385,8 @@ impl App {
         // A tab of a folded group (Ctrl+K, Ctrl+1…8) unfolds it.
         let unfolds = self.tabs.is_hidden(id);
         if self.tabs.select(id) {
-            if unfolds {
+            // The zoom chip shows the level of the new live page.
+            if unfolds || self.layout.zoom.map(|z| z.percent) != self.zoom_shown() {
                 self.relayout_soft();
             }
             self.show_active();
@@ -1748,6 +1793,7 @@ impl App {
             }
             Event::Command(command) => self.run(command),
             Event::FullScreen(id) => self.page_fullscreen(id),
+            Event::ZoomChanged(id, factor) => self.zoom_changed(id, factor),
             Event::Download(download) => self.on_download(download),
             Event::Vault(id, message) => self.on_vault_message(id, message),
             Event::Scrolled(id, url, x, y) => {
@@ -1769,21 +1815,7 @@ impl App {
 
     /// Repaint the strip without touching the views (labels changed).
     fn relayout_soft(&mut self) {
-        let (width, height) = self.client_size();
-        let metrics = Metrics { scale: self.scale };
-        self.layout = tabbar::layout_with(
-            &self.tab_infos(),
-            &self.group_infos(),
-            width,
-            height,
-            self.vertical,
-            self.collapsed,
-            &metrics,
-            self.extension_slots(),
-        );
-        if self.fullscreen.on() {
-            self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
-        }
+        self.lay_out();
         self.invalidate();
     }
 
@@ -1819,6 +1851,10 @@ impl App {
                 if !tab.private {
                     crate::favicon::watch(&web.webview, self.hwnd);
                 }
+                // A new view starts at 100 %: it gets the level of the view before it.
+                if tab.zoom != 1.0 {
+                    web.set_zoom(tab.zoom);
+                }
                 let url = if tab.url.is_empty() { "about:blank".to_string() } else { tab.url.clone() };
                 web.navigate(&url);
                 tab.live = Live::Ready(web);
@@ -1853,6 +1889,7 @@ impl App {
             }
             Command::NewTab => self.open_omnibar(Mode::NewTab),
             Command::Fullscreen => self.toggle_fullscreen(),
+            Command::ResetZoom => self.reset_zoom(),
             Command::NewPrivateTab => self.open_omnibar(Mode::NewPrivateTab),
             Command::SwitchTab => self.open_omnibar(Mode::Switch),
             Command::Find => {
@@ -2091,6 +2128,10 @@ impl App {
                 self.invalidate();
                 self.close_omnibar();
                 self.open_settings();
+            }
+            Some(Hit::Zoom) => {
+                self.close_omnibar();
+                self.reset_zoom();
             }
             Some(Hit::PinnedExtension(nth)) => {
                 self.close_omnibar();

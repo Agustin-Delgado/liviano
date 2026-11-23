@@ -27,6 +27,7 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Focus left page / focus right page | Alt+Shift+Left / Alt+Shift+Right |
 | Passwords | Ctrl+Alt+L |
 | Full screen | F11 |
+| Zoom in / zoom out / reset zoom to 100% | Ctrl+= or Ctrl+wheel up / Ctrl+- or Ctrl+wheel down / Ctrl+0 |
 | Settings | Ctrl+, |
 
 To put the tab strip on top or on the side, use Settings → Tabs → Position.
@@ -38,6 +39,9 @@ Another program can hold a shortcut for the full system. For example,
 PowerToys often holds Ctrl+Shift+S. In that case, the shortcut list in
 Settings marks the shortcut "Used by another program". Nea does not receive
 that shortcut. Assign a different shortcut.
+
+The engine does the zoom in and the zoom out. You cannot change these two
+shortcuts. Nea does the reset (Ctrl+0), and you can change its shortcut.
 
 These commands are in the tab menu (right-click) and have no default
 shortcut: "Pin tab", "Keep site awake", "Block ads on this site" and "Allow

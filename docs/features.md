@@ -56,6 +56,14 @@ The gear opens Settings and is always visible:
 
 When the pointer is on the gear, the tooltip "Settings (Ctrl+,)" appears.
 
+**Zoom.** Ctrl+wheel, Ctrl+= and Ctrl+- zoom the page. Each tab has its
+own zoom level. When the level of the active tab is not 100%, a small chip
+shows the level, for example "125%". The chip is at the left of the
+extensions button, on the row of the gear. It flashes at each change of the
+level. Click the chip, or push Ctrl+0, to set the level back to 100%. At
+100%, the chip is not shown. A tab that sleeps keeps its level for the next
+view.
+
 Each tab shows the icon of its site. A tab without an icon, or a private tab,
 shows the initial of the site. When the pointer stops on a tab, a card
 appears, as in Chrome. The card shows these items:

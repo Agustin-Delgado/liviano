@@ -30,6 +30,9 @@ pub enum Hit {
     Nav(NavButton),
     /// The gear: Settings, always there.
     Settings,
+    /// The zoom level of the page, shown when it is not 100 %. A click sets
+    /// it back to 100 %.
+    Zoom,
 }
 
 /// The page's own buttons, after the window's.
@@ -230,6 +233,24 @@ pub struct Layout {
     pub settings: Rect,
     /// The window's caption band and buttons (there is no title bar).
     pub frame: Frame,
+    /// The zoom level of the live page, when it is not 100 %: left of the
+    /// gear and the extensions, on their row.
+    pub zoom: Option<ZoomChip>,
+}
+
+/// The zoom level and where it shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ZoomChip {
+    pub rect: Rect,
+    /// The level in percent, for example 110.
+    pub percent: u32,
+}
+
+/// The percent that the zoom chip shows for a zoom factor of the engine,
+/// or None at 100 %: then the chip does not show.
+pub fn zoom_percent(factor: f64) -> Option<u32> {
+    let percent = (factor * 100.0).round();
+    (percent.is_finite() && percent >= 1.0 && percent != 100.0).then_some(percent as u32)
 }
 
 impl Default for Rect {
@@ -250,11 +271,12 @@ impl Metrics {
 
 #[cfg(all(test, nea_tests))]
 pub fn layout(tabs: &[TabInfo], width: i32, height: i32, vertical: bool, collapsed: bool, m: &Metrics) -> Layout {
-    layout_with(tabs, &[], width, height, vertical, collapsed, m, None)
+    layout_with(tabs, &[], width, height, vertical, collapsed, m, None, None)
 }
 
 /// `extensions`: with `Some(pinned)`, the strip also holds the extensions
-/// button and that many pinned extensions (as many as fit).
+/// button and that many pinned extensions (as many as fit). `zoom`: the
+/// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_with(
     tabs: &[TabInfo],
@@ -265,6 +287,7 @@ pub fn layout_with(
     collapsed: bool,
     m: &Metrics,
     extensions: Option<usize>,
+    zoom: Option<u32>,
 ) -> Layout {
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
@@ -278,7 +301,7 @@ pub fn layout_with(
         let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), edge, row - edge, m);
         let right = width - edge;
         let settings = Rect::new(right - m.px(SETTINGS_W), edge, right, row - edge);
-        return Layout {
+        let mut layout = Layout {
             content: Rect::new(0, row, width, height.max(row)),
             vertical,
             frame,
@@ -286,16 +309,42 @@ pub fn layout_with(
             settings,
             ..Default::default()
         };
+        place_zoom(&mut layout, zoom, m);
+        return layout;
     }
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
     } else {
-        layout_horizontal(tabs, groups, width, height, m, extensions)
+        layout_horizontal(tabs, groups, width, height, m, extensions, zoom.is_some())
     };
     if let Some(pinned) = extensions {
-        place_extensions(&mut layout, pinned, m);
+        place_extensions(&mut layout, pinned, if zoom.is_some() { zoom_room(m) } else { 0 }, m);
     }
+    place_zoom(&mut layout, zoom, m);
     layout
+}
+
+/// The zoom chip's width: room for "500%" in the caption type.
+const ZOOM_W: i32 = 40;
+
+/// What the zoom chip takes from a row: its width and the gap after it.
+fn zoom_room(m: &Metrics) -> i32 {
+    m.px(ZOOM_W) + m.px(2)
+}
+
+/// The zoom chip goes just left of the leftmost of the gear, the extensions
+/// button and the pinned extensions, on their row, with their gap.
+fn place_zoom(layout: &mut Layout, zoom: Option<u32>, m: &Metrics) {
+    let Some(percent) = zoom else { return };
+    let gear = layout.settings;
+    let leftmost = layout
+        .extension_marks
+        .first()
+        .copied()
+        .or((layout.extensions.width() > 0).then_some(layout.extensions))
+        .unwrap_or(gear);
+    let right = leftmost.left - m.px(2);
+    layout.zoom = Some(ZoomChip { rect: Rect::new(right - m.px(ZOOM_W), gear.top, right, gear.bottom), percent });
 }
 
 /// The gear's width (the extensions button's).
@@ -337,13 +386,14 @@ fn shown_marks(pinned: usize, room: i32, m: &Metrics) -> usize {
 
 /// The button just left of the gear, its twin: the same size, on the same
 /// row, with the gap that separates back, forward and reload. Pinned ones go
-/// to its left. In the column they stop at its pad.
-fn place_extensions(layout: &mut Layout, pinned: usize, m: &Metrics) {
+/// to its left. In the column they stop at its pad, with `reserve` kept
+/// free before it (for the zoom chip).
+fn place_extensions(layout: &mut Layout, pinned: usize, reserve: i32, m: &Metrics) {
     let (mark_w, gap) = (m.px(28), m.px(2));
     let gear = layout.settings;
     let right = gear.left - gap;
     layout.extensions = Rect::new(right - gear.width(), gear.top, right, gear.bottom);
-    let room = if layout.vertical { layout.extensions.left - m.px(8) } else { layout.strip.width() / 4 };
+    let room = if layout.vertical { layout.extensions.left - m.px(8) - reserve } else { layout.strip.width() / 4 };
     let mut x = layout.extensions.left - gap;
     for _ in 0..shown_marks(pinned, room, m) {
         layout.extension_marks.insert(0, Rect::new(x - mark_w, gear.top, x, gear.bottom));
@@ -366,6 +416,7 @@ fn layout_horizontal(
     height: i32,
     m: &Metrics,
     extensions: Option<usize>,
+    zoomed: bool,
 ) -> Layout {
     // The strip's edge margin: the air above and under its controls, also
     // left of the capsule and right of the gear. The strip is the controls
@@ -398,8 +449,11 @@ fn layout_horizontal(
     let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
     let start = nav[2].right + pad;
     let settings = Rect::new(width - edge - m.px(SETTINGS_W), item_top, width - edge, item_bottom);
-    let reserved =
-        extensions.map_or(0, |n| extensions_width(n, width, m)) + m.px(SETTINGS_W + 2) + edge + m.px(DRAG_ROOM);
+    let reserved = extensions.map_or(0, |n| extensions_width(n, width, m))
+        + if zoomed { zoom_room(m) } else { 0 }
+        + m.px(SETTINGS_W + 2)
+        + edge
+        + m.px(DRAG_ROOM);
     let available = width - start - plus_w - pinned * (pinned_w + gap) - normal * gap - labels_w - reserved;
     let normal_w = if normal > 0 { (available / normal).clamp(m.px(44), m.px(200)) } else { 0 };
 
@@ -562,6 +616,9 @@ impl Layout {
         }
         if self.settings.contains(x, y) {
             return Some(Hit::Settings);
+        }
+        if self.zoom.is_some_and(|z| z.rect.contains(x, y)) {
+            return Some(Hit::Zoom);
         }
         if !self.strip.contains(x, y) {
             return None;
@@ -1038,6 +1095,9 @@ fn paint_controls(g: &Painter, p: &Paint) {
         ghost_ground(g, gear, radius, over, p.motion.pressed(HoverKey::Settings), pal);
         draw_gear(g, gear, pal.ink_muted.mix(pal.ink, over), p.scale);
     }
+    if let Some(zoom) = p.layout.zoom {
+        paint_zoom(g, zoom, p);
+    }
     for (button, rect) in NavButton::ALL.into_iter().zip(p.layout.nav) {
         if rect.width() == 0 {
             continue;
@@ -1056,6 +1116,19 @@ fn paint_controls(g: &Painter, p: &Paint) {
     frame::paint(g, &p.layout.frame, pal, p.scale, p.maximized, p.window_active, p.pressed, |b| {
         p.motion.hover(HoverKey::Window(b))
     });
+}
+
+/// The zoom chip: the percent in the caption type on a soft ground, as a
+/// pinned tab rests. The ground and the ink go darker under the pointer.
+fn paint_zoom(g: &Painter, zoom: ZoomChip, p: &Paint) {
+    let pal = p.palette;
+    let rect: RectF = zoom.rect.into();
+    let over = p.motion.hover(HoverKey::Zoom);
+    let pressed = p.motion.pressed(HoverKey::Zoom);
+    let ground = pal.tab_tile.mix(pal.tab_hover, over).mix(pal.pin_live, pressed);
+    g.round(rect, size::RADIUS_CONTROL * p.scale, ground);
+    let font = Font::new(size::CAPTION * p.scale, size::MEDIUM, Align::Center);
+    g.text(&format!("{}%", zoom.percent), rect, font, pal.ink_muted.mix(pal.ink, over));
 }
 
 /// Back and forward as Safari draws them (an open chevron), reload as a
@@ -1188,6 +1261,7 @@ pub enum HoverKey {
     Window(WindowButton),
     Nav(NavButton),
     Settings,
+    Zoom,
 }
 
 impl HoverKey {
@@ -1202,6 +1276,7 @@ impl HoverKey {
             Hit::Window(b) => [Some(HoverKey::Window(b)), None],
             Hit::Nav(b) => [Some(HoverKey::Nav(b)), None],
             Hit::Settings => [Some(HoverKey::Settings), None],
+            Hit::Zoom => [Some(HoverKey::Zoom), None],
         }
     }
 }
@@ -1241,6 +1316,8 @@ pub struct Motion {
     targets: HashMap<u64, RectF>,
     drawn: HashMap<u64, RectF>,
     strip: Rect,
+    /// Where the page was in the last layout: empty for an empty client area.
+    content: Rect,
     /// The column (or the strip) coming back in from its edge, 0..1.
     rail: Option<Tween<f32>>,
     /// The split's focus line: its target and its slide.
@@ -1312,8 +1389,13 @@ impl Motion {
         self.hovers.prune(now);
         self.presses.prune(now);
 
-        // Shown again after being hidden: it slides in from its edge.
-        if !first && self.strip.width() == 0 && layout.strip.width() > 0 && layout.vertical {
+        // Shown again after being hidden: it slides in from its edge. Only
+        // from a layout that had a page and no column (hidden, full
+        // screen): a layout of an empty client area (a minimized window)
+        // has no column either, and the window that comes back is no
+        // request to show it.
+        if !first && self.strip.width() == 0 && self.content.width() > 0 && layout.strip.width() > 0 && layout.vertical
+        {
             self.rail = Some(Tween::new(0.0, 1.0, now, specs::RAIL));
         }
         if self.rail.as_ref().is_some_and(|r| !r.moving(now)) || layout.strip.width() == 0 {
@@ -1369,6 +1451,7 @@ impl Motion {
         self.appear.retain(|_, t| t.moving(now));
         self.targets = placed(layout).map(|(id, rect, _)| (id, RectF::from(rect))).collect();
         self.strip = layout.strip;
+        self.content = layout.content;
         self.drawn = placed(layout).map(|(id, rect, _)| (id, self.rect_at(id, rect))).collect();
 
         // The live card slides when another tab becomes live in the same
@@ -1598,6 +1681,11 @@ impl Motion {
         });
         for button in [WindowButton::Close, WindowButton::Minimize, WindowButton::Maximize] {
             control(HoverKey::Window(button), all);
+        }
+        if let Some(zoom) = layout.zoom {
+            // The percent is part of its look: a new level draws it again.
+            let look = [self.hover(HoverKey::Zoom), self.pressed(HoverKey::Zoom), zoom.percent as f32, 0.0];
+            sheet.insert(SheetKey::Hover(HoverKey::Zoom), Piece { bounds: grow(zoom.rect.into()), look });
         }
         sheet
     }
