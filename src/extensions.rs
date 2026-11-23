@@ -233,12 +233,122 @@ pub fn with_key(manifest: &str, public_key: &[u8]) -> Result<String, String> {
     serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
 }
 
+// ---------- what the person is asked ----------
+
+/// Host patterns that give access to all sites.
+fn all_sites(pattern: &str) -> bool {
+    matches!(pattern, "<all_urls>" | "*://*/*" | "http://*/*" | "https://*/*" | "*://*/" | "file:///*")
+}
+
+/// The host of a match pattern ("https://*.example.com/*" -> "example.com").
+fn pattern_host(pattern: &str) -> Option<String> {
+    let rest = pattern.split_once("://")?.1;
+    let host = rest.split('/').next()?.trim_start_matches("*.");
+    (!host.is_empty() && host != "*").then(|| host.to_string())
+}
+
+/// What the person must know before an install: the access the manifest
+/// asks for, in the words Chrome uses (shortened). Unknown permissions give
+/// no line, as in Chrome. The manifest is untrusted: anything that is not
+/// the expected shape is ignored.
+pub fn permission_warnings(manifest: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<Value>(manifest) else { return Vec::new() };
+    let strings = |v: Option<&Value>| -> Vec<String> {
+        v.and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(Value::as_str).take(500).map(str::to_string).collect())
+            .unwrap_or_default()
+    };
+    let permissions = strings(value.get("permissions"));
+    let mut hosts: Vec<String> =
+        permissions.iter().filter(|p| p.contains("://") || *p == "<all_urls>").cloned().collect();
+    hosts.extend(strings(value.get("host_permissions")));
+    if let Some(scripts) = value.get("content_scripts").and_then(Value::as_array) {
+        for script in scripts.iter().take(100) {
+            hosts.extend(strings(script.get("matches")));
+        }
+    }
+    let mut lines = Vec::new();
+    if hosts.iter().any(|h| all_sites(h)) {
+        lines.push("Read and change all your data on all websites".to_string());
+    } else {
+        let mut names: Vec<String> = Vec::new();
+        for host in hosts.iter().filter_map(|h| pattern_host(h)) {
+            if !names.contains(&host) {
+                names.push(host);
+            }
+        }
+        match names.len() {
+            0 => {}
+            1..=3 => lines.push(format!("Read and change your data on {}", names.join(", "))),
+            n => lines.push(format!("Read and change your data on {n} websites")),
+        }
+    }
+    const KNOWN: &[(&str, &str)] = &[
+        ("debugger", "Access the page debugger backend"),
+        ("history", "Read and change your browsing history"),
+        ("tabs", "Read your browsing history"),
+        ("webNavigation", "Read your browsing history"),
+        ("bookmarks", "Read and change your bookmarks"),
+        ("downloads", "Manage your downloads"),
+        ("clipboardRead", "Read data that you copy and paste"),
+        ("clipboardWrite", "Change data that you copy and paste"),
+        ("nativeMessaging", "Communicate with programs on this computer"),
+        ("geolocation", "Detect your physical location"),
+        ("management", "Manage your apps, extensions and themes"),
+        ("privacy", "Change your settings that control privacy"),
+        ("proxy", "Read and change all your data on all websites"),
+        ("desktopCapture", "Capture the content of your screen"),
+        ("tabCapture", "Capture the content of your tabs"),
+        ("notifications", "Show notifications"),
+        ("declarativeNetRequest", "Block content on any page"),
+        ("topSites", "Read a list of your most frequently visited websites"),
+        ("pageCapture", "Read and change all your data on all websites"),
+        ("contentSettings", "Change your settings that control websites' access to features"),
+    ];
+    for (name, text) in KNOWN {
+        if permissions.iter().any(|p| p == name) && !lines.iter().any(|l| l == text) {
+            lines.push(text.to_string());
+        }
+    }
+    lines
+}
+
+/// The question before an install, in the app's words.
+pub fn consent_text(extension: &Extension, warnings: &[String]) -> String {
+    let mut text = format!("Add the extension '{}'?", extension.name);
+    if warnings.is_empty() {
+        text.push_str("\n\nIt asks for no special access.");
+    } else {
+        text.push_str("\n\nIt can:");
+        for line in warnings {
+            text.push_str("\n•  ");
+            text.push_str(line);
+        }
+    }
+    let version = if extension.version.is_empty() { String::new() } else { format!("Version {}. ", extension.version) };
+    text.push_str(&format!(
+        "\n\n{version}From the Chrome Web Store. Some extensions do not work fully in Nea: there is no toolbar and no side panel."
+    ));
+    text
+}
+
 // ---------- installing ----------
 
-/// Verifies a downloaded store package and unpacks it as the extension `id`.
-/// The previous version (an update) is replaced only once the new one is
-/// fully on disk.
-pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extension, String> {
+/// A store package that is verified and unpacked beside its final folder,
+/// waiting for the person to say yes.
+#[derive(Debug)]
+pub struct Staged {
+    pub id: String,
+    /// Where the files are now (`<id>.new`).
+    pub folder: PathBuf,
+    /// The extension as it is after the commit (its path is the final folder).
+    pub extension: Extension,
+    pub warnings: Vec<String>,
+}
+
+/// Verifies a downloaded store package and unpacks it as the extension `id`
+/// into a staging folder. Nothing that is installed changes.
+pub fn stage_store_package(id: &str, file: &[u8], into: &Path) -> Result<Staged, String> {
     let verified = crx::verify(file, Some(id), true).map_err(|e| e.describe())?;
     let staging = into.join(format!("{id}.new"));
     let _ = fs::remove_dir_all(&staging);
@@ -247,27 +357,49 @@ pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extens
         let manifest_path = staging.join("manifest.json");
         let manifest = read_text(&manifest_path).ok_or("the package has no manifest.json")?;
         fs::write(&manifest_path, with_key(&manifest, &verified.public_key)?).map_err(|e| e.to_string())?;
-        read_manifest(&staging)
+        Ok::<_, String>((read_manifest(&staging)?, permission_warnings(&manifest)))
     })();
-    let info = match result {
-        Ok(info) => info,
+    let (info, warnings) = match result {
+        Ok(found) => found,
         Err(error) => {
             let _ = fs::remove_dir_all(&staging);
             return Err(error);
         }
     };
-    let target = into.join(id);
-    let _ = fs::remove_dir_all(&target);
-    fs::rename(&staging, &target).map_err(|e| format!("cannot install in {}: {e}", target.display()))?;
     let mut extension = Extension {
-        path: target.to_string_lossy().into_owned(),
+        path: into.join(id).to_string_lossy().into_owned(),
         store_id: Some(id.to_string()),
         engine_id: Some(id.to_string()),
         enabled: true,
         ..Default::default()
     };
     extension.apply(info);
-    Ok(extension)
+    Ok(Staged { id: id.to_string(), folder: staging, extension, warnings })
+}
+
+/// Puts a staged package in its final folder. The previous version (an
+/// update) is replaced only now, once the new one is fully on disk.
+pub fn commit_staged(staged: Staged) -> Result<Extension, String> {
+    let target = PathBuf::from(&staged.extension.path);
+    let _ = fs::remove_dir_all(&target);
+    if let Err(error) = fs::rename(&staged.folder, &target) {
+        let _ = fs::remove_dir_all(&staged.folder);
+        return Err(format!("cannot install in {}: {error}", target.display()));
+    }
+    Ok(staged.extension)
+}
+
+/// Deletes a staged package that the person did not want.
+pub fn discard_staged(staged: &Staged) {
+    let _ = fs::remove_dir_all(&staged.folder);
+}
+
+/// Verifies a downloaded store package and installs it as the extension
+/// `id`, with no question (the stage and the commit in one step). Only the
+/// tests use it: the app asks the person between the two steps.
+#[cfg(all(test, nea_tests))]
+pub fn unpack_store_package(id: &str, file: &[u8], into: &Path) -> Result<Extension, String> {
+    commit_staged(stage_store_package(id, file, into)?)
 }
 
 /// A developer's folder, loaded as it is (nothing is copied).
@@ -311,34 +443,72 @@ pub fn delete_files(extension: &Extension) {
 
 // ---------- the worker thread ----------
 
-/// Posted to the window when a store install finishes; the result waits in
-/// `take_finished`.
+/// Posted to the window when a store install step finishes; the result
+/// waits in `take_finished`.
 pub const WM_APP_EXTENSION_INSTALLED: u32 = windows::Win32::UI::WindowsAndMessaging::WM_APP + 40;
 
-pub type Finished = (String, Result<Extension, String>);
+/// The end of one step of a store install.
+#[derive(Debug)]
+pub enum Outcome {
+    /// Downloaded, verified and unpacked: the person must say yes.
+    Staged(Staged),
+    /// In its final folder.
+    Installed(Extension),
+    Failed(String),
+}
+
+pub type Finished = (String, Outcome);
 
 static FINISHED: Mutex<Vec<Finished>> = Mutex::new(Vec::new());
 
-/// Downloads, verifies and unpacks a store extension off the UI thread,
-/// then tells `hwnd`.
-pub fn install_in_background(hwnd: isize, id: String, browser_version: String) {
+fn finish(hwnd: isize, id: String, outcome: Outcome) {
+    if let Ok(mut list) = FINISHED.lock() {
+        list.push((id, outcome));
+    }
+    unsafe {
+        use windows::Win32::{
+            Foundation::{HWND, LPARAM, WPARAM},
+            UI::WindowsAndMessaging::PostMessageW,
+        };
+        let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_EXTENSION_INSTALLED, WPARAM(0), LPARAM(0));
+    }
+}
+
+/// Downloads, verifies and stages a store extension off the UI thread, then
+/// tells `hwnd`. `cookie` is the store session of the engine profile, for
+/// an extension that the store gives only to signed-in persons.
+pub fn stage_in_background(hwnd: isize, id: String, browser_version: fn() -> String, cookie: Option<String>) {
     std::thread::spawn(move || {
-        let result = webstore::download(&webstore::download_url(&id, &browser_version)).and_then(|file| {
-            let dir = extensions_dir();
-            fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-            unpack_store_package(&id, &file, &dir)
-        });
-        if let Ok(mut list) = FINISHED.lock() {
-            list.push((id, result));
-        }
-        unsafe {
-            use windows::Win32::{
-                Foundation::{HWND, LPARAM, WPARAM},
-                UI::WindowsAndMessaging::PostMessageW,
-            };
-            let _ = PostMessageW(Some(HWND(hwnd as *mut _)), WM_APP_EXTENSION_INSTALLED, WPARAM(0), LPARAM(0));
-        }
+        let result =
+            webstore::download(&webstore::download_url(&id, &browser_version()), cookie.as_deref()).and_then(|file| {
+                let dir = extensions_dir();
+                fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+                stage_store_package(&id, &file, &dir)
+            });
+        let outcome = match result {
+            Ok(staged) => Outcome::Staged(staged),
+            Err(error) => Outcome::Failed(error),
+        };
+        finish(hwnd, id, outcome);
     });
+}
+
+/// Commits a staged package off the UI thread (it can delete an old
+/// version with many files), then tells `hwnd`.
+pub fn commit_in_background(hwnd: isize, staged: Staged) {
+    std::thread::spawn(move || {
+        let id = staged.id.clone();
+        let outcome = match commit_staged(staged) {
+            Ok(extension) => Outcome::Installed(extension),
+            Err(error) => Outcome::Failed(error),
+        };
+        finish(hwnd, id, outcome);
+    });
+}
+
+/// Deletes a staged package off the UI thread.
+pub fn discard_in_background(staged: Staged) {
+    std::thread::spawn(move || discard_staged(&staged));
 }
 
 pub fn take_finished() -> Vec<Finished> {

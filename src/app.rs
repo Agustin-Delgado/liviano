@@ -1785,6 +1785,10 @@ impl App {
                 }
             }
             Event::WebMessage(id, source, json) => {
+                if let Some(request) = crate::webstore::store_request(&source, &json) {
+                    self.store_page_request(id, request);
+                    return;
+                }
                 // A private tab hides nothing for good: curtain.json outlives it.
                 if !self.tabs.get(id).is_some_and(|t| t.private) {
                     let live = live_webs(&self.tabs);
@@ -1844,6 +1848,7 @@ impl App {
                     let _ = crate::download_watch::watch(&web.webview, id);
                 }
                 self.curtain.install(&web, id);
+                crate::webstore::watch(&web.webview);
                 web.apply_privacy(self.settings.block_trackers);
                 if web.passwords {
                     let _ = crate::vault_watch::watch(&web.webview, id);
@@ -2480,7 +2485,7 @@ impl App {
             (_, Some(Row::Go(url))) => self.go(mode, &url),
             (_, Some(Row::InstallExtension(id))) => {
                 self.close_omnibar();
-                self.install_from_store(&id);
+                self.install_from_store(&id, None);
             }
             (_, Some(Row::Info | Row::Panel(_))) => {}
             (_, None) => {

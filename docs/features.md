@@ -128,7 +128,7 @@ table marks the items that this method cannot test.
 | Light, dark or system theme | Light and dark verified. "System" follows the Windows theme when it changes. |
 | Bookmarks, history and downloads | Verified. |
 | Private tabs | Verified. They have their own InPrivate profile. Nea writes nothing to the history, the session, Ctrl+Shift+T or settings.json. |
-| Chrome extensions | Verified: load, the button (only when extensions are installed) and pinned extensions. The limitations are in [docs/extensions.md](extensions.md). |
+| Chrome extensions | Verified: install with the "Add to Chrome" button of the Chrome Web Store (Nea asks first), load, remove, the button and pinned extensions. The limitations are in [docs/extensions.md](extensions.md). |
 | Find in page | Verified. |
 | Signed daily updates | Done, with unit tests. The updater uses the releases of this repository. It finds nothing until a release exists. |
 | Script control | Verified. Read [building.md](building.md#script-control). |

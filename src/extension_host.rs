@@ -18,6 +18,9 @@ pub enum HostEvent {
     /// The folder, and the engine's id and name for it.
     Added(String, std::result::Result<(String, String), String>),
     Changed,
+    /// The engine started its own store install (a CRX download) in tab
+    /// `u64`: Nea cancelled it and installs the extension itself.
+    StoreDownload(u64, String),
 }
 
 fn profile(webview: &ICoreWebView2) -> Option<ICoreWebView2Profile7> {
@@ -133,5 +136,44 @@ fn add_with(profile: &ICoreWebView2Profile7, folder: &str) {
         if let Err(error) = profile.AddBrowserExtension(&HSTRING::from(folder), &handler) {
             push(Event::Extension(HostEvent::Added(folder.to_string(), Err(describe(&error)))));
         }
+    }
+}
+
+/// The cookies that the engine profile sends to `url`, as the value of one
+/// Cookie header (None when there are none or the engine cannot say).
+pub fn cookie_header(webview: &ICoreWebView2, url: &str, then: impl FnOnce(Option<String>) + 'static) {
+    let mut then = Some(then);
+    let manager = unsafe { webview.cast::<ICoreWebView2_2>().and_then(|w| w.CookieManager()) };
+    let Ok(manager) = manager else {
+        if let Some(then) = then.take() {
+            then(None);
+        }
+        return;
+    };
+    let shared = std::rc::Rc::new(std::cell::RefCell::new(then));
+    let callback = shared.clone();
+    let handler = GetCookiesCompletedHandler::create(Box::new(move |result, list| {
+        let mut pairs = Vec::new();
+        if let (Ok(()), Some(list)) = (result, list) {
+            let mut count = 0u32;
+            unsafe {
+                let _ = list.Count(&mut count);
+                for i in 0..count.min(200) {
+                    let Ok(cookie) = list.GetValueAtIndex(i) else { continue };
+                    let (mut name, mut value) = (PWSTR::null(), PWSTR::null());
+                    if cookie.Name(&mut name).is_ok() && cookie.Value(&mut value).is_ok() {
+                        pairs.push(format!("{}={}", take_pwstr(name), take_pwstr(value)));
+                    }
+                }
+            }
+        }
+        if let Some(then) = callback.borrow_mut().take() {
+            then((!pairs.is_empty()).then(|| pairs.join("; ")));
+        }
+        Ok(())
+    }));
+    let started = unsafe { manager.GetCookies(&HSTRING::from(url), &handler).is_ok() };
+    if !started && let Some(then) = shared.borrow_mut().take() {
+        then(None);
     }
 }

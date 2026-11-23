@@ -104,12 +104,35 @@ pub fn entries(archive: &[u8]) -> Result<Vec<Entry<'_>>, String> {
     Ok(out)
 }
 
+/// Names that Windows gives to devices, in any folder and with any extension
+/// ("nul.txt" is the device too).
+const DEVICES: &[&str] = &[
+    "con", "prn", "aux", "nul", "conin$", "conout$", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8",
+    "com9", "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9",
+];
+
+/// Whether Windows writes a file with this name where the name says: no
+/// device name, no character that Windows refuses or reads in a special
+/// way, no dot or space at the end (Windows removes them, and two entries
+/// become one file).
+fn plain_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or_default().trim_end().to_ascii_lowercase();
+    !segment.is_empty()
+        && !segment.ends_with(['.', ' '])
+        && !segment.chars().any(|c| c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '|' | '?' | '*'))
+        && !DEVICES.contains(&stem.as_str())
+}
+
 /// Where an entry may be written: relative, inside the folder, no drive, no
-/// "..". Anything else is refused rather than cleaned up.
+/// "..", only names that Windows keeps as they are. Anything else is refused
+/// rather than cleaned up.
 pub fn safe_path(name: &str) -> Option<PathBuf> {
     let name = name.replace('\\', "/");
     let name = name.trim_end_matches('/');
     if name.is_empty() || name.starts_with('/') || name.contains(':') {
+        return None;
+    }
+    if !name.split('/').all(plain_name) {
         return None;
     }
     let path = PathBuf::from(name);

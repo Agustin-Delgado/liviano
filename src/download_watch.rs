@@ -13,6 +13,7 @@ use windows::core::{Interface, PWSTR, Result};
 
 use crate::{
     downloads::{Download, State},
+    extension_host::HostEvent,
     web::{self, Event},
 };
 
@@ -79,6 +80,14 @@ pub fn watch(webview: &ICoreWebView2, tab_id: u64) -> Result<()> {
             &DownloadStartingEventHandler::create(Box::new(move |_, args| {
                 let Some(args) = args else { return Ok(()) };
                 let operation = args.DownloadOperation()?;
+                // The engine's own store install: its download address is
+                // removed in WebView2, thus it always stops with "Download
+                // interrupted". Nea installs the extension itself.
+                if let Some(extension) = crate::webstore::engine_package_download(&read_string(|p| operation.Uri(p))) {
+                    args.SetCancel(true)?;
+                    web::push(Event::Extension(HostEvent::StoreDownload(tab_id, extension)));
+                    return Ok(());
+                }
                 let id = next_id();
                 let started = unix_now();
                 follow(id, started, &operation)?;

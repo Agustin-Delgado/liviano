@@ -31,11 +31,11 @@ use windows::{
 use super::{App, Row, with_app};
 use crate::{
     extension_host::{self, HostEvent},
-    extensions::{self, Extension, Registry},
+    extensions::{self, Extension, Outcome, Registry, Staged},
     inject,
     settings_window::{self, ExtensionCommand},
     tabs::Live,
-    webstore,
+    webstore::{self, Answer, StoreRequest},
 };
 
 /// Asks the window to do something that opens a modal dialog (a folder
@@ -43,6 +43,8 @@ use crate::{
 pub(super) const WM_APP_EXTENSION_ACTION: u32 = WM_APP + 41;
 const ACTION_LOAD_UNPACKED: usize = 1;
 const ACTION_REMOVE: usize = 2;
+/// Asks the person about the first staged store package.
+const ACTION_CONSENT: usize = 3;
 
 const MENU_BASE: usize = 1000;
 const MENU_STRIDE: usize = 16;
@@ -71,8 +73,14 @@ pub(super) struct Extensions {
     engine_on: Option<bool>,
     /// Folders the engine is loading, so a second sync doesn't load them twice.
     adding: Vec<String>,
-    /// Store ids being downloaded.
+    /// Store ids being downloaded, waiting for a yes, or being committed.
     installing: Vec<String>,
+    /// Verified store packages that wait for the person's yes, in order.
+    consent: Vec<Staged>,
+    /// Store pages that wait for the end of an install: (store id, tab).
+    pages: Vec<(String, u64)>,
+    /// Store pages that wait for the end of a removal: (store id, tab).
+    removing: Vec<(String, u64)>,
     /// Tabs showing a page of an extension being reloaded: the engine moves
     /// them off the page while it unloads, and they go back once it is in.
     restore: Vec<(String, Vec<(u64, String)>)>,
@@ -130,17 +138,37 @@ pub(super) fn window_message(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARA
                         with_app(|app| app.add_unpacked(folder));
                     }
                 }
+                ACTION_CONSENT => {
+                    let next =
+                        with_app(|app| (!app.extensions.consent.is_empty()).then(|| app.extensions.consent.remove(0)));
+                    match next {
+                        None => super::retry_later(hwnd, msg, wparam, lparam),
+                        Some(None) => {}
+                        Some(Some(staged)) => {
+                            let yes = confirm(hwnd, &extensions::consent_text(&staged.extension, &staged.warnings));
+                            let mut staged = Some(staged);
+                            with_app(|app| {
+                                if let Some(staged) = staged.take() {
+                                    app.consent_answered(staged, yes);
+                                }
+                            });
+                            // No app to tell: the files go, and the next start sweeps the rest.
+                            if let Some(staged) = staged {
+                                extensions::discard_in_background(staged);
+                            }
+                        }
+                    }
+                }
                 ACTION_REMOVE => {
                     let index = lparam.0 as usize;
                     let name =
                         with_app(|app| app.extensions.registry.extensions.get(index).map(|e| e.name.clone())).flatten();
-                    if let Some(name) = name
-                        && confirm(
+                    if let Some(name) = name {
+                        let yes = confirm(
                             hwnd,
                             &format!("Remove '{name}'?\n\nNea deletes its data, and it stops working in all tabs."),
-                        )
-                    {
-                        with_app(|app| app.remove_extension(index, &name));
+                        );
+                        with_app(|app| app.removal_answered(index, &name, yes));
                     }
                 }
                 _ => {}
@@ -229,6 +257,20 @@ fn append_empty_lines(menu: HMENU, lines: &[EmptyLine]) {
             EmptyLine::Command(id, text) => append(menu, MF_STRING, id, text),
         }
     }
+}
+
+/// Takes out the tabs that wait for `id`.
+fn take_pages(pages: &mut Vec<(String, u64)>, id: &str) -> Vec<u64> {
+    let mut taken = Vec::new();
+    pages.retain(|(i, tab)| {
+        if i == id {
+            taken.push(*tab);
+            false
+        } else {
+            true
+        }
+    });
+    taken
 }
 
 fn source_label(extension: &Extension) -> &'static str {
@@ -406,50 +448,171 @@ impl App {
                 }
             }
             HostEvent::Changed => {}
+            HostEvent::StoreDownload(tab, id) => self.install_from_store(&id, Some(tab)),
         }
     }
 
     // ---------- installing ----------
 
-    pub(super) fn install_from_store(&mut self, id: &str) {
+    /// Installs a store extension: the download, the check and the unpack
+    /// run on a worker thread; then the person says yes or no; then the
+    /// files go in place on a worker thread. `page`: the store tab that
+    /// waits for the answer, if the store's own button started it.
+    pub(super) fn install_from_store(&mut self, id: &str, page: Option<u64>) {
+        if let Some(tab) = page
+            && !self.extensions.pages.iter().any(|(i, t)| i == id && *t == tab)
+        {
+            self.extensions.pages.push((id.to_string(), tab));
+        }
         if self.extensions.installing.iter().any(|i| i == id) {
             return;
         }
         self.extensions.installing.push(id.to_string());
         self.extension_notice("Downloading the extension from the Chrome Web Store…".to_string());
-        extensions::install_in_background(self.hwnd.0 as isize, id.to_string(), browser_version());
+        let hwnd = self.hwnd.0 as isize;
+        let id = id.to_string();
+        // The store gives some extensions only to signed-in persons: the
+        // worker sends the session of the engine profile again if the first
+        // try is refused.
+        let webview = page.and_then(|tab| self.tab_webview(tab)).or_else(|| self.any_webview());
+        let start = move |cookie: Option<String>| {
+            extensions::stage_in_background(hwnd, id, browser_version, cookie);
+        };
+        match webview {
+            Some(webview) => extension_host::cookie_header(&webview, webstore::UPDATE_SERVICE, start),
+            None => start(None),
+        }
     }
 
-    /// The worker thread finished one or more store installs.
-    fn extensions_installed(&mut self) {
-        for (id, result) in extensions::take_finished() {
-            self.extensions.installing.retain(|i| *i != id);
-            match result {
-                Ok(extension) => {
-                    let name = extension.name.clone();
-                    let path = extension.path.clone();
-                    self.extensions.registry.upsert(extension);
-                    self.save_extensions();
-                    match self.extensions.engine_on {
-                        Some(true) => {
-                            // New or an update over loaded files: adding the
-                            // folder loads it, or reloads it in place.
-                            if let Some(webview) = self.any_webview() {
-                                self.load_folder(&webview, &path);
-                                self.extension_notice(format!("Installed: {name}. Loading…"));
-                            } else {
-                                self.extensions.synced = false;
-                                self.extension_notice(format!("Installed: {name}. It loads with the next tab."));
-                            }
-                        }
-                        Some(false) => self.extension_notice(format!(
-                            "Installed: {name}. It starts when you restart Nea. With no extensions, the engine starts without extension support to save memory."
-                        )),
-                        None => self.extension_notice(format!("Installed: {name}.")),
-                    }
-                }
-                Err(error) => self.extension_notice(format!("Cannot install the extension: {error}")),
+    fn tab_webview(&self, tab: u64) -> Option<ICoreWebView2> {
+        self.tabs.get(tab).and_then(|t| match &t.live {
+            Live::Ready(web) => Some(web.webview.clone()),
+            _ => None,
+        })
+    }
+
+    /// Gives the store pages that wait for `id` their answer.
+    fn answer_store_pages(&mut self, id: &str, answer: Answer, installed: Option<&Extension>) {
+        let (name, version) = installed.map_or(("", ""), |e| (e.name.as_str(), e.version.as_str()));
+        let script = webstore::answer_script(id, answer, name, version);
+        let pages = take_pages(&mut self.extensions.pages, id);
+        self.run_in_tabs(&pages, &script);
+    }
+
+    fn run_in_tabs(&self, tabs: &[u64], script: &str) {
+        for tab in tabs {
+            if let Some(webview) = self.tab_webview(*tab) {
+                inject::execute(&webview, script);
             }
+        }
+    }
+
+    /// What the store page script asks (its own buttons).
+    pub(super) fn store_page_request(&mut self, tab: u64, request: StoreRequest) {
+        match request {
+            StoreRequest::List => {
+                let items: Vec<webstore::Listed> = self
+                    .extensions
+                    .registry
+                    .extensions
+                    .iter()
+                    .filter_map(|e| {
+                        Some(webstore::Listed {
+                            id: e.store_id.clone()?,
+                            name: e.name.clone(),
+                            version: e.version.clone(),
+                            enabled: e.enabled,
+                        })
+                    })
+                    .collect();
+                self.run_in_tabs(&[tab], &webstore::list_script(&items));
+            }
+            StoreRequest::Install(id) => self.install_from_store(&id, Some(tab)),
+            StoreRequest::Remove(id) => match self.extensions.registry.find_store(&id) {
+                Some(index) => {
+                    if !self.extensions.removing.iter().any(|(i, t)| *i == id && *t == tab) {
+                        self.extensions.removing.push((id, tab));
+                    }
+                    post_action(self.hwnd, ACTION_REMOVE, index);
+                }
+                None => self.run_in_tabs(&[tab], &webstore::removed_script(&id, false)),
+            },
+        }
+    }
+
+    /// The person answered the question about a removal.
+    fn removal_answered(&mut self, index: usize, name: &str, yes: bool) {
+        let store_id = self.extensions.registry.extensions.get(index).and_then(|e| e.store_id.clone());
+        if yes {
+            self.remove_extension(index, name);
+        }
+        if let Some(id) = store_id {
+            let pages = take_pages(&mut self.extensions.removing, &id);
+            self.run_in_tabs(&pages, &webstore::removed_script(&id, yes));
+        }
+    }
+
+    /// The end of an install that did not happen.
+    fn install_failed(&mut self, id: &str, answer: Answer, notice: String) {
+        self.extensions.installing.retain(|i| i != id);
+        self.answer_store_pages(id, answer, None);
+        self.extension_notice(notice);
+    }
+
+    /// The worker thread finished one or more steps of store installs.
+    fn extensions_installed(&mut self) {
+        for (id, outcome) in extensions::take_finished() {
+            match outcome {
+                Outcome::Staged(staged) => {
+                    self.extensions.consent.push(staged);
+                    post_action(self.hwnd, ACTION_CONSENT, 0);
+                }
+                Outcome::Installed(extension) => {
+                    self.extensions.installing.retain(|i| *i != id);
+                    self.answer_store_pages(&id, Answer::Installed, Some(&extension));
+                    self.extension_installed(extension);
+                }
+                Outcome::Failed(error) => {
+                    self.install_failed(&id, Answer::Failed, format!("Cannot install the extension: {error}"))
+                }
+            }
+        }
+    }
+
+    /// The person answered the question about a staged package.
+    fn consent_answered(&mut self, staged: Staged, yes: bool) {
+        if yes {
+            self.extension_notice(format!("Installing: {}…", staged.extension.name));
+            extensions::commit_in_background(self.hwnd.0 as isize, staged);
+        } else {
+            let (id, name) = (staged.id.clone(), staged.extension.name.clone());
+            extensions::discard_in_background(staged);
+            self.install_failed(&id, Answer::Cancelled, format!("Not installed: {name}"));
+        }
+    }
+
+    /// A store extension is in its folder: the registry and the engine.
+    fn extension_installed(&mut self, extension: Extension) {
+        let name = extension.name.clone();
+        let path = extension.path.clone();
+        self.extensions.registry.upsert(extension);
+        self.save_extensions();
+        match self.extensions.engine_on {
+            Some(true) => {
+                // New or an update over loaded files: adding the
+                // folder loads it, or reloads it in place.
+                if let Some(webview) = self.any_webview() {
+                    self.load_folder(&webview, &path);
+                    self.extension_notice(format!("Installed: {name}. Loading…"));
+                } else {
+                    self.extensions.synced = false;
+                    self.extension_notice(format!("Installed: {name}. It loads with the next tab."));
+                }
+            }
+            Some(false) => self.extension_notice(format!(
+                "Installed: {name}. It starts when you restart Nea. With no extensions, the engine starts without extension support to save memory."
+            )),
+            None => self.extension_notice(format!("Installed: {name}.")),
         }
     }
 
@@ -649,7 +812,7 @@ impl App {
             0 | MENU_NOTE => {}
             MENU_INSTALL_HERE => {
                 if let Some(id) = store_here {
-                    self.install_from_store(&id);
+                    self.install_from_store(&id, None);
                 }
             }
             MENU_LOAD_UNPACKED => post_action(self.hwnd, ACTION_LOAD_UNPACKED, 0),
