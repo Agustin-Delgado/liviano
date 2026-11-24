@@ -81,6 +81,8 @@ const ID_FIELD_POSITION: i32 = 137;
 const ID_EXT_NOTE: i32 = 138;
 const ID_STATUS: i32 = 139;
 const ID_VERSION: i32 = 140;
+const ID_BOOKMARKS_BAR: i32 = 141;
+const ID_BOOKMARKS_BAR_LABEL: i32 = 142;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
@@ -128,6 +130,7 @@ struct State {
     pressure: HWND,
     split: HWND,
     preview: HWND,
+    bookmarks_bar: HWND,
     awake_list: HWND,
     awake_edit: HWND,
     keys_list: HWND,
@@ -700,11 +703,31 @@ fn controls() -> Vec<Spec> {
     add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 112, 18, 18), ID_PREVIEW, Kind::Button, false);
     add(
         w!("STATIC"),
-        "Show a page preview on hover",
+        "Page preview on hover",
         SS_NOTIFY,
         none,
-        (l + 22, 110, 318, 22),
+        (l + 22, 110, 150, 22),
         ID_PREVIEW_LABEL,
+        Kind::Label,
+        false,
+    );
+    add(
+        w!("BUTTON"),
+        "",
+        tab | BS_AUTOCHECKBOX as u32,
+        none,
+        (l + 180, 112, 18, 18),
+        ID_BOOKMARKS_BAR,
+        Kind::Button,
+        false,
+    );
+    add(
+        w!("STATIC"),
+        "Show bookmarks bar",
+        SS_NOTIFY,
+        none,
+        (l + 202, 110, 138, 22),
+        ID_BOOKMARKS_BAR_LABEL,
         Kind::Label,
         false,
     );
@@ -1109,6 +1132,7 @@ impl Build {
                         pressure: self.item(ID_PRESSURE),
                         split: self.item(ID_SPLIT),
                         preview: self.item(ID_PREVIEW),
+                        bookmarks_bar: self.item(ID_BOOKMARKS_BAR),
                         awake_list: self.item(ID_AWAKE_LIST),
                         awake_edit: self.item(ID_AWAKE_EDIT),
                         keys_list: self.item(ID_KEYS_LIST),
@@ -1240,9 +1264,11 @@ fn fill_fields(st: &mut State) {
     set_text(st.pressure, &st.settings.memory_pressure_percent.to_string());
     let check = if st.settings.split_view { BST_CHECKED.0 } else { 0 };
     let preview = if st.settings.hover_preview { BST_CHECKED.0 } else { 0 };
+    let bar = if st.settings.show_bookmarks_bar { BST_CHECKED.0 } else { 0 };
     unsafe {
         SendMessageW(st.split, BM_SETCHECK, Some(WPARAM(check as usize)), None);
         SendMessageW(st.preview, BM_SETCHECK, Some(WPARAM(preview as usize)), None);
+        SendMessageW(st.bookmarks_bar, BM_SETCHECK, Some(WPARAM(bar as usize)), None);
     }
     let position_index = FIELD_POSITIONS.iter().position(|(p, _)| *p == st.settings.field_position).unwrap_or(0);
     unsafe {
@@ -1514,6 +1540,28 @@ fn toggle_preview(st: &mut State, flip: bool) -> Outcome {
     Outcome::Changed
 }
 
+/// The bookmarks bar, like `toggle_split`.
+fn toggle_bookmarks_bar(st: &mut State, flip: bool) -> Outcome {
+    unsafe {
+        if flip {
+            let checked = SendMessageW(st.bookmarks_bar, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+            let next = if checked { 0 } else { BST_CHECKED.0 };
+            SendMessageW(st.bookmarks_bar, BM_SETCHECK, Some(WPARAM(next as usize)), None);
+        }
+        st.settings.show_bookmarks_bar =
+            SendMessageW(st.bookmarks_bar, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+    }
+    status(
+        st,
+        if st.settings.show_bookmarks_bar {
+            "The bookmarks bar shows when you have bookmarks."
+        } else {
+            "The bookmarks bar is hidden. Ctrl+Shift+O shows your bookmarks."
+        },
+    );
+    Outcome::Changed
+}
+
 fn selected_command(st: &State) -> Option<Command> {
     list_selection(st.keys_list).and_then(|i| st.commands.get(i).copied())
 }
@@ -1650,6 +1698,8 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
         (ID_SPLIT_LABEL, STN_CLICKED) => toggle_split(st, true),
         (ID_PREVIEW, BN_CLICKED_CODE) => toggle_preview(st, false),
         (ID_PREVIEW_LABEL, STN_CLICKED) => toggle_preview(st, true),
+        (ID_BOOKMARKS_BAR, BN_CLICKED_CODE) => toggle_bookmarks_bar(st, false),
+        (ID_BOOKMARKS_BAR_LABEL, STN_CLICKED) => toggle_bookmarks_bar(st, true),
         (ID_AWAKE_ADD, BN_CLICKED_CODE) => add_awake(st),
         (ID_AWAKE_REMOVE, BN_CLICKED_CODE) => remove_awake(st),
         (ID_KEYS_LIST, LBN_SELCHANGE) => {

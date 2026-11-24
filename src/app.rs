@@ -32,6 +32,7 @@ use windows::{
 
 mod apply_settings;
 mod bench_ui;
+mod bookmarks_ui;
 mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
@@ -143,6 +144,8 @@ enum Mode {
     RenameGroup(u64),
     /// Name a space: Enter keeps what is typed.
     RenameSpace(u64),
+    /// Name the bookmark chosen on the bookmarks bar (`bookmarks_ui`).
+    RenameBookmark,
 }
 
 #[derive(Clone, Debug)]
@@ -215,6 +218,8 @@ struct App {
     power: power_ui::PowerUi,
     fullscreen: fullscreen_ui::FullscreenUi,
     spaces: spaces_ui::SpacesUi,
+    /// The bookmarks bar's copy of the list (`bookmarks_ui`).
+    bookmarks: bookmarks_ui::BarUi,
 }
 
 thread_local! {
@@ -440,6 +445,7 @@ pub fn run() -> windows::core::Result<()> {
         power: Default::default(),
         fullscreen: Default::default(),
         spaces: Default::default(),
+        bookmarks: bookmarks_ui::BarUi::load(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -792,7 +798,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_LBUTTONUP => {
             let (x, y) = x_y(lparam);
-            with_app(|app| app.mouse_up(x, y));
+            // The keys held at the release, as the message says (a posted
+            // message has no keyboard state of its own).
+            let ctrl = wparam.0 & 0x0008 != 0; // MK_CONTROL
+            with_app(|app| {
+                app.bookmark_keys(ctrl);
+                app.mouse_up(x, y)
+            });
             LRESULT(0)
         }
         WM_CAPTURECHANGED => {
@@ -820,6 +832,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MBUTTONUP => {
             let (x, y) = x_y(lparam);
             with_app(|app| {
+                if app.bookmark_middle_click(x, y) {
+                    return;
+                }
                 if let Some(Hit::Tab(id) | Hit::Close(id)) = app.layout.hit(x, y) {
                     app.close_tab(id);
                 }
@@ -1024,6 +1039,7 @@ impl App {
             self.update.is_some(),
             &self.space_infos(),
         );
+        self.place_bookmarks();
         if self.fullscreen.on() {
             self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
         }
@@ -1112,6 +1128,14 @@ impl App {
             window_active: !self.frame.inactive,
             nav: self.nav.state,
         };
+        let bar = crate::bookmark_bar::BarPaint {
+            layout: &self.layout,
+            entries: self.bookmark_entries(),
+            palette: &self.palette,
+            motion: &self.motion,
+            scale: self.scale,
+            held: self.bookmark_held(),
+        };
         let dirty = RECT {
             left: dirty.left.max(0),
             top: dirty.top.max(0),
@@ -1140,6 +1164,7 @@ impl App {
                     let drawn = surface.paint(hdc, piece, |g| {
                         tabbar::paint(g, width, height, &paint);
                         self.paint_spaces(g, now);
+                        crate::bookmark_bar::paint(g, &bar);
                     });
                     if !drawn {
                         gfx::fill_gdi(hdc, piece, self.palette.chrome);
@@ -1963,6 +1988,7 @@ impl App {
             Command::Bookmarks => self.open_panel(PanelKind::Bookmarks),
             Command::History => self.open_panel(PanelKind::History),
             Command::ToggleBookmark => self.toggle_bookmark(),
+            Command::ToggleBookmarksBar => self.toggle_bookmarks_bar(),
             Command::Settings => self.open_settings(),
             Command::Passwords => self.open_panel(PanelKind::Passwords),
             Command::PrevTab => {
@@ -2132,7 +2158,7 @@ impl App {
         if self.divider_drag(x) {
             return;
         }
-        if self.group_mouse_move(x, y) {
+        if self.group_mouse_move(x, y) || self.bookmark_mouse_move(x, y) {
             self.set_hover(self.layout.hit(x, y));
             return;
         }
@@ -2192,6 +2218,8 @@ impl App {
             }
             Some(Hit::Window(button)) => self.press_window_button(button),
             Some(Hit::Nav(button)) => self.nav_mouse_down(button),
+            Some(Hit::Bookmark(index)) => self.bookmark_mouse_down(index, x, y),
+            Some(Hit::BookmarksMore) => self.bookmarks_more_menu(),
             None => {
                 if self.mode.is_some() {
                     self.close_omnibar();
@@ -2211,6 +2239,10 @@ impl App {
         }
         if let Some(Hit::Space(space)) = self.layout.hit(x, y) {
             self.space_menu(x, y, space);
+            return;
+        }
+        if let Some(Hit::Bookmark(index)) = self.layout.hit(x, y) {
+            self.bookmark_menu(x, y, index);
             return;
         }
         let Some(Hit::Tab(id) | Hit::Close(id)) = self.layout.hit(x, y) else {
@@ -2345,6 +2377,10 @@ impl App {
             }
             Mode::RenameSpace(space) => {
                 let (cue, name) = self.space_cue(space);
+                (cue, name, true)
+            }
+            Mode::RenameBookmark => {
+                let (cue, name) = self.bookmark_rename_cue();
                 (cue, name, true)
             }
         };
@@ -2496,7 +2532,7 @@ impl App {
                 self.panel_rows(kind, text)
             }
             Mode::Split => self.split_rows(text),
-            Mode::Find | Mode::RenameGroup(_) | Mode::RenameSpace(_) => return None,
+            Mode::Find | Mode::RenameGroup(_) | Mode::RenameSpace(_) | Mode::RenameBookmark => return None,
         };
         Some(rows)
     }
@@ -2529,6 +2565,10 @@ impl App {
         }
         if let Mode::RenameSpace(space) = mode {
             self.space_rename_submit(space);
+            return;
+        }
+        if mode == Mode::RenameBookmark {
+            self.bookmark_rename_submit();
             return;
         }
         if mode != Mode::Find {

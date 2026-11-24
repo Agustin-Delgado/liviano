@@ -129,6 +129,7 @@ table marks the items that this method cannot test.
 | Passkeys | The engine sends WebAuthn to the Windows Hello dialog (`tests/probes/webauthn_probe.rs`, in the private test repository). Not verified in this pass. |
 | Light, dark or system theme | Light and dark verified. "System" follows the Windows theme when it changes. |
 | Bookmarks, history and downloads | Verified. |
+| Bookmarks bar | Verified: chips under a top strip, tiles in the column, the overflow, the setting and its shortcut, click, Ctrl+click, middle click, rename, remove and the drag that reorders. A test sent mouse messages to the Nea window. A person checks the menus. |
 | Private tabs | Verified. They have their own InPrivate profile. Nea writes nothing to the history, the session, Ctrl+Shift+T or settings.json. |
 | Chrome extensions | Verified: install with the "Add to Chrome" button of the Chrome Web Store (Nea asks first), load, remove, the button and pinned extensions. The limitations are in [docs/extensions.md](extensions.md). |
 | Find in page | Verified. |
@@ -225,12 +226,43 @@ to keep the group without a name.
 The commands "Remove tab from group" and "Collapse or expand group" have no
 default shortcut. You can assign a shortcut in Settings.
 
+## Bookmarks bar
+
+The bookmarks bar shows your bookmarks above the tabs, as Safari and Arc do.
+It shows only when you have one or more bookmarks. Ctrl+Shift+B bookmarks
+the current page.
+
+- **Tab strip on top:** a slim bar (28 px) under the strip. Each bookmark is
+  a chip with the icon of the site and the title. A long title stops at
+  160 px. The bookmarks that do not fit go into the **»** menu at the right
+  end. The page moves down by the height of the bar.
+- **Tab strip on the side:** square tiles at the top of the column, above
+  the tabs, as the favorites of Arc. Each tile shows the icon of the site,
+  or its initial. The tiles fill the width of the column, with up to three
+  rows. The bookmarks that do not fit go into the **…** tile.
+- When the pointer stops on a bookmark, a tooltip shows the title and the
+  site.
+- **Click** a bookmark to open it in the current tab. **Ctrl+click** or
+  **middle-click** it to open it in a new tab behind the current tab. The
+  new tab sleeps until you select it.
+- **Right-click** a bookmark to see these commands: "Open in new tab", "Open
+  in new private tab", "Rename…", "Remove" and "Hide bookmarks bar".
+  "Rename…" asks for the name in the field.
+- **Drag** a bookmark along the bar to change its place. The bookmarks panel
+  (Ctrl+Shift+O) uses the same order. A new bookmark goes first.
+- To hide or show the bar, use Settings → Tabs → "Show bookmarks bar", or
+  Alt+Shift+B.
+
+Nea keeps the bar in memory. A paint reads no file, and Nea measures the
+titles one time for each change. A change in the bookmarks panel, Ctrl+Shift+B
+and the commands of the bar update it immediately.
+
 ## Manual checks
 
 A person checks these items manually:
 
 - The drag of tabs and of the split view divider.
-- The menus: tab, extensions, hidden elements and the accounts of a sign-in.
+- The menus: tab, extensions, hidden elements, the bookmarks bar and the accounts of a sign-in.
 - The floating video.
 - The password import.
 - The passkeys.

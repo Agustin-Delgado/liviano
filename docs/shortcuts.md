@@ -20,6 +20,7 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Copy address / paste and go | Ctrl+Shift+C / Ctrl+Shift+V |
 | Reload / hard reload | F5 or Ctrl+R / Ctrl+F5 |
 | Bookmark page | Ctrl+Shift+B |
+| Show or hide the bookmarks bar | Alt+Shift+B |
 | Bookmarks / history / downloads | Ctrl+Shift+O / Ctrl+Y / Ctrl+Shift+J |
 | Reader mode | Ctrl+Shift+R |
 | Floating video | Ctrl+Shift+P |

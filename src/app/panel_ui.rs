@@ -137,7 +137,8 @@ impl App {
             | Mode::Find
             | Mode::Split
             | Mode::RenameGroup(_)
-            | Mode::RenameSpace(_) => {}
+            | Mode::RenameSpace(_)
+            | Mode::RenameBookmark => {}
         }
     }
 
@@ -290,8 +291,10 @@ impl App {
             Item::Url(url) if kind == PanelKind::Bookmarks => {
                 if let Some(bookmarks) = &mut self.panels.bookmarks
                     && bookmarks.remove(&url)
+                    && bookmarks.save().is_ok()
                 {
-                    let _ = bookmarks.save();
+                    let items = bookmarks.items.clone();
+                    self.bookmarks_changed(&items);
                 }
             }
             Item::Url(url) => {
@@ -375,6 +378,7 @@ impl App {
         if bookmarks.save().is_err() {
             return;
         }
+        self.bookmarks_changed(&bookmarks.items);
         self.open_panel(PanelKind::Bookmarks);
         let name = if title.trim().is_empty() { omnibox::display_host(&url).to_string() } else { title };
         self.panels.notice = Some(if marked {

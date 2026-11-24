@@ -5,6 +5,7 @@ mod app;
 mod app_icon;
 mod autofill;
 mod bench;
+mod bookmark_bar;
 mod bookmarks;
 mod crx;
 mod curtain;

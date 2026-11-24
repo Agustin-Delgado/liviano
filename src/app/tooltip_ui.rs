@@ -78,6 +78,7 @@ impl App {
             Hit::Nav(NavButton::Back) => Some(with_chord("Back", Command::Back)),
             Hit::Nav(NavButton::Forward) => Some(with_chord("Forward", Command::Forward)),
             Hit::Nav(NavButton::Reload) => Some(with_chord("Reload", Command::Reload)),
+            Hit::Bookmark(_) | Hit::BookmarksMore => self.bookmark_tip(hit),
             _ => None,
         }
     }
@@ -92,6 +93,7 @@ impl App {
             Hit::Group(group) => self.group_tip_anchor(group),
             Hit::Space(space) => self.space_tip_anchor(space),
             Hit::Nav(button) => Some(self.nav_rect(button)),
+            Hit::Bookmark(_) | Hit::BookmarksMore => self.bookmark_tip_anchor(hit),
             _ => None,
         }
     }
@@ -141,7 +143,12 @@ impl App {
             let _ = ClientToScreen(self.hwnd, &mut top_left);
             let _ = KillTimer(Some(self.hwnd), TIMER_CLOSE);
         }
-        let inside = Rect::new(top_left.x, top_left.y, top_left.x + client.right, top_left.y + client.bottom);
+        let mut inside = Rect::new(top_left.x, top_left.y, top_left.x + client.right, top_left.y + client.bottom);
+        // A bookmark's tooltip goes under it: above, it would cover the tabs
+        // or the window's buttons.
+        if matches!(hit, Hit::Bookmark(_) | Hit::BookmarksMore) {
+            inside.top = anchor.top;
+        }
         let (palette, scale, owner) = (self.palette, self.scale, self.hwnd);
         STATE.with(|s| {
             let mut s = s.borrow_mut();

@@ -39,6 +39,10 @@ pub enum Hit {
     Update,
     /// A space in the switcher (shown with two spaces or more).
     Space(u64),
+    /// A bookmark on the bookmarks bar, by its place in the bar's list.
+    Bookmark(usize),
+    /// The bar's overflow button ("»" or the "…" tile).
+    BookmarksMore,
 }
 
 /// The page's own buttons, after the window's.
@@ -248,6 +252,8 @@ pub struct Layout {
     /// The space switcher: after back, forward and reload on a top strip,
     /// at the foot of the column. Empty with one space.
     pub spaces: Vec<SpaceChip>,
+    /// The bookmarks bar, when it shows (`bookmark_bar::place`).
+    pub bookmarks: crate::bookmark_bar::BarLayout,
 }
 
 /// The zoom level and where it shows.
@@ -701,6 +707,9 @@ impl Layout {
         }
         if !self.strip.contains(x, y) {
             return None;
+        }
+        if let Some(hit) = self.bookmarks.hit(x, y) {
+            return Some(hit);
         }
         if self.extensions.contains(x, y) {
             return Some(Hit::Extensions);
@@ -1363,6 +1372,8 @@ pub enum HoverKey {
     Zoom,
     Update,
     Space(u64),
+    Bookmark(usize),
+    BookmarksMore,
 }
 
 impl HoverKey {
@@ -1380,6 +1391,8 @@ impl HoverKey {
             Hit::Zoom => [Some(HoverKey::Zoom), None],
             Hit::Update => [Some(HoverKey::Update), None],
             Hit::Space(id) => [Some(HoverKey::Space(id)), None],
+            Hit::Bookmark(i) => [Some(HoverKey::Bookmark(i)), None],
+            Hit::BookmarksMore => [Some(HoverKey::BookmarksMore), None],
         }
     }
 }
@@ -1791,6 +1804,12 @@ impl Motion {
         control(HoverKey::Settings, layout.settings);
         if let Some(update) = layout.update {
             control(HoverKey::Update, update);
+        }
+        for (i, rect) in layout.bookmarks.items.iter().enumerate() {
+            control(HoverKey::Bookmark(i), *rect);
+        }
+        if let Some(more) = layout.bookmarks.more {
+            control(HoverKey::BookmarksMore, more);
         }
         for (button, rect) in NavButton::ALL.into_iter().zip(layout.nav) {
             control(HoverKey::Nav(button), rect);

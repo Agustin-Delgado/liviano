@@ -1,6 +1,7 @@
-//! Bookmarks (bookmarks.json): a flat list, newest first. Nothing keeps them
-//! in memory: the file is read when a panel or the field needs it and the
-//! copy is dropped when it closes.
+//! Bookmarks (bookmarks.json): a flat list in the order of the bookmarks bar.
+//! A new bookmark goes first; a drag on the bar moves it. The panel and the
+//! field read the file when they need it and drop the copy when they close.
+//! Only the bar keeps a small copy in memory (`bookmark_bar`).
 
 use std::path::PathBuf;
 
@@ -43,6 +44,26 @@ impl Bookmarks {
         true
     }
 
+    /// Gives the bookmark of `url` a new title. True when it exists.
+    pub fn rename(&mut self, url: &str, title: &str) -> bool {
+        match self.items.iter_mut().find(|b| b.url == url) {
+            Some(b) => {
+                b.title = title.to_string();
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Puts the bookmarks in the order of the addresses in `order` (the
+    /// bar's order after a drag). One not in `order` goes to the end, in the
+    /// order it had. True when the order changed.
+    pub fn arrange(&mut self, order: &[String]) -> bool {
+        let before: Vec<String> = self.items.iter().map(|b| b.url.clone()).collect();
+        self.items.sort_by_key(|b| order.iter().position(|u| *u == b.url).unwrap_or(usize::MAX));
+        self.items.iter().map(|b| &b.url).ne(before.iter())
+    }
+
     pub fn remove(&mut self, url: &str) -> bool {
         let before = self.items.len();
         self.items.retain(|b| b.url != url);
@@ -50,7 +71,7 @@ impl Bookmarks {
     }
 
     /// The panel's list: every bookmark whose title or address has all the
-    /// words typed, newest first.
+    /// words typed, in the order of the bar.
     pub fn search(&self, query: &str) -> Vec<&Bookmark> {
         self.items.iter().filter(|b| panels::matches(query, &[&b.title, &b.url])).collect()
     }

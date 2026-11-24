@@ -41,7 +41,9 @@ param(
     # No network outside this computer: the engine resolves only 127.0.0.1,
     # the block lists stay the built-in ones and the updater does not check.
     # The pages of other hosts become error pages.
-    [switch]$Offline
+    [switch]$Offline,
+    # Bookmarks in bookmarks.json: with some, the bookmarks bar shows.
+    [int]$Bookmarks = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -144,6 +146,10 @@ $session = @{
 }
 [IO.File]::WriteAllText((Join-Path $data 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))
 
+if ($Bookmarks -gt 0) {
+    $marks = @(); for ($i = 0; $i -lt $Bookmarks; $i++) { $marks += @{ url = "https://example.com/mark-$i"; title = "Bookmark $i"; added = $i } }
+    [IO.File]::WriteAllText((Join-Path $data 'bookmarks.json'), (ConvertTo-Json -InputObject $marks -Compress))
+}
 $env:NEA_DATA_DIR = $data
 $env:NEA_BENCH = '1'
 $env:NEA_TRACE = '1'
