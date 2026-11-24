@@ -132,7 +132,12 @@ impl App {
             Mode::Panel(PanelKind::Passwords) => {
                 self.panels.passwords = Some(self.password_panel_load());
             }
-            Mode::Panel(PanelKind::History) | Mode::Switch | Mode::Find | Mode::Split | Mode::RenameGroup(_) => {}
+            Mode::Panel(PanelKind::History)
+            | Mode::Switch
+            | Mode::Find
+            | Mode::Split
+            | Mode::RenameGroup(_)
+            | Mode::RenameSpace(_) => {}
         }
     }
 

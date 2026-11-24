@@ -106,7 +106,7 @@ impl App {
     /// one moves the times.
     pub(super) fn woke_up(&mut self, now: Instant) {
         let Some(slept_at) = self.power.asleep_since.take() else { return };
-        for tab in &mut self.tabs.tabs {
+        for tab in self.tabs.all_mut() {
             tab.last_active = without_sleep(tab.last_active, slept_at, now);
         }
         self.invalidate();

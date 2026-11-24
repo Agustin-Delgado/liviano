@@ -115,6 +115,7 @@ table marks the items that this method cannot test.
 | Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s, suspends them after the time in Settings and discards them later. It keeps at most 8 live views out of sight, and 4 of the views that were out of sight for 5 min. When memory is low, it discards them immediately. Refer to [memory.md](memory.md). |
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
+| Spaces | Verified: create, name, color, delete, switch with the shortcuts, the switcher and Ctrl+K, move a tab, persistence, deferred restore and old session files. A person checks the menus of a space and of a tab. |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |
 | Reader mode | Verified (Readability). |
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
@@ -136,6 +137,53 @@ table marks the items that this method cannot test.
 | Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. |
 
 [docs/benchmarks.md](benchmarks.md) compares the memory of Nea with Edge. [docs/memory.md](memory.md) tells how Nea keeps its memory low.
+
+## Spaces
+
+A space is a set of tabs with a name and a color, for example "Work" and
+"Personal". The window shows the tabs of one space at a time. Go to a
+different space to see its tabs. The tabs of the other spaces stay open in
+the background. A new window has one space, "Personal".
+
+- **New space:** right-click an empty area of the tab strip and select "New
+  space". The field opens to name it: type the name and push Enter. The new
+  space is empty, so the field then opens for its first tab. New spaces are
+  "Space 2", "Space 3"… until you rename them. Nea keeps at most nine spaces.
+- **Switcher:** with two spaces or more, a small switcher shows each space
+  with its color dot and its name. On a top strip, it is after Back, Forward
+  and Reload. On the side, it is at the bottom of the column, next to the
+  gear. If the row is full, it goes on its own row above the gear. If the
+  names do not fit, only the active space shows its name, and then only the
+  dots show. The active space uses the indigo. Click a space to go to it.
+  The tooltip shows its name and its shortcut.
+- **Shortcuts:** Ctrl+Shift+1 … Ctrl+Shift+9 go to space 1 to 9.
+  Ctrl+Shift+PgDn and Ctrl+Shift+PgUp go to the next and the previous space.
+- **Ctrl+K** finds the tabs of all spaces. A tab of a different space shows
+  the name of its space. Select it to go to its space and its tab.
+- **Right-click a space** to see these commands: "Rename space…", the color,
+  "New space" and "Delete space (keep its tabs)". A deleted space never
+  closes a tab: its tabs go to the space before it (the first space gives
+  its tabs to the next one).
+- **Move a tab:** right-click a tab and select "Move to space", then a space
+  or "New space". The tab leaves its group. The two tabs of a split view
+  pair move together.
+
+Each space remembers its active tab. When you come back to a space, that
+tab is active again. An empty space opens the field for a new tab. When you
+close the last tab of a space, the window stays open.
+
+A switch is as fast as a tab switch. Nea moves the tabs from one list to the
+other, shows one page and hides one. It creates no page and closes no page.
+The tabs of the new space fade in, and the card of the active tab slides to
+its new place. If the Windows animations are off, the change is immediate.
+The tabs of the other spaces are background tabs: they go to sleep and are
+discarded as all other background tabs.
+
+The session keeps the spaces, their names, their colors and their active
+tabs. At startup, Nea creates only the view of the active tab of the active
+space (and of its split pair). A session file of an older version opens in
+one space. A private tab stays in the space where you opened it, and Nea
+never saves it.
 
 ## Tab groups
 

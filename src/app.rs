@@ -44,6 +44,7 @@ mod panel_ui;
 mod popups_ui;
 mod power_ui;
 mod private_tabs;
+mod spaces_ui;
 mod split_ui;
 mod tooltip_ui;
 mod update_ui;
@@ -140,6 +141,8 @@ enum Mode {
     Split,
     /// Name a tab group: Enter keeps what is typed.
     RenameGroup(u64),
+    /// Name a space: Enter keeps what is typed.
+    RenameSpace(u64),
 }
 
 #[derive(Clone, Debug)]
@@ -211,6 +214,7 @@ struct App {
     scrolls: crate::memory::ScrollMemo,
     power: power_ui::PowerUi,
     fullscreen: fullscreen_ui::FullscreenUi,
+    spaces: spaces_ui::SpacesUi,
 }
 
 thread_local! {
@@ -381,18 +385,7 @@ pub fn run() -> windows::core::Result<()> {
     omnibar.set_palette(&palette);
     apply_window_theme(hwnd, &palette);
 
-    let mut tabs = TabList::default();
-    let restored: Vec<(u64, Option<usize>)> = session
-        .tabs
-        .iter()
-        .map(|saved| (tabs.insert(&saved.url, &saved.title, saved.pinned, None), saved.group))
-        .collect();
-    // Selected after the groups are back: a live tab in a folded group unfolds it.
-    tabs.restore_groups(&session.groups, &restored);
-    let restored: Vec<u64> = restored.into_iter().map(|(id, _)| id).collect();
-    if let Some(&id) = restored.get(session.active.min(restored.len().saturating_sub(1))) {
-        tabs.select(id);
-    }
+    let (tabs, restored) = TabList::from_session(&session);
     let splits = Splits::from_saved(&session.splits, &restored);
 
     let app = App {
@@ -446,6 +439,7 @@ pub fn run() -> windows::core::Result<()> {
         scrolls: Default::default(),
         power: Default::default(),
         fullscreen: Default::default(),
+        spaces: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -1028,6 +1022,7 @@ impl App {
             self.extension_slots(),
             self.zoom_shown(),
             self.update.is_some(),
+            &self.space_infos(),
         );
         if self.fullscreen.on() {
             self.layout = fullscreen_ui::fullscreen_layout(width, height, self.vertical);
@@ -1093,6 +1088,7 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
+        let next = next.or(self.spaces_advance(now));
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
@@ -1141,7 +1137,11 @@ impl App {
                     gfx::fill_gdi(hdc, ground, self.palette.field);
                 }
                 for piece in chrome {
-                    if !surface.paint(hdc, piece, |g| tabbar::paint(g, width, height, &paint)) {
+                    let drawn = surface.paint(hdc, piece, |g| {
+                        tabbar::paint(g, width, height, &paint);
+                        self.paint_spaces(g, now);
+                    });
+                    if !drawn {
                         gfx::fill_gdi(hdc, piece, self.palette.chrome);
                     }
                 }
@@ -1172,7 +1172,9 @@ impl App {
 
     fn strip_sheet(&self) -> tabbar::Sheet {
         let loading: Vec<u64> = self.tabs.tabs.iter().filter(|t| t.loading).map(|t| t.id).collect();
-        self.motion.sheet(&self.layout, self.tabs.active, &loading, self.scale)
+        let mut sheet = self.motion.sheet(&self.layout, self.tabs.active, &loading, self.scale);
+        self.spaces_sheet(&mut sheet, self.frame_now.unwrap_or_else(Instant::now));
+        sheet
     }
 
     /// The part of the window the next frame of the strip's motion draws:
@@ -1182,6 +1184,7 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
+        let next = next.or(self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
         if self.motion.rail_moving() || self.motion.indicator_moving() {
@@ -1247,7 +1250,7 @@ impl App {
     fn refresh_theme(&mut self) {
         self.motion.reduced = !design::animations_enabled();
         crate::anim::refresh_reduced();
-        for tab in &self.tabs.tabs {
+        for tab in self.tabs.all() {
             if let Live::Ready(web) = &tab.live {
                 web.apply_theme(self.settings.theme);
             }
@@ -1594,11 +1597,12 @@ impl App {
         let mut capped = Vec::new();
         // A page that waits for its sign-in pop-up stays live too.
         let keep_awake: Vec<bool> =
-            self.tabs.tabs.iter().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
+            self.tabs.all().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
         // Both pages of the pair on screen are in use: their idle time starts
-        // when they leave the screen, or when the window is minimized.
+        // when they leave the screen, or when the window is minimized. The
+        // tabs of the other spaces are background tabs like any other.
         let visible = self.visible_tabs();
-        for (tab, awake) in self.tabs.tabs.iter_mut().zip(keep_awake) {
+        for (tab, awake) in self.tabs.all_mut().zip(keep_awake) {
             let shown = visible.contains(&tab.id);
             if shown && !minimized {
                 tab.last_active = now;
@@ -1913,6 +1917,15 @@ impl App {
     fn run(&mut self, command: Command) {
         let _doing = crate::diag::doing(&"command", 0);
         crate::diag::trace(|| format!("command {}", command.name()));
+        let started = Instant::now();
+        self.run_command(command);
+        // For measurements (NEA_TRACE=1): how long the command held the window.
+        crate::diag::trace(|| {
+            format!("command {} done in {:.3} ms", command.name(), started.elapsed().as_secs_f64() * 1000.0)
+        });
+    }
+
+    fn run_command(&mut self, command: Command) {
         match command {
             Command::FocusAddress => {
                 let mode = if self.tabs.active.is_some() { Mode::Address } else { Mode::NewTab };
@@ -2053,6 +2066,9 @@ impl App {
             Command::FocusLeftPage => self.focus_side(Side::Left),
             Command::FocusRightPage => self.focus_side(Side::Right),
             Command::GroupTab | Command::UngroupTab | Command::ToggleGroup => self.group_command(command),
+            Command::GoToSpace(_) | Command::NextSpace | Command::PrevSpace | Command::NewSpace => {
+                self.space_command(command)
+            }
         }
     }
 
@@ -2144,6 +2160,7 @@ impl App {
             }
             Some(Hit::Close(id)) => self.close_tab(id),
             Some(Hit::Group(group)) => self.group_mouse_down(group, x, y),
+            Some(Hit::Space(space)) => self.space_mouse_down(space),
             Some(Hit::NewTab) => {
                 self.motion.press(tabbar::HoverKey::NewTab);
                 self.open_omnibar(Mode::NewTab);
@@ -2192,6 +2209,10 @@ impl App {
             self.group_menu(x, y, group);
             return;
         }
+        if let Some(Hit::Space(space)) = self.layout.hit(x, y) {
+            self.space_menu(x, y, space);
+            return;
+        }
         let Some(Hit::Tab(id) | Hit::Close(id)) = self.layout.hit(x, y) else {
             if self.layout.strip.contains(x, y) && self.layout.hit(x, y).is_none() {
                 self.layout_menu(x, y);
@@ -2226,6 +2247,7 @@ impl App {
                 let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Open next to the current page"));
             }
             self.append_group_items(menu, id);
+            self.append_space_items(menu, id);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, MENU_TAB_LAYOUT, &wide(frame_ui::layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
@@ -2244,7 +2266,7 @@ impl App {
                 self.run(Command::ToggleTabLayout);
                 return;
             }
-            if self.group_menu_choice(id, chosen) {
+            if self.group_menu_choice(id, chosen) || self.space_menu_choice(id, chosen) {
                 return;
             }
             if chosen != 0 && self.tabs.active != Some(id) && chosen != MENU_CLOSE && chosen != MENU_SPLIT {
@@ -2321,12 +2343,16 @@ impl App {
                 let (cue, name) = self.group_cue(group);
                 (cue, name, true)
             }
+            Mode::RenameSpace(space) => {
+                let (cue, name) = self.space_cue(space);
+                (cue, name, true)
+            }
         };
         self.mode = Some(mode);
         // With no engine and no tab (the window just opened, empty), the
         // first keystroke starts it instead: a window left open untouched
         // never loads it at all.
-        let engine_in_use = self.env.is_some() || !self.tabs.tabs.is_empty();
+        let engine_in_use = self.env.is_some() || self.tabs.count() > 0;
         if matches!(mode, Mode::NewTab | Mode::Split) && engine_in_use {
             self.warm_up();
         }
@@ -2424,13 +2450,21 @@ impl App {
     /// The rows of the field in `mode` for `text`; None for a mode without a list.
     fn rows_for(&mut self, mode: Mode, text: &str, typing_forward: bool) -> Option<Vec<(String, Row)>> {
         let rows = match mode {
+            // Every space's tabs, the active space's first; another space's
+            // row says which space it is in.
             Mode::Switch => self
                 .tabs
-                .tabs
-                .iter()
+                .all()
                 .filter(|t| fuzzy_match(text, t.label()) || fuzzy_match(text, &t.url))
                 .take(12)
-                .map(|t| (format!("{}    {}", t.label(), omnibox::display_host(&t.url)), Row::Switch(t.id)))
+                .map(|t| {
+                    let host = omnibox::display_host(&t.url);
+                    let label = match self.tabs.space_by_id(t.space).filter(|s| s.id != self.tabs.space) {
+                        Some(space) => format!("{}    {host} · {}", t.label(), space.name),
+                        None => format!("{}    {host}", t.label()),
+                    };
+                    (label, Row::Switch(t.id))
+                })
                 .collect(),
             Mode::Address | Mode::NewTab | Mode::NewPrivateTab => {
                 let (start, end) = self.omnibar.selection();
@@ -2462,7 +2496,7 @@ impl App {
                 self.panel_rows(kind, text)
             }
             Mode::Split => self.split_rows(text),
-            Mode::Find | Mode::RenameGroup(_) => return None,
+            Mode::Find | Mode::RenameGroup(_) | Mode::RenameSpace(_) => return None,
         };
         Some(rows)
     }
@@ -2493,6 +2527,10 @@ impl App {
             self.rename_submit(group);
             return;
         }
+        if let Mode::RenameSpace(space) = mode {
+            self.space_rename_submit(space);
+            return;
+        }
         if mode != Mode::Find {
             self.page_typed();
         }
@@ -2505,12 +2543,12 @@ impl App {
             }
             (_, Some(Row::Switch(id))) => {
                 self.close_omnibar();
-                self.select(id);
+                self.select_anywhere(id);
             }
             (Mode::Switch, _) => {
                 if let Some(Row::Switch(id)) = self.rows.first().cloned() {
                     self.close_omnibar();
-                    self.select(id);
+                    self.select_anywhere(id);
                 }
             }
             (_, Some(Row::Go(url))) => self.go(mode, &url),
@@ -2584,6 +2622,7 @@ impl App {
         }
         let r = placement.rcNormalPosition;
         let (tabs, active) = private_tabs::saved_tabs(&self.tabs);
+        let (spaces, active_space) = private_tabs::saved_spaces(&self.tabs);
         Session {
             tabs,
             active,
@@ -2593,6 +2632,8 @@ impl App {
             maximized: placement.showCmd == SW_SHOWMAXIMIZED.0 as u32,
             splits: self.saved_splits(),
             groups: private_tabs::saved_groups(&self.tabs),
+            spaces,
+            active_space,
         }
     }
 
@@ -2600,7 +2641,7 @@ impl App {
         self.save(true);
         self.release_spare();
         storage::flush_writes(Duration::from_secs(10));
-        for tab in &mut self.tabs.tabs {
+        for tab in self.tabs.all_mut() {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
             }
@@ -2656,7 +2697,7 @@ impl Drop for Traced {
 
 /// The tabs that have a web view right now.
 fn live_webs(tabs: &TabList<WebTab>) -> impl Iterator<Item = (u64, &WebTab)> {
-    tabs.tabs.iter().filter_map(|t| match &t.live {
+    tabs.all().filter_map(|t| match &t.live {
         Live::Ready(web) => Some((t.id, web)),
         _ => None,
     })

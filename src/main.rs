@@ -38,6 +38,7 @@ mod settings;
 mod settings_window;
 mod shield;
 mod shortcuts;
+mod spaces;
 mod split;
 mod sqlite;
 mod storage;

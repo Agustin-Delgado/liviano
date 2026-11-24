@@ -59,7 +59,8 @@ impl App {
     pub(super) fn show_active(&mut self) {
         // A minimized window hides its pages (refer to `memory_ui`).
         let wanted = if self.memory.pages_hidden() { Vec::new() } else { self.shown_panes() };
-        let views: Vec<(u64, View)> = self.tabs.tabs.iter().map(|t| (t.id, view_of(&t.live))).collect();
+        // Every space: the page of the space just left is still on screen.
+        let views: Vec<(u64, View)> = self.tabs.all().map(|t| (t.id, view_of(&t.live))).collect();
         let mut wake = Vec::new();
         for change in plan(&views, &wanted) {
             match change {

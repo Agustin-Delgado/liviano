@@ -413,7 +413,7 @@ impl App {
 
     /// Views the engine makes now.
     fn in_flight(&self) -> usize {
-        let creating = self.tabs.tabs.iter().filter(|t| matches!(t.live, Live::Creating)).count();
+        let creating = self.tabs.all().filter(|t| matches!(t.live, Live::Creating)).count();
         // A spare that a tab claimed is that tab's view, counted already.
         creating + usize::from(self.engine.making && self.engine.claim.is_none())
     }
@@ -527,7 +527,7 @@ impl App {
     pub(super) fn warm_up(&mut self) {
         self.engine.wanted_until = Some(Instant::now() + KEEP_SPARE);
         if self.env.is_none() && !self.env_requested {
-            self.engine.started_for_spare = self.tabs.tabs.is_empty();
+            self.engine.started_for_spare = self.tabs.count() == 0;
             self.request_environment();
         }
         // Asked for in the middle of a switch or a key press: the motion it
@@ -576,7 +576,7 @@ impl App {
             // A tab asked for its own view first: the engine's first view
             // also starts its browser process, and a spare made alongside
             // only slows that one down.
-            if self.tabs.tabs.iter().any(|t| matches!(t.live, Live::Creating)) {
+            if self.tabs.all().any(|t| matches!(t.live, Live::Creating)) {
                 self.engine.hold_until = Some(Instant::now() + REPLENISH_AFTER);
             }
             self.warm_up();
@@ -648,7 +648,7 @@ impl App {
             }
         }
         // Started only for the spare and still no tab: no engine at all.
-        if self.engine.started_for_spare && self.tabs.tabs.is_empty() {
+        if self.engine.started_for_spare && self.tabs.count() == 0 {
             self.env = None;
             self.env_requested = false;
         }
@@ -792,7 +792,7 @@ impl App {
     /// waited for them for ever.
     fn restart_engine(&mut self) {
         web::next_generation();
-        for tab in &mut self.tabs.tabs {
+        for tab in self.tabs.all_mut() {
             if let Live::Ready(web) = std::mem::replace(&mut tab.live, Live::Asleep) {
                 web.close();
             }

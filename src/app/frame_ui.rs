@@ -248,9 +248,12 @@ impl App {
         const SIDEBAR: usize = 2;
         const NEW_TAB: usize = 3;
         const RESTART: usize = 4;
+        const NEW_SPACE: usize = 5;
         let chosen = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
             let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("New tab"));
+            let full = if self.tabs.spaces.len() >= crate::spaces::MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
+            let _ = AppendMenuW(menu, MF_STRING | full, NEW_SPACE, &wide("New space"));
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, TAB_LAYOUT, &wide(layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));
@@ -273,6 +276,7 @@ impl App {
             TAB_LAYOUT => self.run(Command::ToggleTabLayout),
             SIDEBAR => self.run(Command::ToggleSidebar),
             NEW_TAB => self.run(Command::NewTab),
+            NEW_SPACE => self.run(Command::NewSpace),
             RESTART => self.restart_to_update(),
             _ => {}
         }

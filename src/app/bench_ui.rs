@@ -198,6 +198,7 @@ fn mode_name(mode: Mode) -> &'static str {
         Mode::NewPrivateTab => "new_private_tab",
         Mode::Split => "split",
         Mode::RenameGroup(_) => "rename_group",
+        Mode::RenameSpace(_) => "rename_space",
         Mode::Panel(PanelKind::Bookmarks) => "bookmarks",
         Mode::Panel(PanelKind::History) => "history",
         Mode::Panel(PanelKind::Downloads) => "downloads",
@@ -353,8 +354,7 @@ impl App {
             Action::Discard => {
                 let background: Vec<u64> = self
                     .tabs
-                    .tabs
-                    .iter()
+                    .all()
                     .filter(|t| t.test && Some(t.id) != self.tabs.active && matches!(t.live, Live::Ready(_)))
                     .map(|t| t.id)
                     .collect();
@@ -371,7 +371,7 @@ impl App {
                         Some(_) => return reply.error("only test tabs can be closed"),
                         None => return reply.error(&format!("no tab {id}")),
                     },
-                    None => self.tabs.tabs.iter().filter(|t| t.test).map(|t| t.id).collect(),
+                    None => self.tabs.all().filter(|t| t.test).map(|t| t.id).collect(),
                 };
                 for id in &ids {
                     self.bench.loaded.remove(id);
@@ -614,6 +614,7 @@ impl App {
             "sidebar_collapsed": self.collapsed,
             "splits": self.split_pairs().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
             "groups": self.groups_state(),
+            "spaces": self.spaces_state(),
             "extensions_button": self.layout.extensions.width() > 0,
             "card": self.card_state(),
             "tooltip": self.tip_state(),

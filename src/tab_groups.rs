@@ -288,8 +288,9 @@ impl<W> TabList<W> {
             changed = true;
         }
         let before = self.groups.len();
-        let tabs = &self.tabs;
-        self.groups.retain(|g| tabs.iter().any(|t| t.group == Some(g.id)));
+        // A group whose tabs wait in another space is kept.
+        let (tabs, parked) = (&self.tabs, &self.parked);
+        self.groups.retain(|g| tabs.iter().chain(parked).any(|t| t.group == Some(g.id)));
         changed || self.groups.len() != before
     }
 
@@ -344,11 +345,12 @@ impl<W> TabList<W> {
         self.normalize_groups();
     }
 
-    /// The groups session.json keeps, in strip order: those with at least
-    /// one tab `kept` saves. Their positions are what `SavedTab::group` holds.
+    /// The groups session.json keeps, in the order of the saved tabs (space
+    /// by space, refer to `in_space_order`): those with at least one tab
+    /// `kept` saves. Their positions are what `SavedTab::group` holds.
     pub fn saved_group_ids(&self, kept: impl Fn(&Tab<W>) -> bool) -> Vec<u64> {
         let mut ids = Vec::new();
-        for tab in self.tabs.iter().filter(|t| kept(t)) {
+        for tab in self.in_space_order().into_iter().filter(|t| kept(t)) {
             if let Some(g) = tab.group.filter(|g| !ids.contains(g)) {
                 ids.push(g);
             }

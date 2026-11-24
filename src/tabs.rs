@@ -32,6 +32,8 @@ pub struct Tab<W> {
     /// the view; the tab keeps it for the next view after a sleep or a
     /// crash. It is not saved in the session.
     pub zoom: f64,
+    /// The space it belongs to (`spaces`).
+    pub space: u64,
 }
 
 impl<W> Tab<W> {
@@ -62,31 +64,65 @@ pub struct Closed {
 }
 
 pub struct TabList<W> {
+    /// The tabs of the active space, in strip order. Every index (the
+    /// layout, a drop, Ctrl+1…8) is an index in here.
     pub tabs: Vec<Tab<W>>,
     pub active: Option<u64>,
     /// Tab groups, in no particular order (the strip order is the tabs').
+    /// A group's tabs are all in one space.
     pub groups: Vec<crate::tab_groups::Group>,
+    /// Never empty; in the order the switcher shows them (`spaces`).
+    pub spaces: Vec<crate::spaces::Space>,
+    /// The id of the space whose tabs are in `tabs`.
+    pub space: u64,
+    /// The tabs of the other spaces, each space's in its own order.
+    pub parked: Vec<Tab<W>>,
     next_id: u64,
     closed: Vec<Closed>,
 }
 
 impl<W> Default for TabList<W> {
     fn default() -> Self {
-        Self { tabs: Vec::new(), active: None, groups: Vec::new(), next_id: 1, closed: Vec::new() }
+        Self {
+            tabs: Vec::new(),
+            active: None,
+            groups: Vec::new(),
+            spaces: vec![crate::spaces::Space::first()],
+            space: crate::spaces::FIRST_SPACE,
+            parked: Vec::new(),
+            next_id: 1,
+            closed: Vec::new(),
+        }
     }
 }
 
 impl<W> TabList<W> {
+    /// Its place in the strip: tabs of other spaces have none.
     pub fn index_of(&self, id: u64) -> Option<usize> {
         self.tabs.iter().position(|t| t.id == id)
     }
 
+    /// Any tab, in any space: engine events for a page out of sight land too.
     pub fn get(&self, id: u64) -> Option<&Tab<W>> {
-        self.tabs.iter().find(|t| t.id == id)
+        self.all().find(|t| t.id == id)
     }
 
     pub fn get_mut(&mut self, id: u64) -> Option<&mut Tab<W>> {
-        self.tabs.iter_mut().find(|t| t.id == id)
+        self.tabs.iter_mut().chain(self.parked.iter_mut()).find(|t| t.id == id)
+    }
+
+    /// Every tab of every space: the active space's first, in strip order.
+    pub fn all(&self) -> impl Iterator<Item = &Tab<W>> {
+        self.tabs.iter().chain(self.parked.iter())
+    }
+
+    pub fn all_mut(&mut self) -> impl Iterator<Item = &mut Tab<W>> {
+        self.tabs.iter_mut().chain(self.parked.iter_mut())
+    }
+
+    /// How many tabs there are, in all spaces.
+    pub fn count(&self) -> usize {
+        self.tabs.len() + self.parked.len()
     }
 
     pub fn active_tab(&self) -> Option<&Tab<W>> {
@@ -104,7 +140,7 @@ impl<W> TabList<W> {
         id
     }
 
-    fn pinned_count(&self) -> usize {
+    pub(crate) fn pinned_count(&self) -> usize {
         self.tabs.iter().filter(|t| t.pinned).count()
     }
 
@@ -134,6 +170,7 @@ impl<W> TabList<W> {
                 test: false,
                 group: None,
                 zoom: 1.0,
+                space: self.space,
             },
         );
         if !pinned && at.is_some() {
@@ -157,8 +194,9 @@ impl<W> TabList<W> {
         id
     }
 
+    /// In any space: they all share the one private profile.
     pub fn has_private(&self) -> bool {
-        self.tabs.iter().any(|t| t.private)
+        self.all().any(|t| t.private)
     }
 
     /// Index right after the active tab, where a tab opened from it goes.
@@ -166,9 +204,10 @@ impl<W> TabList<W> {
         self.active_index().map(|i| i + 1)
     }
 
-    /// Makes `id` the live tab; a tab of a folded group unfolds it.
+    /// Makes `id` the live tab; a tab of a folded group unfolds it. Only a
+    /// tab of the active space can be live (`switch_space` goes to another).
     pub fn select(&mut self, id: u64) -> bool {
-        let Some(tab) = self.get(id) else { return false };
+        let Some(tab) = self.tabs.iter().find(|t| t.id == id) else { return false };
         if let Some(group) = tab.group
             && let Some(g) = self.groups.iter_mut().find(|g| g.id == group)
         {
@@ -187,15 +226,18 @@ impl<W> TabList<W> {
     /// Removes the tab and returns it; if it was active, the neighbour to the
     /// right (or left) becomes active.
     pub fn close(&mut self, id: u64) -> Option<Tab<W>> {
-        let index = self.index_of(id)?;
-        let tab = self.tabs.remove(index);
-        // A private or test tab leaves no trace, not even in Ctrl+Shift+T.
-        if !tab.url.is_empty() && !tab.private && !tab.test {
-            self.closed.push(Closed { url: tab.url.clone(), title: tab.title.clone(), index });
-            if self.closed.len() > 25 {
-                self.closed.remove(0);
+        let Some(index) = self.index_of(id) else {
+            // A tab of another space (its page closed itself, a crash).
+            let at = self.parked.iter().position(|t| t.id == id)?;
+            let tab = self.parked.remove(at);
+            self.remember_closed(&tab, 0);
+            if tab.group.is_some() {
+                self.normalize_groups();
             }
-        }
+            return Some(tab);
+        };
+        let tab = self.tabs.remove(index);
+        self.remember_closed(&tab, index);
         if self.active == Some(id) {
             // The neighbour on show: a folded group's tabs are passed over.
             let at = index.min(self.tabs.len());
@@ -214,6 +256,16 @@ impl<W> TabList<W> {
             self.normalize_groups();
         }
         Some(tab)
+    }
+
+    /// For Ctrl+Shift+T. A private or test tab leaves no trace, not even there.
+    fn remember_closed(&mut self, tab: &Tab<W>, index: usize) {
+        if !tab.url.is_empty() && !tab.private && !tab.test {
+            self.closed.push(Closed { url: tab.url.clone(), title: tab.title.clone(), index });
+            if self.closed.len() > 25 {
+                self.closed.remove(0);
+            }
+        }
     }
 
     /// Makes a tab a test tab (see `Tab::test`).

@@ -318,7 +318,7 @@ impl App {
             _ => None,
         });
         active.or_else(|| {
-            self.tabs.tabs.iter().find_map(|t| match &t.live {
+            self.tabs.all().find_map(|t| match &t.live {
                 Live::Ready(web) => Some(web.webview.clone()),
                 _ => None,
             })
@@ -377,7 +377,7 @@ impl App {
     /// Tabs on one of the extension's pages: (tab, address).
     fn extension_tabs(&self, engine_id: &str) -> Vec<(u64, String)> {
         let prefix = format!("chrome-extension://{engine_id}/");
-        self.tabs.tabs.iter().filter(|t| t.url.starts_with(&prefix)).map(|t| (t.id, t.url.clone())).collect()
+        self.tabs.all().filter(|t| t.url.starts_with(&prefix)).map(|t| (t.id, t.url.clone())).collect()
     }
 
     /// An extension that goes away takes its pages with it, as in Chrome.

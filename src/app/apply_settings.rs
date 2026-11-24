@@ -39,7 +39,7 @@ impl App {
         self.settings = settings;
         if trackers_changed {
             crate::shield::set_cosmetic(self.settings.block_trackers);
-            for tab in &self.tabs.tabs {
+            for tab in self.tabs.all() {
                 if let super::Live::Ready(web) = &tab.live {
                     web.apply_privacy(self.settings.block_trackers);
                 }

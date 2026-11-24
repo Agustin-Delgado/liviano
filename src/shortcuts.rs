@@ -49,6 +49,11 @@ pub enum Command {
     ToggleGroup,
     Fullscreen,
     ResetZoom,
+    /// Ctrl+Shift+1…9: the space at that position (`spaces`).
+    GoToSpace(u8),
+    NextSpace,
+    PrevSpace,
+    NewSpace,
 }
 
 impl Command {
@@ -56,6 +61,7 @@ impl Command {
     pub fn name(self) -> String {
         match self {
             Command::GoToTab(n) => format!("go_to_tab_{n}"),
+            Command::GoToSpace(n) => format!("go_to_space_{n}"),
             other => {
                 let name = match other {
                     Command::FocusAddress => "focus_address",
@@ -99,7 +105,10 @@ impl Command {
                     Command::ToggleGroup => "toggle_group",
                     Command::Fullscreen => "fullscreen",
                     Command::ResetZoom => "reset_zoom",
-                    Command::GoToTab(_) => unreachable!(),
+                    Command::NextSpace => "next_space",
+                    Command::PrevSpace => "prev_space",
+                    Command::NewSpace => "new_space",
+                    Command::GoToTab(_) | Command::GoToSpace(_) => unreachable!(),
                 };
                 name.to_string()
             }
@@ -111,6 +120,7 @@ impl Command {
         let label = match self {
             Command::GoToTab(9) => return "Go to last tab".to_string(),
             Command::GoToTab(n) => return format!("Go to tab {n}"),
+            Command::GoToSpace(n) => return format!("Go to space {n}"),
             Command::FocusAddress => "Field",
             Command::SwitchTab => "Switch to tab by name",
             Command::NewTab => "New tab",
@@ -152,6 +162,9 @@ impl Command {
             Command::ToggleGroup => "Collapse or expand group",
             Command::Fullscreen => "Full screen",
             Command::ResetZoom => "Reset zoom",
+            Command::NextSpace => "Next space",
+            Command::PrevSpace => "Previous space",
+            Command::NewSpace => "New space",
         };
         label.to_string()
     }
@@ -264,9 +277,16 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(true, false, true, key(b'L')), Command::Passwords),
         // Nea's own chord: G for group, free in the rest of it.
         (chord(true, true, false, key(b'G')), Command::GroupTab),
+        // The tab chords with Shift, one step up: from tab to space. Not
+        // Ctrl+Alt: on a Spanish keyboard that is AltGr, which types.
+        (chord(true, true, false, VK_NEXT), Command::NextSpace),
+        (chord(true, true, false, VK_PRIOR), Command::PrevSpace),
     ];
     for n in 1..=9u8 {
         table.push((chord(true, false, false, key(b'0' + n)), Command::GoToTab(n)));
+    }
+    for n in 1..=9u8 {
+        table.push((chord(true, true, false, key(b'0' + n)), Command::GoToSpace(n)));
     }
     table
 }
@@ -322,6 +342,7 @@ pub fn all_commands() -> Vec<Command> {
         Command::TogglePopups,
         Command::UngroupTab,
         Command::ToggleGroup,
+        Command::NewSpace,
     ]) {
         if !all.contains(&command) {
             all.push(command);

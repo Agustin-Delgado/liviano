@@ -11,6 +11,8 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Back / forward | Alt+Left / Alt+Right |
 | Previous tab / next tab | Ctrl+Shift+Tab / Ctrl+Tab (and Ctrl+PgUp / Ctrl+PgDn) |
 | Go to tab 1 to 8 / go to last tab | Ctrl+1 … Ctrl+8 / Ctrl+9 |
+| Go to space 1 to 9 | Ctrl+Shift+1 … Ctrl+Shift+9 |
+| Previous space / next space | Ctrl+Shift+PgUp / Ctrl+Shift+PgDn |
 | Tab strip on top / on the side | Ctrl+Shift+S |
 | Hide tabs / show tabs | Ctrl+S |
 | Find in page | Ctrl+F |
@@ -46,3 +48,7 @@ shortcuts. Nea does the reset (Ctrl+0), and you can change its shortcut.
 These commands are in the tab menu (right-click) and have no default
 shortcut: "Pin tab", "Keep site awake", "Block ads on this site" and "Allow
 pop-ups on this site". You can assign a shortcut to them in Settings.
+
+"New space" is in the menu of the tab strip and has no default shortcut. You
+can assign one in Settings. The space shortcuts do not use Ctrl+Alt: on some
+keyboards (for example Spanish), Ctrl+Alt is AltGr, which types characters.

@@ -10,6 +10,7 @@ use crate::{
     design::{Palette, Rgb, group_tint, group_tone, motion, size},
     frame::{self, Frame, WindowButton},
     gfx::{Align, Color, Font, Painter, RectF},
+    spaces::{SpaceChip, SpaceInfo},
     tab_groups::{Drop, GroupColor},
 };
 
@@ -36,6 +37,8 @@ pub enum Hit {
     /// "Update", shown when a verified update waits. A click restarts the
     /// app into the new version.
     Update,
+    /// A space in the switcher (shown with two spaces or more).
+    Space(u64),
 }
 
 /// The page's own buttons, after the window's.
@@ -242,6 +245,9 @@ pub struct Layout {
     /// The update chip, when a verified update waits for a restart: left of
     /// the zoom chip (or of what the zoom chip goes beside).
     pub update: Option<Rect>,
+    /// The space switcher: after back, forward and reload on a top strip,
+    /// at the foot of the column. Empty with one space.
+    pub spaces: Vec<SpaceChip>,
 }
 
 /// The zoom level and where it shows.
@@ -294,13 +300,14 @@ pub fn layout_with(
     extensions: Option<usize>,
     zoom: Option<u32>,
 ) -> Layout {
-    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false)
+    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false, &[])
 }
 
 /// `extensions`: with `Some(pinned)`, the strip also holds the extensions
 /// button and that many pinned extensions (as many as fit). `zoom`: the
 /// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
 /// `update`: the update chip shows (a verified update waits for a restart).
+/// `spaces`: the space switcher's spaces, none for no switcher.
 #[allow(clippy::too_many_arguments)]
 pub fn layout_chrome(
     tabs: &[TabInfo],
@@ -313,6 +320,7 @@ pub fn layout_chrome(
     extensions: Option<usize>,
     zoom: Option<u32>,
     update: bool,
+    spaces: &[SpaceInfo],
 ) -> Layout {
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
@@ -342,13 +350,27 @@ pub fn layout_chrome(
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
     } else {
-        layout_horizontal(tabs, groups, width, height, m, extensions, chips)
+        layout_horizontal(tabs, groups, width, height, m, extensions, chips, spaces)
     };
     if let Some(pinned) = extensions {
         place_extensions(&mut layout, pinned, chips, m);
     }
     place_zoom(&mut layout, zoom, m);
     place_update(&mut layout, update, m);
+    if vertical && !spaces.is_empty() {
+        // The foot row, from the column's pad to the first control; when
+        // even the dots do not fit there, a row of their own above it.
+        let gear = layout.settings;
+        let end = layout.update.or(layout.zoom.map(|z| z.rect)).unwrap_or_else(|| leftmost_control(&layout)).left;
+        let (left, gap) = (m.px(8), m.px(2));
+        let room = end - gap - left;
+        layout.spaces = if crate::spaces::dots_width(spaces.len(), m.scale) <= room {
+            crate::spaces::chip_row(spaces, left, room, gear.top, gear.bottom, m.scale)
+        } else {
+            let (top, bottom) = (gear.top - gap - gear.height(), gear.top - gap);
+            crate::spaces::chip_row(spaces, left, layout.strip.width() - 2 * left, top, bottom, m.scale)
+        };
+    }
     layout
 }
 
@@ -461,6 +483,7 @@ fn group_of<'a>(tab: &TabInfo, groups: &'a [GroupInfo<'a>]) -> Option<&'a GroupI
     tab.group.and_then(|g| groups.iter().find(|i| i.id == g))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn layout_horizontal(
     tabs: &[TabInfo],
     groups: &[GroupInfo],
@@ -469,6 +492,7 @@ fn layout_horizontal(
     m: &Metrics,
     extensions: Option<usize>,
     chips: i32,
+    spaces: &[SpaceInfo],
 ) -> Layout {
     // The strip's edge margin: the air above and under its controls, also
     // left of the capsule and right of the gear. The strip is the controls
@@ -499,7 +523,9 @@ fn layout_horizontal(
     // (and the extensions) close the strip at the right.
     let frame = Frame::new(Rect::new(0, 0, width, bar), edge, m.scale);
     let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
-    let start = nav[2].right + pad;
+    // The space switcher sits between the page's buttons and the tabs.
+    let switcher = crate::spaces::chip_row(spaces, nav[2].right + pad, width / 4, item_top, item_bottom, m.scale);
+    let start = switcher.last().map_or(nav[2].right, |c| c.rect.right) + pad;
     let settings = Rect::new(width - edge - m.px(SETTINGS_W), item_top, width - edge, item_bottom);
     let reserved =
         extensions.map_or(0, |n| extensions_width(n, width, m)) + chips + m.px(SETTINGS_W + 2) + edge + m.px(DRAG_ROOM);
@@ -550,6 +576,7 @@ fn layout_horizontal(
         frame,
         nav,
         settings,
+        spaces: switcher,
         ..Default::default()
     }
 }
@@ -680,6 +707,9 @@ impl Layout {
         }
         if let Some(i) = self.extension_marks.iter().position(|r| r.contains(x, y)) {
             return Some(Hit::PinnedExtension(i));
+        }
+        if let Some(chip) = self.spaces.iter().find(|c| c.rect.contains(x, y)) {
+            return Some(Hit::Space(chip.id));
         }
         if let Some(label) = self.labels.iter().find(|l| l.rect.contains(x, y)) {
             return Some(Hit::Group(label.id));
@@ -1332,6 +1362,7 @@ pub enum HoverKey {
     Settings,
     Zoom,
     Update,
+    Space(u64),
 }
 
 impl HoverKey {
@@ -1348,6 +1379,7 @@ impl HoverKey {
             Hit::Settings => [Some(HoverKey::Settings), None],
             Hit::Zoom => [Some(HoverKey::Zoom), None],
             Hit::Update => [Some(HoverKey::Update), None],
+            Hit::Space(id) => [Some(HoverKey::Space(id)), None],
         }
     }
 }
@@ -1397,6 +1429,9 @@ pub struct Motion {
     indicator_slide: Option<(RectF, Tween<f32>)>,
     indicator_drawn: Option<RectF>,
     spin: f32,
+    /// The next layout is another space's set of tabs: they fade in where
+    /// they are, without unfolding one by one (refer to `swap_tabs`).
+    swapping: bool,
     /// Windows' "Show animations in Windows" is off: the ring stands still
     /// (the rest lands at once through `anim::reduced`).
     pub reduced: bool,
@@ -1429,6 +1464,13 @@ impl Motion {
     /// A press on `key` (the gear, the + button): a flash that fades out.
     pub fn press(&mut self, key: HoverKey) {
         self.presses.pulse(key, Instant::now(), specs::HOVER);
+    }
+
+    /// The strip is about to show a different set of tabs (a space
+    /// switch): its tabs fade in in place, the live card slides to the new
+    /// live tab, and nothing unfolds.
+    pub fn swap_tabs(&mut self) {
+        self.swapping = true;
     }
 
     /// Where the split's focus line should be; it slides there.
@@ -1507,7 +1549,10 @@ impl Motion {
                         }
                     }
                     None if !self.drawn.is_empty() && !gone => {
-                        self.moves.insert(id, Tween::new(folded(target, layout.vertical), target, now, specs::MORPH));
+                        if !self.swapping {
+                            let from = folded(target, layout.vertical);
+                            self.moves.insert(id, Tween::new(from, target, now, specs::MORPH));
+                        }
                         self.appear.insert(id, Tween::new(0.0, 1.0, now, specs::MORPH));
                     }
                     None => {}
@@ -1517,6 +1562,7 @@ impl Motion {
             self.moves.clear();
             self.appear.clear();
         }
+        self.swapping = false;
         self.hidden = hidden;
         self.moves.retain(|_, t| t.moving(now));
         self.appear.retain(|_, t| t.moving(now));

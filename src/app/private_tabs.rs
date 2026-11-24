@@ -70,19 +70,20 @@ pub(super) fn kept_in_session<W>(t: &crate::tabs::Tab<W>) -> bool {
     !t.private && !t.test && !t.url.is_empty()
 }
 
-/// The ids of the tabs session.json keeps, in strip order.
+/// The ids of the tabs session.json keeps, in its order (space by space).
 pub(super) fn kept_ids<W>(list: &TabList<W>) -> Vec<u64> {
-    list.tabs.iter().filter(|t| kept_in_session(t)).map(|t| t.id).collect()
+    list.in_space_order().into_iter().filter(|t| kept_in_session(t)).map(|t| t.id).collect()
 }
 
-/// The tabs a session keeps, and the position of the active one among them.
-/// When the active tab is not kept (private, or still empty), the next kept
-/// tab takes its place. Each tab's group is a position in `saved_groups`.
+/// The tabs a session keeps, space by space, and the position of the active
+/// one among them. When the active tab is not kept (private, or still
+/// empty), the next kept tab takes its place. Each tab's group is a
+/// position in `saved_groups`, and its space one in `saved_spaces`.
 pub(super) fn saved_tabs<W>(list: &TabList<W>) -> (Vec<SavedTab>, usize) {
     let kept = kept_in_session::<W>;
     let groups = list.saved_group_ids(kept);
-    let tabs: Vec<SavedTab> = list
-        .tabs
+    let order = list.in_space_order();
+    let tabs: Vec<SavedTab> = order
         .iter()
         .filter(|t| kept(t))
         .map(|t| SavedTab {
@@ -90,17 +91,46 @@ pub(super) fn saved_tabs<W>(list: &TabList<W>) -> (Vec<SavedTab>, usize) {
             title: t.title.clone(),
             pinned: t.pinned,
             group: t.group.and_then(|g| groups.iter().position(|s| *s == g)),
+            space: list.space_index(t.space).unwrap_or(0),
         })
         .collect();
-    let before = list.active_index().map_or(0, |i| list.tabs[..i].iter().filter(|t| kept(t)).count());
+    let before = position_among_kept(&order, list.active).unwrap_or(0);
     let active = before.min(tabs.len().saturating_sub(1));
     (tabs, active)
+}
+
+/// How many kept tabs come before `tab` in `order`; None when it is not
+/// there.
+fn position_among_kept<W>(order: &[&crate::tabs::Tab<W>], tab: Option<u64>) -> Option<usize> {
+    let i = order.iter().position(|t| Some(t.id) == tab)?;
+    Some(order[..i].iter().filter(|t| kept_in_session(t)).count())
 }
 
 /// The groups a session keeps: those with a kept tab. A group of private
 /// tabs only is not written, and neither are its private tabs.
 pub(super) fn saved_groups<W>(list: &TabList<W>) -> Vec<crate::tab_groups::SavedGroup> {
     list.saved_groups(kept_in_session::<W>)
+}
+
+/// Every space (an empty one too), with the position of its live tab among
+/// the saved tabs, and the position of the active space. A private live
+/// tab is not saved: the space then has no live tab to come back to.
+pub(super) fn saved_spaces<W>(list: &TabList<W>) -> (Vec<crate::spaces::SavedSpace>, usize) {
+    let order = list.in_space_order();
+    let spaces = list
+        .spaces
+        .iter()
+        .map(|s| {
+            let live = if s.id == list.space { list.active } else { s.last_active };
+            let kept = live.and_then(|id| list.get(id)).is_some_and(|t| kept_in_session(t));
+            crate::spaces::SavedSpace {
+                name: s.name.clone(),
+                color: s.color.name().to_string(),
+                active: kept.then(|| position_among_kept(&order, live)).flatten(),
+            }
+        })
+        .collect();
+    (spaces, list.space_index(list.space).unwrap_or(0))
 }
 
 /// The window title for the active tab (`label`, and whether it is private).
