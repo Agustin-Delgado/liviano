@@ -63,6 +63,9 @@ pub struct Settings {
     pub split_view: bool,
     /// A picture of the page on a tab's hover card (the card shows anyway).
     pub hover_preview: bool,
+    /// The bookmarks bar: chips under a top strip, tiles at the top of the
+    /// column. It shows only when there is a bookmark.
+    pub show_bookmarks_bar: bool,
     /// Look for a new version once a day.
     pub check_updates: bool,
     /// Manifest address; empty means the one built in (`updater`).
@@ -92,6 +95,7 @@ impl Default for Settings {
             shortcuts: HashMap::new(),
             split_view: true,
             hover_preview: true,
+            show_bookmarks_bar: true,
             check_updates: true,
             update_url: String::new(),
             bench_enabled: false,

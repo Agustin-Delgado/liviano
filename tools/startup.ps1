@@ -23,7 +23,9 @@ param(
     [string]$Exe = '',
     [int]$Repeat = 5,
     [int]$Tabs = 40,
-    [int]$WaitSec = 4
+    [int]$WaitSec = 4,
+    # Bookmarks in bookmarks.json: with some, the bookmarks bar shows.
+    [int]$Bookmarks = 0
 )
 
 $ErrorActionPreference = 'Stop'
@@ -48,6 +50,10 @@ function Start-Run([string]$case) {
         for ($i = 0; $i -lt $Tabs; $i++) { $saved += @{ url = "https://example.com/?tab=$i"; title = "Example tab $i"; pinned = $false } }
         $session = @{ tabs = $saved; active = 0; vertical_tabs = $true; sidebar_collapsed = $false; window = @(80, 80, 1480, 980); maximized = $false }
         [IO.File]::WriteAllText((Join-Path $data 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))
+    }
+    if ($Bookmarks -gt 0) {
+        $marks = @(); for ($i = 0; $i -lt $Bookmarks; $i++) { $marks += @{ url = "https://example.com/mark-$i"; title = "Bookmark $i"; added = $i } }
+        [IO.File]::WriteAllText((Join-Path $data 'bookmarks.json'), (ConvertTo-Json -InputObject $marks -Compress))
     }
     $env:NEA_DATA_DIR = $data
     $env:NEA_BENCH = '1'

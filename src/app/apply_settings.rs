@@ -34,6 +34,7 @@ impl App {
         let theme_changed = settings.theme != self.settings.theme;
         let shortcuts_changed = settings.shortcuts != self.settings.shortcuts;
         let split_changed = settings.split_view != self.settings.split_view;
+        let bar_changed = settings.show_bookmarks_bar != self.settings.show_bookmarks_bar;
         let bench_changed = settings.bench_enabled != self.settings.bench_enabled;
         let trackers_changed = settings.block_trackers != self.settings.block_trackers;
         self.settings = settings;
@@ -56,7 +57,7 @@ impl App {
             self.refresh_theme();
         }
         self.save_settings();
-        if split_changed {
+        if split_changed || bar_changed {
             self.relayout();
         }
         self.invalidate();

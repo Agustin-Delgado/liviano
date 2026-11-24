@@ -30,6 +30,7 @@ pub enum Command {
     PinTab,
     KeepAwake,
     ToggleBookmark,
+    ToggleBookmarksBar,
     Bookmarks,
     History,
     Settings,
@@ -80,6 +81,7 @@ impl Command {
                     Command::PinTab => "pin_tab",
                     Command::KeepAwake => "keep_awake",
                     Command::ToggleBookmark => "toggle_bookmark",
+                    Command::ToggleBookmarksBar => "toggle_bookmarks_bar",
                     Command::Bookmarks => "bookmarks",
                     Command::History => "history",
                     Command::Settings => "settings",
@@ -133,6 +135,7 @@ impl Command {
             Command::PinTab => "Pin tab",
             Command::KeepAwake => "Keep site awake",
             Command::ToggleBookmark => "Bookmark page",
+            Command::ToggleBookmarksBar => "Show or hide bookmarks bar",
             Command::Bookmarks => "Bookmarks",
             Command::History => "History",
             Command::Settings => "Settings",
@@ -248,6 +251,9 @@ fn defaults() -> Vec<(Chord, Command)> {
         // the reset of every browser.
         (chord(true, false, false, key(b'0')), Command::ResetZoom),
         (chord(true, true, false, key(b'B')), Command::ToggleBookmark),
+        // Nea's own chord: Ctrl+Shift+B is taken by the bookmark of the
+        // page, and Ctrl+Alt is AltGr on many keyboards.
+        (chord(false, true, true, key(b'B')), Command::ToggleBookmarksBar),
         // Nea's own chord: a free chord beside the other panels'.
         (chord(true, true, false, key(b'O')), Command::Bookmarks),
         (chord(true, false, false, key(b'Y')), Command::History),

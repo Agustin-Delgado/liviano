@@ -438,7 +438,7 @@ impl App {
     }
 
     pub(super) fn mouse_up(&mut self, x: i32, y: i32) {
-        if self.nav_mouse_up(x, y) || self.group_mouse_up() {
+        if self.nav_mouse_up(x, y) || self.group_mouse_up() || self.bookmark_mouse_up(x, y) {
             return;
         }
         if self.split.resizing {
@@ -464,6 +464,7 @@ impl App {
     /// Someone else took the mouse mid-drag: nothing is dropped.
     pub(super) fn capture_lost(&mut self) {
         self.group_capture_lost();
+        self.bookmark_capture_lost();
         self.nav_capture_lost();
         self.split.resizing = false;
         self.drag = None;
