@@ -108,10 +108,10 @@ fn main() -> windows::core::Result<()> {
     }
     diag::install(&storage::data_dir());
     app::run()?;
-    // The window closed and saved the session: the new instance applies
-    // the update before its window exists.
+    // The window closed and saved the session: the update goes in, and the
+    // new version starts.
     if updater::restart_requested() {
-        updater::relaunch();
+        updater::restart_into_update();
     }
     Ok(())
 }

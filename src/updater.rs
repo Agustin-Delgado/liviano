@@ -5,8 +5,14 @@
 //! next launch swaps the executable before the window exists
 //! (`apply_pending`) and continues with the new one. When a package waits,
 //! the chrome shows a "Restart to update" chip: a click saves the session,
-//! starts the executable again and closes this process (`request_restart`,
-//! `relaunch`).
+//! and once the window is gone this process swaps the executable and starts
+//! the new one (`request_restart`, `restart_into_update`).
+//!
+//! The package waits as a `.pkg`, not an `.exe`, and the swap is a rename:
+//! antivirus heuristics (Defender's `Wacatac!ml`) read "a process drops an
+//! executable in its data folder and starts it" as a trojan, and one
+//! process start of the new file reads less like that than a chain of
+//! three.
 //!
 //! Every failure is silent: a manifest that does not answer or does not
 //! parse leaves the app as it was, and the next try comes at the next wake.
@@ -413,7 +419,7 @@ fn package(
         return Ok(None);
     }
     let package_url = http::resolve(url, &manifest.url);
-    let name = format!("nea-{}.exe", manifest.version.trim());
+    let name = format!("nea-{}.pkg", manifest.version.trim());
     if !safe_file_name(&name) {
         return Err("invalid package name".into());
     }
@@ -469,12 +475,16 @@ pub fn old_path(exe: &Path) -> PathBuf {
 
 /// Puts `new` in place of `target`. A running executable can be renamed but
 /// not overwritten, so the current one steps aside first, and comes back if
-/// the copy fails.
+/// the move fails. `new` is moved when it is on the same volume (the
+/// package is), and copied otherwise (an install from a download).
 pub fn replace_exe(target: &Path, new: &Path) -> std::io::Result<()> {
     let old = old_path(target);
     let _ = fs::remove_file(&old);
     if target.exists() {
         fs::rename(target, &old)?;
+    }
+    if fs::rename(new, target).is_ok() {
+        return Ok(());
     }
     if let Err(error) = fs::copy(new, target) {
         let _ = fs::remove_file(target);
@@ -491,8 +501,14 @@ pub fn replace_exe(target: &Path, new: &Path) -> std::io::Result<()> {
 pub fn apply_pending() -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
     let _ = fs::remove_file(old_path(&exe));
+    swap_pending(&exe) && Command::new(&exe).args(std::env::args_os().skip(1)).env_remove(WAIT_VAR).spawn().is_ok()
+}
+
+/// Swaps the verified package that waits in place of `exe`. True means
+/// `exe` is the new version now.
+fn swap_pending(exe: &Path) -> bool {
     let path = state_path();
-    if !path.exists() || dev_build(&exe).is_some() {
+    if !path.exists() || dev_build(exe).is_some() {
         return false;
     }
     let mut state: State = storage::read_json(&path);
@@ -509,13 +525,13 @@ pub fn apply_pending() -> bool {
     // Verified again: the folder is writable by anything the user runs.
     let verified = is_newer(&pending.version, CURRENT_VERSION)
         && public_key().is_some_and(|key| verify_file(&file, &pending.version, &pending.signature, &key));
-    let applied = verified && replace_exe(&exe, &file).is_ok();
+    let applied = verified && replace_exe(exe, &file).is_ok();
     let _ = fs::remove_file(&file);
-    applied && Command::new(&exe).args(std::env::args_os().skip(1)).env_remove(WAIT_VAR).spawn().is_ok()
+    applied
 }
 
 /// The chip or the menu asked for a restart: when the window has closed
-/// (and saved the session), `relaunch` starts the executable again.
+/// (and saved the session), `restart_into_update` swaps and starts it.
 pub fn request_restart() {
     RESTART.store(true, Ordering::Relaxed);
 }
@@ -532,10 +548,12 @@ pub fn restart_command(exe: &Path, args: impl IntoIterator<Item = OsString>, pid
     command
 }
 
-/// After the window closed: starts this executable again. Its
-/// `apply_pending` swaps the package in before its window exists.
-pub fn relaunch() -> bool {
+/// After the window closed: swaps the package in place of this executable
+/// and starts the new one, which waits until this process is gone. If the
+/// swap can't happen, this executable starts again as it is.
+pub fn restart_into_update() -> bool {
     let Ok(exe) = std::env::current_exe() else { return false };
+    let _ = swap_pending(&exe);
     restart_command(&exe, std::env::args_os().skip(1), std::process::id()).spawn().is_ok()
 }
 
@@ -567,9 +585,13 @@ pub fn wait_for_previous() {
         };
         let mut buffer = [0u16; 1024];
         let mut len = buffer.len() as u32;
-        let same = QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut len)
-            .is_ok()
-            && same_file_name(&String::from_utf16_lossy(&buffer[..len as usize]), &exe);
+        let same =
+            QueryFullProcessImageNameW(process, PROCESS_NAME_WIN32, PWSTR(buffer.as_mut_ptr()), &mut len).is_ok() && {
+                // The previous instance swapped the update in before it
+                // started this one, so its image may be named `.old` now.
+                let image = String::from_utf16_lossy(&buffer[..len as usize]);
+                same_file_name(&image, &exe) || same_file_name(&image, &old_path(&exe))
+            };
         if same {
             WaitForSingleObject(process, WAIT_LIMIT_MS);
         }
