@@ -91,25 +91,25 @@ pub struct Palette {
 
 const LIGHT: Palette = Palette {
     dark: false,
-    chrome: Rgb::grey(0xF5),             // shell oklch(0.97 0 0)
-    tab_active: Rgb::grey(0xFA),         // canvas oklch(0.985 0 0)
-    tab_hover: Rgb::grey(0xF0),          // hover oklch(0.955 0 0)
-    tab_tile: Rgb::grey(0xEF),           // shell-hover oklch(0.952 0 0)
-    pin_live: Rgb::grey(0xE8),           // line oklch(0.93 0 0)
-    ink: Rgb::grey(0x17),                // ink oklch(0.205 0 0)
-    ink_muted: Rgb::grey(0x69),          // ink-muted oklch(0.52 0 0)
-    ink_quiet: Rgb::grey(0x52),          // ink-quiet oklch(0.439 0 0)
-    ink_asleep: Rgb::grey(0x92),         // ink-subtle oklch(0.66 0 0)
-    accent: Rgb::grey(0x17),             // ink: the primary is black on the light shell
+    chrome: Rgb::grey(0xF5),     // shell oklch(0.97 0 0)
+    tab_active: Rgb::grey(0xFA), // canvas oklch(0.985 0 0)
+    tab_hover: Rgb::grey(0xF0),  // hover oklch(0.955 0 0)
+    tab_tile: Rgb::grey(0xEF),   // shell-hover oklch(0.952 0 0)
+    pin_live: Rgb::grey(0xE8),   // line oklch(0.93 0 0)
+    ink: Rgb::grey(0x17),        // ink oklch(0.205 0 0)
+    ink_muted: Rgb::grey(0x69),  // ink-muted oklch(0.52 0 0)
+    ink_quiet: Rgb::grey(0x52),  // ink-quiet oklch(0.439 0 0)
+    ink_asleep: Rgb::grey(0x92), // ink-subtle oklch(0.66 0 0)
+    accent: Rgb::grey(0x17),     // ink: the primary is black on the light shell
     accent_hover: Rgb::grey(0x40),
-    on_accent: Rgb::grey(0xFC),          // on-brand oklch(0.99 0 0)
-    field: Rgb::grey(0xFA),              // canvas
-    selection: Rgb::grey(0xF0),          // hover
-    row_hover: Rgb::grey(0xF3),          // row-hover oklch(0.965 0 0)
-    line: Rgb::grey(0xE8),               // line
-    line_strong: Rgb::grey(0xD7),        // line-strong oklch(0.88 0 0)
-    tooltip: Rgb::grey(0x17),            // ink
-    tooltip_ink: Rgb::grey(0xFA),        // canvas
+    on_accent: Rgb::grey(0xFC),   // on-brand oklch(0.99 0 0)
+    field: Rgb::grey(0xFA),       // canvas
+    selection: Rgb::grey(0xF0),   // hover
+    row_hover: Rgb::grey(0xF3),   // row-hover oklch(0.965 0 0)
+    line: Rgb::grey(0xE8),        // line
+    line_strong: Rgb::grey(0xD7), // line-strong oklch(0.88 0 0)
+    tooltip: Rgb::grey(0x17),     // ink
+    tooltip_ink: Rgb::grey(0xFA), // canvas
     private_tab: Rgb(0xEF, 0xEB, 0xFF),
     private_mark: Rgb(0x7E, 0x4E, 0xD7),
 };
@@ -125,7 +125,7 @@ const DARK: Palette = Palette {
     ink_muted: Rgb::grey(0x9A),
     ink_quiet: Rgb::grey(0xB4),
     ink_asleep: Rgb::grey(0x6E),
-    accent: Rgb::grey(0xED),             // ink: the primary is white on the dark shell
+    accent: Rgb::grey(0xED), // ink: the primary is white on the dark shell
     accent_hover: Rgb::grey(0xFF),
     on_accent: Rgb::grey(0x14),
     field: Rgb::grey(0x1C),
