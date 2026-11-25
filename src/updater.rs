@@ -63,7 +63,7 @@ const PACKAGE_LIMIT: u64 = 128 * 1024 * 1024;
 /// The variable that a restarted process gets: the process ID of the
 /// instance that started it. The new instance waits until that one is gone
 /// (refer to `wait_for_previous`).
-const WAIT_VAR: &str = "NEA_RESTART_WAIT";
+pub(crate) const WAIT_VAR: &str = "NEA_RESTART_WAIT";
 /// The longest time that a restarted instance waits for the previous one.
 const WAIT_LIMIT_MS: u32 = 20_000;
 
@@ -125,13 +125,15 @@ fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// One state for every profile: the update is the program's, not a person's.
 fn state_path() -> PathBuf {
-    storage::data_dir().join("update.json")
+    storage::shared_data_dir().join("update.json")
 }
 
-/// Downloads are machine-local, beside the engine profile.
+/// Downloads are machine-local, beside the engine profile, and shared by
+/// every profile as the state is.
 pub fn update_dir() -> PathBuf {
-    storage::local_root().join("update")
+    storage::shared_local_root().join("update")
 }
 
 pub fn default_manifest_url() -> Option<String> {

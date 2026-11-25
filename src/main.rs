@@ -35,6 +35,8 @@ mod omnibox;
 mod pacer;
 mod panels;
 mod pip;
+mod profile_launch;
+mod profiles;
 mod reader;
 mod session;
 mod settings;
@@ -101,6 +103,9 @@ fn main() -> windows::core::Result<()> {
     }
     // Before any file is read: what the former name left behind moves over.
     legacy::migrate();
+    // Then the profile: its folders and passwords, before anything is read.
+    // The move above only ever looks at profile 0's.
+    profile_launch::apply(profiles::from_args(std::env::args_os().skip(1)));
     if let Some(code) = installer::move_legacy_install() {
         std::process::exit(code);
     }

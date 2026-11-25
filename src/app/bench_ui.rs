@@ -618,6 +618,12 @@ impl App {
             "splits": self.split_pairs().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
             "groups": self.groups_state(),
             "spaces": self.spaces_state(),
+            "profiles": serde_json::json!({
+                "current": crate::profile_launch::current(),
+                "count": self.profiles.list().len(),
+                "button": self.layout.profile.map(|r| [r.left, r.top, r.right, r.bottom]),
+                "data_dir": crate::storage::data_dir(),
+            }),
             "bookmarks_bar": self.bookmarks_bar_state(),
             "extensions_button": self.layout.extensions.width() > 0,
             "card": self.card_state(),

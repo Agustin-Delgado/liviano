@@ -116,6 +116,7 @@ table marks the items that this method cannot test.
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
 | Spaces | Verified: swipe (to the next space, back, too short, past the first space, past the last space and back), switch with the shortcuts and Ctrl+K, move a tab, persistence, deferred restore and old session files. The swipe was sent as wheel messages: a person checks it on a real touchpad. A person checks the menus of a space and of a tab. |
+| Profiles | Verified: separate folders and passwords for a second profile, its own process, the button and the title with two profiles, and nothing with one. A person checks the menu, the Settings group, the desktop shortcut and the window that comes to the front. Read [Profiles](#profiles). |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |
 | Reader mode | Verified (Readability). |
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
@@ -135,7 +136,7 @@ table marks the items that this method cannot test.
 | Find in page | Verified. |
 | Signed updates | Verified. Nea checks soon after it starts and then every 4 hours. When a verified update is ready, the **Update** chip next to the gear (and **Restart to update** in the menu of the tab strip) restarts Nea into the new version and opens the tabs again. A development build never downloads or installs an update. The updater uses the releases of this repository. |
 | Script control | Verified. Read [building.md](building.md#script-control). |
-| Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. |
+| Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. A person checks the Profiles group. |
 | Web notifications | Unit tests cover the site keys, the toast text and a real toast in the notification center (an ignored test, without the pop-up). Not verified with a page in this pass. A person checks the question, the toast and its click. Read [Notifications](#notifications). |
 
 [docs/benchmarks.md](benchmarks.md) compares the memory of Nea with Edge. [docs/memory.md](memory.md) tells how Nea keeps its memory low.
@@ -205,6 +206,42 @@ tabs. At startup, Nea creates only the view of the active tab of the active
 space (and of its split pair). A session file of an older version opens in
 one space. A private tab stays in the space where you opened it, and Nea
 never saves it.
+
+## Profiles
+
+A profile is a separate browser for one person or one role, for example
+"Personal" and "Work". A profile keeps its own tabs, spaces, bookmarks,
+history, passwords and site sign-ins, in its own window. Two profiles never
+see the cookies, the history or the passwords of each other.
+
+With one profile, nothing about profiles shows, except the **Profiles**
+group in Settings. The data that Nea had before profiles is the first
+profile, "Personal". It keeps its folders: nothing moves.
+
+- **New profile:** in Settings → Profiles, type a name and click **New
+  profile**. Nea gives it the next free color and opens its window. With
+  **Add a desktop shortcut** (on by default), a shortcut "Nea (name)" on the
+  desktop opens that profile.
+- **Rename:** select a profile in the list, type the new name and click
+  **Rename**.
+- **Open:** select a profile and click **Open** (or double-click it). If its
+  window is open, it comes to the front. If not, Nea starts it.
+- **With two profiles or more:** a round button with the color and the
+  initial of the profile shows in the tab strip. In the column it is at the
+  bottom, left of the space mark. On a top strip it is left of the controls
+  at the right. Click it to see the profiles: the current one has a check,
+  select another one to open it. The menu also has "New profile…" and
+  "Profile settings", which open Settings. The window title ends with the
+  name of the profile, for example "Nea — Work".
+- Deleting a profile is not available yet.
+
+Each profile runs in its own process (`nea.exe --profile <id>`; without the
+argument, the first profile opens). Its files are in
+`%APPDATA%\Nea\Profiles\<id>` and `%LOCALAPPDATA%\Nea\Profiles\<id>` (the
+engine data is there too). Its passwords are in Credential Manager under
+`Nea:p<id>:`. The list of profiles is `%APPDATA%\Nea\profiles.json`. The
+profiles share the update (its state and the downloaded package) and the
+cache of the filter lists. Profile numbers are never used again.
 
 ## Tab groups
 

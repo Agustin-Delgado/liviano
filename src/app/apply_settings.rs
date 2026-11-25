@@ -24,6 +24,7 @@ impl App {
         settings_window::set_tab_layout(self.vertical, self.collapsed);
         settings_window::open(self.hwnd, &self.settings, &self.palette, on_settings_changed);
         self.attach_settings_extensions();
+        self.attach_settings_profiles();
     }
 
     /// Search address, sleep times and kept-awake sites are read where they

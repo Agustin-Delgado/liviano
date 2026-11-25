@@ -593,6 +593,7 @@ impl App {
             self.zoom_shown(),
             self.update.is_some(),
             self.space_mark_width(),
+            self.profiles_shown(),
         );
         self.place_bookmarks_in(&mut layout);
         layout

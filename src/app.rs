@@ -46,6 +46,7 @@ mod panel_ui;
 mod popups_ui;
 mod power_ui;
 mod private_tabs;
+mod profiles_ui;
 mod spaces_ui;
 mod split_ui;
 mod tooltip_ui;
@@ -222,6 +223,9 @@ struct App {
     spaces: spaces_ui::SpacesUi,
     /// The bookmarks bar's copy of the list (`bookmarks_ui`).
     bookmarks: bookmarks_ui::BarUi,
+    /// The profiles' registry, read at start and again when the window
+    /// comes to the front (another window may have changed it).
+    profiles: crate::profiles::Registry,
 }
 
 thread_local! {
@@ -373,6 +377,8 @@ pub fn run() -> windows::core::Result<()> {
     let hwnd = create_window(&session)?;
     crate::diag::trace(|| "startup: window created".to_string());
     crate::app_icon::apply(hwnd);
+    // Another Nea finds this profile's window by it.
+    crate::profile_launch::tag_window(hwnd);
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
     crate::notifications::set_window(hwnd);
@@ -450,6 +456,7 @@ pub fn run() -> windows::core::Result<()> {
         fullscreen: Default::default(),
         spaces: Default::default(),
         bookmarks: bookmarks_ui::BarUi::load(),
+        profiles: crate::profile_launch::load(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
@@ -724,6 +731,11 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
     let default = || unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
     crate::diag::tick();
     if msg == crate::diag::WM_APP_PING {
+        return LRESULT(0);
+    }
+    // Another Nea opened this profile: its window comes to the front.
+    if msg == crate::profile_launch::activate_message() {
+        crate::profile_launch::come_forward(hwnd);
         return LRESULT(0);
     }
     if let Some(result) = extensions_ui::window_message(hwnd, msg, wparam, lparam) {
@@ -1026,7 +1038,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_ACTIVATE => {
             if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
-                with_app(|app| app.restore_focus());
+                with_app(|app| {
+                    app.reload_profiles();
+                    app.restore_focus();
+                });
             } else {
                 // Another program took the keyboard: the account list goes.
                 with_app(|app| app.autofill_close());
@@ -1102,6 +1117,7 @@ impl App {
             self.zoom_shown(),
             self.update.is_some(),
             self.space_mark_width(),
+            self.profiles_shown(),
         );
         self.place_bookmarks();
         if self.fullscreen.on() {
@@ -1231,6 +1247,7 @@ impl App {
                     let drawn = surface.paint(hdc, piece, |g| {
                         tabbar::paint(g, width, height, &paint);
                         self.paint_spaces(g, &palette, &paint);
+                        self.paint_profile(g, &palette);
                         crate::bookmark_bar::paint(g, &bar);
                     });
                     if !drawn {
@@ -1359,7 +1376,8 @@ impl App {
     }
 
     fn update_title(&self) {
-        let title = private_tabs::window_title(self.tabs.active_tab().map(|t| (t.label(), t.private)));
+        let active = self.tabs.active_tab().map(|t| (t.label(), t.private));
+        let title = private_tabs::window_title(active, &self.app_name());
         unsafe {
             let _ = SetWindowTextW(self.hwnd, &wide(&title));
         }
@@ -2312,6 +2330,10 @@ impl App {
             Some(Hit::Close(id)) => self.close_tab(id),
             Some(Hit::Group(group)) => self.group_mouse_down(group, x, y),
             Some(Hit::SpaceMark) => self.space_mouse_down(x, y),
+            Some(Hit::Profile) => {
+                self.close_omnibar();
+                self.profile_mouse_down(x, y);
+            }
             Some(Hit::NewTab) => {
                 self.motion.press(tabbar::HoverKey::NewTab);
                 self.open_omnibar(Mode::NewTab);
@@ -2364,6 +2386,10 @@ impl App {
         }
         if let Some(Hit::SpaceMark) = self.layout.hit(x, y) {
             self.space_menu(x, y, self.tabs.space);
+            return;
+        }
+        if let Some(Hit::Profile) = self.layout.hit(x, y) {
+            self.profile_menu(x, y);
             return;
         }
         if let Some(Hit::Bookmark(index)) = self.layout.hit(x, y) {

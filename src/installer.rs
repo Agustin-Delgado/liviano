@@ -25,7 +25,7 @@ use windows::{
             },
         },
         UI::{
-            Shell::{IShellLinkW, ShellExecuteW, ShellLink},
+            Shell::{FOLDERID_Desktop, IShellLinkW, KNOWN_FOLDER_FLAG, SHGetKnownFolderPath, ShellExecuteW, ShellLink},
             WindowsAndMessaging::{
                 IDYES, MB_ICONERROR, MB_ICONINFORMATION, MB_ICONWARNING, MB_OK, MB_YESNO, MESSAGEBOX_STYLE,
                 MessageBoxW, SW_SHOWNORMAL,
@@ -235,15 +235,48 @@ fn write_uninstall_entry(key_path: &str, exe: &Path, dir: &Path) -> Result<(), S
     }
 }
 
-fn create_shortcut(path: &Path, target: &Path, dir: &Path) -> windows::core::Result<()> {
+fn create_shortcut(path: &Path, target: &Path, dir: &Path, arguments: &str) -> windows::core::Result<()> {
     unsafe {
         let link: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER)?;
         link.SetPath(&HSTRING::from(target))?;
+        if !arguments.is_empty() {
+            link.SetArguments(&HSTRING::from(arguments))?;
+        }
         link.SetWorkingDirectory(&HSTRING::from(dir))?;
         link.SetDescription(&HSTRING::from("Web browser"))?;
         link.SetIconLocation(&HSTRING::from(target), 0)?;
         link.cast::<IPersistFile>()?.Save(&HSTRING::from(path), true)
     }
+}
+
+/// Where a profile's desktop shortcut goes. NEA_DESKTOP_DIR moves it for
+/// tests, and a run on other data (NEA_DATA_DIR) keeps it in that folder,
+/// so a test never writes to the person's desktop.
+fn desktop_dir() -> Option<PathBuf> {
+    if let Some(dir) = env_path("NEA_DESKTOP_DIR") {
+        return Some(dir);
+    }
+    if let Some(data) = env_path("NEA_DATA_DIR") {
+        return Some(data.join("Desktop"));
+    }
+    unsafe {
+        let path = SHGetKnownFolderPath(&FOLDERID_Desktop, KNOWN_FOLDER_FLAG(0), None).ok()?;
+        let text = path.to_string().ok();
+        CoTaskMemFree(Some(path.0 as *const _));
+        text.map(PathBuf::from)
+    }
+}
+
+/// A desktop shortcut named `file` that starts this executable with
+/// `arguments` (a profile's). Returns where it went.
+pub fn create_desktop_shortcut(file: &str, arguments: &str) -> Result<PathBuf, String> {
+    let exe = std::env::current_exe().map_err(|e| format!("Cannot find the program: {e}"))?;
+    let desktop = desktop_dir().ok_or("Cannot find the desktop.")?;
+    fs::create_dir_all(&desktop).map_err(|e| format!("Cannot create {}: {e}", desktop.display()))?;
+    let path = desktop.join(file);
+    let dir = exe.parent().map(Path::to_path_buf).unwrap_or_default();
+    create_shortcut(&path, &exe, &dir, arguments).map_err(|e| format!("Cannot create the shortcut: {e}"))?;
+    Ok(path)
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -266,7 +299,8 @@ fn install_files(exe: &Path, places: &Places) -> Result<PathBuf, String> {
     if let Some(menu) = places.shortcut.parent() {
         let _ = fs::create_dir_all(menu);
     }
-    create_shortcut(&places.shortcut, &target, &places.dir).map_err(|e| format!("Cannot create the shortcut: {e}"))?;
+    create_shortcut(&places.shortcut, &target, &places.dir, "")
+        .map_err(|e| format!("Cannot create the shortcut: {e}"))?;
     write_uninstall_entry(&places.key, &target, &places.dir)?;
     Ok(target)
 }

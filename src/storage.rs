@@ -34,6 +34,10 @@ pub const DISPLAY_NAME: &str = if cfg!(debug_assertions) { "Nea (development)" }
 /// (`legacy`): the session reads and writes them where they are.
 static ROAMING_INSTEAD: OnceLock<PathBuf> = OnceLock::new();
 static LOCAL_INSTEAD: OnceLock<PathBuf> = OnceLock::new();
+/// Set when this process opens a profile other than 0 (`use_profile`). It
+/// wins over the folders above: those are profile 0's.
+static PROFILE_ROAMING: OnceLock<PathBuf> = OnceLock::new();
+static PROFILE_LOCAL: OnceLock<PathBuf> = OnceLock::new();
 
 /// Where the roaming files live (settings, history, bookmarks, extensions)
 /// when nothing else was chosen. NEA_DATA_DIR puts everything in one folder.
@@ -62,14 +66,40 @@ pub fn use_instead(roaming: Option<PathBuf>, local: Option<PathBuf>) {
     }
 }
 
-pub fn local_root() -> PathBuf {
+/// Makes this session use a profile's own folders. Only the first call
+/// counts. Kept apart from `use_instead`, which the move of the former
+/// name's folders may already have called for profile 0.
+pub fn use_profile(roaming: PathBuf, local: PathBuf) {
+    let _ = PROFILE_ROAMING.set(roaming);
+    let _ = PROFILE_LOCAL.set(local);
+}
+
+/// Profile 0's machine-local folder: shared by every profile for what is
+/// the program's, not a person's (the downloaded update).
+pub fn shared_local_root() -> PathBuf {
     LOCAL_INSTEAD.get().cloned().unwrap_or_else(default_local_root)
 }
 
-pub fn data_dir() -> PathBuf {
+/// Profile 0's roaming folder, made if missing: shared by every profile for
+/// the update's state and the filter lists.
+pub fn shared_data_dir() -> PathBuf {
     let base = ROAMING_INSTEAD.get().cloned().unwrap_or_else(default_roaming_root);
     let _ = fs::create_dir_all(&base);
     base
+}
+
+pub fn local_root() -> PathBuf {
+    PROFILE_LOCAL.get().cloned().unwrap_or_else(shared_local_root)
+}
+
+pub fn data_dir() -> PathBuf {
+    match PROFILE_ROAMING.get() {
+        Some(base) => {
+            let _ = fs::create_dir_all(base);
+            base.clone()
+        }
+        None => shared_data_dir(),
+    }
 }
 
 /// Engine profile data (cookies, cache) is machine-local, not roaming.
