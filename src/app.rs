@@ -39,6 +39,7 @@ mod frame_ui;
 mod fullscreen_ui;
 mod groups_ui;
 mod hovercard_ui;
+mod lock_ui;
 mod memory_ui;
 mod nav_ui;
 mod notify_ui;
@@ -226,6 +227,8 @@ struct App {
     /// The profiles' registry, read at start and again when the window
     /// comes to the front (another window may have changed it).
     profiles: crate::profiles::Registry,
+    /// The lock of this window (`lock_ui`).
+    lock: lock_ui::LockUi,
 }
 
 thread_local! {
@@ -457,11 +460,14 @@ pub fn run() -> windows::core::Result<()> {
         spaces: Default::default(),
         bookmarks: bookmarks_ui::BarUi::load(),
         profiles: crate::profile_launch::load(),
+        lock: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
         crate::bench::set_enabled(hwnd, true);
     }
+    // Before the window shows: a locked profile never draws its pages.
+    with_app(|app| app.lock_at_start());
 
     unsafe {
         // A scripted run must not take the foreground (and the keyboard)
@@ -526,6 +532,18 @@ fn message_loop() {
                 continue;
             }
             if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+                // A locked window takes Enter and Space, lets Windows have
+                // Alt+F4, and no shortcut of the app runs.
+                let repeat = (msg.lParam.0 >> 30) & 1 == 1;
+                match with_app(|app| app.lock_key(msg.wParam.0 as u32, repeat)).flatten() {
+                    Some(true) => continue,
+                    Some(false) => {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                        continue;
+                    }
+                    None => {}
+                }
                 let chord = web::current_chord(msg.wParam.0 as u32);
                 // In a text field (the field, find, Settings) a word move
                 // is the field's.
@@ -738,6 +756,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         crate::profile_launch::come_forward(hwnd);
         return LRESULT(0);
     }
+    if let Some(result) = lock_ui::window_message(hwnd, msg, wparam, lparam) {
+        return result;
+    }
     if let Some(result) = extensions_ui::window_message(hwnd, msg, wparam, lparam) {
         return result;
     }
@@ -857,6 +878,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MOUSELEAVE => {
             with_app(|app| {
                 app.tracking_mouse = false;
+                app.lock_mouse_leave();
                 app.set_hover(None);
             });
             LRESULT(0)
@@ -904,6 +926,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_SETCURSOR => {
             let own = wparam.0 == hwnd.0 as usize && (lparam.0 & 0xFFFF) as u32 == HTCLIENT;
+            if own && with_app(|app| app.lock_hand_cursor()).unwrap_or(false) {
+                unsafe {
+                    SetCursor(LoadCursorW(None, IDC_HAND).ok());
+                }
+                return LRESULT(1);
+            }
             if own && with_app(|app| app.cursor_on_divider()).unwrap_or(false) {
                 unsafe {
                     SetCursor(LoadCursorW(None, IDC_SIZEWE).ok());
@@ -922,7 +950,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MBUTTONUP => {
             let (x, y) = x_y(lparam);
             with_app(|app| {
-                if app.bookmark_middle_click(x, y) {
+                if app.locked() || app.bookmark_middle_click(x, y) {
                     return;
                 }
                 if let Some(Hit::Tab(id) | Hit::Close(id)) = app.layout.hit(x, y) {
@@ -1104,6 +1132,10 @@ impl App {
             return;
         }
         let (width, height) = self.client_size();
+        if self.locked() {
+            self.lay_out_locked(width, height);
+            return;
+        }
         let metrics = Metrics { scale: self.scale };
         self.layout = tabbar::layout_chrome(
             &self.tab_infos(),
@@ -1176,6 +1208,10 @@ impl App {
     /// show: a frame of the strip's motion renders the strip, and a full
     /// repaint the chrome around the pages, not the whole client area.
     fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC, dirty: RECT) {
+        if self.locked() {
+            self.paint_locked(hdc, dirty);
+            return;
+        }
         let (width, height) = self.client_size();
         let loading = self.tabs.tabs.iter().any(|t| t.loading);
         let started = Instant::now();
@@ -1376,6 +1412,9 @@ impl App {
     }
 
     fn update_title(&self) {
+        if self.set_locked_title() {
+            return;
+        }
         let active = self.tabs.active_tab().map(|t| (t.label(), t.private));
         let title = private_tabs::window_title(active, &self.app_name());
         unsafe {
@@ -1566,6 +1605,13 @@ impl App {
     /// Gives the keyboard to the active page, or to the window while that
     /// page is being made. Only for a window that is in front.
     fn focus_page_now(&self) {
+        if self.locked() {
+            // A hidden page gets no key: the window holds the keyboard.
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(self.hwnd));
+            }
+            return;
+        }
         if let Some(Live::Ready(web)) = self.tabs.active_tab().map(|t| &t.live) {
             let _doing = crate::diag::doing(&"view:focus", 0);
             web.focus();
@@ -2071,6 +2117,11 @@ impl App {
     fn run(&mut self, command: Command) {
         let _doing = crate::diag::doing(&"command", 0);
         crate::diag::trace(|| format!("command {}", command.name()));
+        // A locked window runs nothing: not from a key, a page, a menu or
+        // the window menu.
+        if self.locked() {
+            return;
+        }
         let started = Instant::now();
         self.run_command(command);
         // For measurements (NEA_TRACE=1): how long the command held the window.
@@ -2298,6 +2349,10 @@ impl App {
             }
             self.tracking_mouse = true;
         }
+        if self.locked() {
+            self.lock_mouse_move(x, y);
+            return;
+        }
         if self.divider_drag(x) {
             return;
         }
@@ -2312,6 +2367,10 @@ impl App {
     }
 
     fn mouse_down(&mut self, x: i32, y: i32) {
+        if self.locked() {
+            self.lock_mouse_down(x, y);
+            return;
+        }
         self.hide_card();
         self.hide_tip();
         if self.divider_mouse_down(x, y) {
@@ -2376,6 +2435,9 @@ impl App {
     }
 
     fn context_menu(&mut self, x: i32, y: i32) {
+        if self.locked() {
+            return;
+        }
         if let Some(Hit::Nav(button)) = self.layout.hit(x, y) {
             self.ask_history(button);
             return;
@@ -2504,6 +2566,9 @@ impl App {
     }
 
     fn open_omnibar(&mut self, mode: Mode) {
+        if self.locked() {
+            return;
+        }
         self.autofill_close();
         self.hide_card();
         self.forget_group_target();

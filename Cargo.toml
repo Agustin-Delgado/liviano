@@ -16,6 +16,8 @@ serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 webview2-com = "0.39.1"
 windows-numerics = { version = "0.3.1", default-features = false }
+# The completion of a WinRT call (Windows Hello) without waiting for it.
+windows-future = "0.3.2"
 
 [dependencies.windows]
 version = "0.62"
@@ -23,6 +25,8 @@ features = [
     "Data_Xml_Dom",
     "Foundation",
     "Foundation_Collections",
+    "Security_Credentials",
+    "Security_Credentials_UI",
     "UI_Notifications",
     "Win32_Foundation",
     "Win32_Graphics_Direct2D",
@@ -50,9 +54,11 @@ features = [
     "Win32_System_Pipes",
     "Win32_System_ProcessStatus",
     "Win32_System_Registry",
+    "Win32_System_RemoteDesktop",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_System_Variant",
+    "Win32_System_WinRT",
     "Win32_UI_Controls",
     "Win32_UI_Controls_Dialogs",
     "Win32_UI_HiDpi",

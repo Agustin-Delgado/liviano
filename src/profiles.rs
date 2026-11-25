@@ -15,7 +15,10 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 
-use crate::tab_groups::GroupColor;
+use crate::{
+    profile_lock::{LockAfter, LockOptions},
+    tab_groups::GroupColor,
+};
 
 /// The file of the registry, in the default roaming folder.
 pub const REGISTRY_FILE: &str = "profiles.json";
@@ -39,6 +42,20 @@ pub struct Entry {
     pub name: String,
     /// A `GroupColor` name, kept as text as for the spaces.
     pub color: String,
+    /// "Ask for Windows Hello to open it" (`profile_lock`). Left out of
+    /// the file while off, so a file written before the lock reads the same.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub lock: bool,
+    #[serde(default, skip_serializing_if = "is_never")]
+    pub lock_after: LockAfter,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+fn is_never(value: &LockAfter) -> bool {
+    *value == LockAfter::Never
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -117,7 +134,7 @@ impl Registry {
     pub fn add(&mut self, name: &str) -> u32 {
         let id = self.next_id();
         let color = self.next_color();
-        self.profiles.push(Entry { id, name: name.to_string(), color: color.name().to_string() });
+        self.profiles.push(Entry::new(id, name, color));
         self.next = id + 1;
         id
     }
@@ -131,8 +148,37 @@ impl Registry {
         if id != DEFAULT_ID {
             return false;
         }
-        self.profiles.push(Entry { id, name: name.to_string(), color: DEFAULT_COLOR.name().to_string() });
+        self.profiles.push(Entry::new(id, name, DEFAULT_COLOR));
         true
+    }
+
+    /// The lock options of `id`; off for a profile with no entry.
+    pub fn lock_of(&self, id: u32) -> LockOptions {
+        self.profiles
+            .iter()
+            .find(|e| e.id == id)
+            .map_or_else(LockOptions::default, |e| LockOptions { lock: e.lock, lock_after: e.lock_after })
+    }
+
+    /// Sets the lock options of `id`. Profile 0 gets its entry here, with
+    /// the name and colour it showed.
+    pub fn set_lock(&mut self, id: u32, options: LockOptions) -> bool {
+        if !self.profiles.iter().any(|e| e.id == id) {
+            if id != DEFAULT_ID {
+                return false;
+            }
+            self.profiles.push(Entry::new(id, DEFAULT_NAME, DEFAULT_COLOR));
+        }
+        let Some(entry) = self.profiles.iter_mut().find(|e| e.id == id) else { return false };
+        entry.lock = options.lock;
+        entry.lock_after = options.lock_after;
+        true
+    }
+}
+
+impl Entry {
+    fn new(id: u32, name: &str, color: GroupColor) -> Self {
+        Entry { id, name: name.to_string(), color: color.name().to_string(), lock: false, lock_after: LockAfter::Never }
     }
 }
 

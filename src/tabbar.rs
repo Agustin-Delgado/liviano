@@ -299,6 +299,21 @@ pub fn layout(tabs: &[TabInfo], width: i32, height: i32, vertical: bool, collaps
     layout_with(tabs, &[], width, height, vertical, collapsed, m, None, None)
 }
 
+/// The layout of a locked window: no strip, no tabs and no bar, only the
+/// caption row with the window's buttons (as the collapsed column's row),
+/// over the lock screen that takes the whole client area.
+pub fn layout_locked(width: i32, height: i32, vertical: bool, m: &Metrics) -> Layout {
+    let edge = m.px(frame::LEAD);
+    let row = 2 * edge + m.px(CONTROL_H);
+    let caption = Rect::new(0, 0, width.max(0), row);
+    Layout {
+        content: Rect::new(0, 0, width.max(0), height.max(0)),
+        vertical,
+        frame: Frame::new(caption, edge, m.scale),
+        ..Default::default()
+    }
+}
+
 /// `layout_chrome` with no update chip.
 #[cfg(all(test, nea_tests))]
 #[allow(clippy::too_many_arguments)]

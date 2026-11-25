@@ -14,6 +14,7 @@ use crate::{
     design::{Palette, Rgb, group_tone, size},
     gfx::{Align, Font, Painter, RectF},
     profile_launch,
+    profile_lock::LockOptions,
     profiles::{self, Registry},
     settings_window::{self, ProfileCommand},
     tabbar::{self, HoverKey},
@@ -44,11 +45,11 @@ impl App {
     /// shows follows when it changed.
     pub(super) fn reload_profiles(&mut self) {
         let registry: Registry = profile_launch::load();
-        if registry.list() == self.profiles.list() {
-            self.profiles = registry;
+        if registry == self.profiles {
             return;
         }
         self.profiles = registry;
+        self.sync_lock_watch();
         self.relayout();
         self.invalidate();
         self.update_title();
@@ -114,9 +115,12 @@ impl App {
                 let state = if p.id == current { MF_CHECKED | MF_GRAYED } else { MF_UNCHECKED };
                 let _ = AppendMenuW(menu, MF_STRING | state, MENU_OPEN + i, &wide(&p.name));
             }
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW, w!("New profile…"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Profile settings"));
+            // A locked window opens no Settings: only the other profiles.
+            if !self.locked() {
+                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
+                let _ = AppendMenuW(menu, MF_STRING, MENU_NEW, w!("New profile…"));
+                let _ = AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Profile settings"));
+            }
             let mut point = POINT { x, y };
             let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
             // Its time is the person reading the menu.
@@ -148,8 +152,9 @@ impl App {
         self.sync_settings_profiles();
     }
 
-    fn sync_settings_profiles(&self) {
-        let rows: Vec<(u32, String)> = self.profiles.list().into_iter().map(|p| (p.id, p.name)).collect();
+    pub(super) fn sync_settings_profiles(&self) {
+        let rows: Vec<(u32, String, LockOptions)> =
+            self.profiles.list().into_iter().map(|p| (p.id, p.name, self.profiles.lock_of(p.id))).collect();
         settings_window::set_profiles(&rows, profile_launch::current());
     }
 
@@ -159,6 +164,11 @@ impl App {
                 .map(|(_, shortcut)| shortcut.map(|why| format!("{name} is open. The desktop shortcut failed: {why}"))),
             ProfileCommand::Rename { id, name } => profile_launch::rename(id, &name).map(|()| None),
             ProfileCommand::Open(id) => profile_launch::open(id).map(|()| None),
+            ProfileCommand::Lock { id, options } => {
+                // It may wait for Windows Hello: it says what it did itself.
+                self.set_lock_options(id, options);
+                return;
+            }
         };
         match result {
             Ok(Some(note)) | Err(note) => settings_window::show_status(&note),

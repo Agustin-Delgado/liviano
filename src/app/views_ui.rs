@@ -57,8 +57,9 @@ impl App {
     /// Shows the active tab's view (and its partner's, when split), creating
     /// them if asleep, and hides the rest.
     pub(super) fn show_active(&mut self) {
-        // A minimized window hides its pages (refer to `memory_ui`).
-        let wanted = if self.memory.pages_hidden() { Vec::new() } else { self.shown_panes() };
+        // A minimized window hides its pages (refer to `memory_ui`), and so
+        // does a locked one (`lock_ui`): the pages keep running.
+        let wanted = if self.memory.pages_hidden() || self.locked() { Vec::new() } else { self.shown_panes() };
         // Every space: the page of the space just left is still on screen.
         let views: Vec<(u64, View)> = self.tabs.all().map(|t| (t.id, view_of(&t.live))).collect();
         let mut wake = Vec::new();

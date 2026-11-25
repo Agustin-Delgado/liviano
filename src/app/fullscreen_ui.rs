@@ -127,8 +127,9 @@ impl App {
     }
 
     fn enter_fullscreen(&mut self, by_page: Option<u64>) {
-        // A minimized window has no screen to cover: it stays as it is.
-        if self.fullscreen.on() || unsafe { IsIconic(self.hwnd).as_bool() } {
+        // A minimized window has no screen to cover: it stays as it is. A
+        // locked one shows no page to give the screen to.
+        if self.fullscreen.on() || self.locked() || unsafe { IsIconic(self.hwnd).as_bool() } {
             return;
         }
         self.close_omnibar();
@@ -166,7 +167,7 @@ impl App {
         self.focus_page();
     }
 
-    fn leave_fullscreen(&mut self) {
+    pub(super) fn leave_fullscreen(&mut self) {
         let Some((style, mut placement)) = self.fullscreen.saved.take() else { return };
         let minimized = unsafe { IsIconic(self.hwnd).as_bool() };
         // A page can leave its full screen while the window is minimized

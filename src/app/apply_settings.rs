@@ -18,6 +18,9 @@ fn on_tab_layout_changed(vertical: bool, collapsed: bool) {
 
 impl App {
     pub(super) fn open_settings(&mut self) {
+        if self.locked() {
+            return;
+        }
         self.close_omnibar();
         settings_window::set_layout_handler(on_tab_layout_changed);
         settings_window::set_closed_handler(on_settings_closed);
@@ -25,6 +28,7 @@ impl App {
         settings_window::open(self.hwnd, &self.settings, &self.palette, on_settings_changed);
         self.attach_settings_extensions();
         self.attach_settings_profiles();
+        self.check_hello_for_settings();
     }
 
     /// Search address, sleep times and kept-awake sites are read where they

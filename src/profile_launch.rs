@@ -187,3 +187,12 @@ pub fn rename(id: u32, name: &str) -> Result<(), String> {
     }
     save(&registry).map_err(|e| format!("Cannot save the name: {e}"))
 }
+
+/// Sets a profile's lock options in the registry.
+pub fn set_lock(id: u32, options: crate::profile_lock::LockOptions) -> Result<(), String> {
+    let mut registry = load();
+    if !registry.set_lock(id, options) {
+        return Err("That profile is not in the list.".to_string());
+    }
+    save(&registry).map_err(|e| format!("Cannot save the lock: {e}"))
+}

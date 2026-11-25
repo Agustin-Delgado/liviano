@@ -116,7 +116,7 @@ table marks the items that this method cannot test.
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
 | Spaces | Verified: swipe (to the next space, back, too short, past the first space, past the last space and back), switch with the shortcuts and Ctrl+K, move a tab, persistence, deferred restore and old session files. The swipe was sent as wheel messages: a person checks it on a real touchpad. A person checks the menus of a space and of a tab. |
-| Profiles | Verified: separate folders and passwords for a second profile, its own process, the button and the title with two profiles, and nothing with one. A person checks the menu, the Settings group, the desktop shortcut and the window that comes to the front. Read [Profiles](#profiles). |
+| Profiles | Verified: separate folders and passwords for a second profile, its own process, the button and the title with two profiles, and nothing with one. The lock by script: no page shows while locked, the title, and the page back after the unlock. A person checks the menu, the Settings group, the desktop shortcut, the window that comes to the front, the Windows Hello and password prompts and the look of the lock screen. Read [Profiles](#profiles). |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |
 | Reader mode | Verified (Readability). |
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
@@ -235,6 +235,47 @@ profile, "Personal". It keeps its folders: nothing moves.
   name of the profile, for example "Nea — Work".
 - Deleting a profile is not available yet.
 
+### Locking a profile
+
+A profile can ask for Windows Hello before it shows its pages. It is off
+for every profile, and nothing changes for a person who never turns it on.
+It works with one profile too. In Settings → Profiles, select the profile
+in the list:
+
+- **Ask for Windows Hello to open it:** the profile opens locked.
+- **Lock after:** when an open window of the profile locks again. *Never*
+  (the default), *5 minutes away*, *15 minutes away*, *1 hour away* or *When
+  the window closes*. "Away" is no keyboard or mouse input on the whole
+  computer for that long (Nea looks every 15 seconds). With any choice but
+  *Never*, the window also locks when Windows locks (Windows+L). *When the
+  window closes* means it opens locked the next time, as the box does.
+
+To turn a lock on, Nea first asks for Windows Hello once: a person who
+cannot pass it cannot lock themselves out by mistake. Turning a lock off in
+the window of that profile does not ask. Any change to the lock of another
+profile asks too. When Windows Hello is not set up, the two controls are off
+and Settings says "Set up Windows Hello in Windows Settings first" (Accounts
+→ Sign-in options). A lock that is already on can still be turned off.
+
+A locked window hides every page. The pages keep running: downloads and
+audio continue. The tabs, the bookmarks bar, the field, the previews, the
+menus and Settings do not show. The window title is "Nea — *name*
+(locked)", so the taskbar shows no page title, and its thumbnail shows the
+lock screen. The lock screen shows the profile's mark and name, why it is
+locked ("Locked after 15 minutes away.") and **Unlock with Windows Hello**.
+Enter or Space does the same; no other shortcut of Nea works. With two
+profiles or more, **Use another profile** opens the profiles' menu. After
+the unlock, the window is as it was: the active page shows and has the
+keyboard.
+
+If Windows Hello is not available when the window unlocks, Nea asks for the
+Windows password of the account instead, so nobody is locked out of a
+profile. Only the password of the account that runs Nea opens it.
+
+The lock hides the pages from a person at the computer. It does not encrypt
+the files of the profile. The options are in `profiles.json` (`lock`,
+`lock_after`); a file from before the lock reads as "off".
+
 Each profile runs in its own process (`nea.exe --profile <id>`; without the
 argument, the first profile opens). Its files are in
 `%APPDATA%\Nea\Profiles\<id>` and `%LOCALAPPDATA%\Nea\Profiles\<id>` (the
@@ -346,4 +387,5 @@ A person checks these items manually:
 - The floating video.
 - The password import.
 - The passkeys.
+- The lock of a profile: the Windows Hello prompt over the window, the password prompt without Hello, the lock after Windows+L and the look of the lock screen in both themes.
 - The notifications question, a toast from a real site, and a click on it from the pop-up and from the notification center.

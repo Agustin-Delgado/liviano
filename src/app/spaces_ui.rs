@@ -652,11 +652,11 @@ impl App {
         self.screen_rect(self.layout.content)
     }
 
-    /// The card cannot show: the window is minimized, or a page holds the
-    /// whole screen (a video).
+    /// The card cannot show: the window is minimized or locked, or a page
+    /// holds the whole screen (a video).
     fn space_name_hidden(&self) -> bool {
         let minimized = unsafe { IsIconic(self.hwnd).as_bool() };
-        minimized || self.fullscreen.by_page().is_some()
+        minimized || self.locked() || self.fullscreen.by_page().is_some()
     }
 
     /// A switch committed: the new space's name rises in at the foot of the

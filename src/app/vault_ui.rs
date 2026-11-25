@@ -896,7 +896,7 @@ impl App {
     /// Keeps the offer at the page's top right corner, shown only over its tab.
     fn place_password_bar(&self) {
         let (Some(offer), Some(bar)) = (&self.vault.offer, &self.vault.bar) else { return };
-        if self.tabs.active != Some(offer.tab) {
+        if self.tabs.active != Some(offer.tab) || self.locked() {
             bar.hide();
             return;
         }

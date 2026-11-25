@@ -199,7 +199,7 @@ impl App {
     /// password offer if one stands, shown only over its tab.
     pub(super) fn place_notify_bar(&self) {
         let (Some(ask), Some(bar)) = (&self.notify.asking, &self.notify.bar) else { return };
-        if self.tabs.active != Some(ask.tab) {
+        if self.tabs.active != Some(ask.tab) || self.locked() {
             bar.hide();
             return;
         }
