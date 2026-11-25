@@ -41,6 +41,7 @@ mod groups_ui;
 mod hovercard_ui;
 mod memory_ui;
 mod nav_ui;
+mod notify_ui;
 mod panel_ui;
 mod popups_ui;
 mod power_ui;
@@ -199,6 +200,7 @@ struct App {
     groups: groups_ui::GroupsUi,
     bench: bench_ui::BenchState,
     vault: vault_ui::Vault,
+    notify: notify_ui::Notify,
     extensions: extensions_ui::Extensions,
     popups: popups_ui::Popups,
     frame: frame_ui::FrameUi,
@@ -373,6 +375,7 @@ pub fn run() -> windows::core::Result<()> {
     crate::app_icon::apply(hwnd);
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
+    crate::notifications::set_window(hwnd);
     crate::diag::set_window(hwnd);
     crate::updater::notify(hwnd.0 as isize, update_ui::WM_APP_UPDATE);
     crate::updater::start(&settings);
@@ -432,6 +435,7 @@ pub fn run() -> windows::core::Result<()> {
         groups: Default::default(),
         bench: Default::default(),
         vault: Default::default(),
+        notify: Default::default(),
         extensions: extensions_ui::Extensions::load(),
         popups: Default::default(),
         frame: Default::default(),
@@ -737,6 +741,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         memory_ui::WM_APP_LOW_MEMORY => {
             let _doing = crate::diag::doing(&"low memory", 0);
             with_app(|app| app.low_memory());
+            LRESULT(0)
+        }
+        crate::notifications::WM_APP_TOAST => {
+            if with_app(|app| app.toast_outcomes()).is_none() {
+                retry_later(hwnd, crate::notifications::WM_APP_TOAST, WPARAM(0), LPARAM(0));
+            }
             LRESULT(0)
         }
         update_ui::WM_APP_UPDATE => {
@@ -1348,6 +1358,7 @@ impl App {
         self.hide_card();
         self.hide_tip();
         self.restyle_vault();
+        self.restyle_notify();
         self.invalidate();
     }
 
@@ -1360,6 +1371,7 @@ impl App {
         self.omnibar.set_font(self.font, self.scale);
         // Before the old font is deleted: the offer's controls still use it.
         self.restyle_vault();
+        self.restyle_notify();
         unsafe {
             let _ = DeleteObject(old.into());
         }
@@ -1561,6 +1573,7 @@ impl App {
         self.forget_thumb(id);
         self.scrolls.forget(id);
         self.curtain.closed(id);
+        self.notify_tab_closed(id);
         let heir = self.unpair_closing(id);
         self.opening_closed(id);
         if let Some(tab) = self.tabs.close(id)
@@ -1673,8 +1686,12 @@ impl App {
         // Live views out of sight that may still be discarded: what the cap counts.
         let mut capped = Vec::new();
         // A page that waits for its sign-in pop-up stays live too.
-        let keep_awake: Vec<bool> =
-            self.tabs.all().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
+        // So does a site that may notify: a sleeping page sends nothing.
+        let keep_awake: Vec<bool> = self
+            .tabs
+            .all()
+            .map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id) || self.notifies(&t.url, t.private))
+            .collect();
         // Both pages of the pair on screen are in use: their idle time starts
         // when they leave the screen, or when the window is minimized. The
         // tabs of the other spaces are background tabs like any other.
@@ -1906,6 +1923,7 @@ impl App {
                 }
             }
             Event::Extension(event) => self.on_extension_event(event),
+            Event::Notify(id, message) => self.on_notify(id, message),
         }
     }
 
@@ -1939,8 +1957,15 @@ impl App {
             }
             return;
         };
+        let mut main_profile = None;
         match WebTab::new(id, controller, self.shortcuts.clone(), self.settings.theme) {
             Ok(mut web) => {
+                // A page may ask to notify from any tab; the decisions the
+                // engine kept are read from the main profile.
+                let _ = crate::notify_watch::watch(&web.webview, id);
+                if !tab.private {
+                    main_profile = Some(web.webview.clone());
+                }
                 // A private tab keeps no passwords: no capture, no account menu.
                 web.passwords = !tab.private;
                 // A private download is not listed in the panel: downloads.json outlives it.
@@ -1978,6 +2003,9 @@ impl App {
                     return;
                 }
             }
+        }
+        if let Some(view) = main_profile {
+            self.notify_import(&view);
         }
         self.extensions_view_ready();
         self.show_active();
@@ -2730,6 +2758,7 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        self.notify_shutdown();
         self.save(true);
         self.release_spare();
         storage::flush_writes(Duration::from_secs(10));

@@ -28,6 +28,8 @@ mod installer;
 mod legacy;
 mod memory;
 mod msg_param;
+mod notifications;
+mod notify_watch;
 mod omnibar;
 mod omnibox;
 mod pacer;

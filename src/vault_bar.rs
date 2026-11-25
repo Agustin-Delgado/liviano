@@ -1,9 +1,11 @@
-//! "Save password?": a small floating card over the page's top right
-//! corner, with three buttons (drawn by `widgets`, the main one in ink). It never takes focus by itself (the person
-//! may be typing on the page that follows a login) and exists only while an
-//! offer stands: it is created for it and destroyed after.
+//! A question over the page's top right corner: "Save password?", "Allow
+//! notifications?". A small floating card with three buttons (drawn by
+//! `widgets`, the main one in ink). It never takes focus by itself (the
+//! person may be typing on the page) and exists only while the question
+//! stands: it is created for it and destroyed after. Each card keeps its
+//! own state, so two questions can stand at once.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 
 use windows::{
     Win32::{
@@ -23,6 +25,7 @@ use crate::{
     widgets::{self, ButtonKind},
 };
 
+/// The three buttons, in their order: the main action first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
     Save,
@@ -36,20 +39,35 @@ const SS_ENDELLIPSIS: u32 = 0x4000;
 const BUTTONS: [(i32, Choice); 3] = [(1, Choice::Save), (2, Choice::Never), (3, Choice::NotNow)];
 /// Size of the bubble at 100 % scale.
 const WIDTH: f32 = 430.0;
-const HEIGHT: f32 = 86.0;
+pub const HEIGHT: f32 = 86.0;
+/// The buttons of "Save password?" (DIPs).
+pub const PASSWORD_WIDTHS: [f32; 3] = [92.0, 150.0, 92.0];
 
 thread_local! {
-    static HANDLER: Cell<Option<fn(Choice)>> = const { Cell::new(None) };
-    /// (background brush, background colour, ink)
-    static COLORS: Cell<(isize, u32, u32)> = const { Cell::new((0, 0, 0)) };
-    static LOOK: Cell<Option<(Palette, f32)>> = const { Cell::new(None) };
     static SURFACE: RefCell<Surface> = RefCell::new(Surface::default());
+}
+
+/// What the card's window keeps (GWLP_USERDATA), until WM_NCDESTROY: a
+/// card fades out after its `VaultBar` is gone.
+struct Card {
+    handler: fn(Choice),
+    /// Background brush (0: none yet), background colour, ink.
+    colors: (isize, u32, u32),
+    look: (Palette, f32),
+}
+
+fn card<R>(hwnd: HWND, f: impl FnOnce(&mut Card) -> R) -> Option<R> {
+    let ptr = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *mut Card;
+    // SAFETY: set in `create` from a Box, cleared in WM_NCDESTROY; only this
+    // thread runs the window procedure.
+    unsafe { ptr.as_mut() }.map(f)
 }
 
 pub struct VaultBar {
     popup: HWND,
     label: HWND,
     buttons: Vec<HWND>,
+    widths: [f32; 3],
     scale: f32,
 }
 
@@ -58,16 +76,17 @@ fn px(v: f32, scale: f32) -> i32 {
 }
 
 impl VaultBar {
-    /// `labels`: the question, then the three buttons' text.
+    /// `texts`: the question, then the three buttons' text; `widths`: the
+    /// buttons' widths in DIPs.
     pub fn create(
         owner: HWND,
         palette: &Palette,
         font: HFONT,
         scale: f32,
         texts: [&str; 4],
+        widths: [f32; 3],
         handler: fn(Choice),
     ) -> Option<Self> {
-        HANDLER.with(|h| h.set(Some(handler)));
         unsafe {
             let instance = GetModuleHandleW(None).ok()?.into();
             let class = WNDCLASSW {
@@ -82,7 +101,7 @@ impl VaultBar {
             let popup = CreateWindowExW(
                 WS_EX_TOOLWINDOW,
                 w!("NeaVaultBar"),
-                w!("Password — Nea"),
+                &HSTRING::from(texts[0]),
                 WS_POPUP | WS_CLIPCHILDREN,
                 0,
                 0,
@@ -94,6 +113,8 @@ impl VaultBar {
                 None,
             )
             .ok()?;
+            let state = Box::new(Card { handler, colors: (0, 0, 0), look: (*palette, scale) });
+            SetWindowLongPtrW(popup, GWLP_USERDATA, Box::into_raw(state) as isize);
             let make = |class: PCWSTR, text: &str, style: u32, id: i32| {
                 let child = CreateWindowExW(
                     WINDOW_EX_STYLE::default(),
@@ -124,8 +145,7 @@ impl VaultBar {
             }
             dwm::set(popup, dwm::CORNERS, dwm::ROUND);
             fade::prepare(popup, 255);
-            LOOK.with(|l| l.set(Some((*palette, scale))));
-            let bar = Self { popup, label, buttons, scale };
+            let bar = Self { popup, label, buttons, widths, scale };
             bar.set_palette(palette);
             bar.layout();
             Some(bar)
@@ -141,7 +161,7 @@ impl VaultBar {
             let _ =
                 SetWindowPos(self.label, None, pad, pad, width - 2 * pad, px(22.0, s), SWP_NOZORDER | SWP_NOACTIVATE);
             // Right-aligned, the main action first.
-            let widths = [92.0, 150.0, 92.0].map(|w| px(w, s));
+            let widths = self.widths.map(|w| px(w, s));
             let gap = px(8.0, s);
             let total: i32 = widths.iter().sum::<i32>() + gap * 2;
             let mut x = width - pad - total;
@@ -168,17 +188,18 @@ impl VaultBar {
     }
 
     pub fn set_palette(&self, palette: &Palette) {
-        COLORS.with(|c| {
-            let (old, _, _) = c.get();
+        let scale = self.scale;
+        card(self.popup, |card| {
+            let (old, _, _) = card.colors;
             unsafe {
                 if old != 0 {
                     let _ = DeleteObject(HBRUSH(old as _).into());
                 }
                 let brush = CreateSolidBrush(palette.field.colorref());
-                c.set((brush.0 as isize, palette.field.colorref().0, palette.ink.colorref().0));
+                card.colors = (brush.0 as isize, palette.field.colorref().0, palette.ink.colorref().0);
             }
+            card.look = (*palette, scale);
         });
-        LOOK.with(|l| l.set(Some((*palette, self.scale))));
         dwm::set(self.popup, dwm::BORDER_COLOR, palette.line.colorref().0);
         dwm::set(self.popup, dwm::DARK_MODE, palette.dark as u32);
         unsafe {
@@ -234,12 +255,6 @@ impl Drop for VaultBar {
     fn drop(&mut self) {
         // It leaves as a toast does, and is destroyed once it is gone.
         fade::fade_out(self.popup, specs::TOAST_OUT, -(TOAST_RISE * self.scale).round() as i32, Some(destroy));
-        let (brush, _, _) = COLORS.with(|c| c.replace((0, 0, 0)));
-        if brush != 0 {
-            unsafe {
-                let _ = DeleteObject(HBRUSH(brush as _).into());
-            }
-        }
     }
 }
 
@@ -248,7 +263,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as i32;
             if let Some((_, choice)) = BUTTONS.iter().find(|(button, _)| *button == id)
-                && let Some(handler) = HANDLER.with(|h| h.get())
+                && let Some(handler) = card(hwnd, |c| c.handler)
             {
                 handler(*choice);
             }
@@ -261,7 +276,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             else {
                 return LRESULT(0);
             };
-            if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+            if let Some((palette, scale)) = card(hwnd, |c| c.look) {
                 let kind = if item.CtlID == 1 { ButtonKind::Primary } else { ButtonKind::Secondary };
                 SURFACE.with(|s| {
                     widgets::draw_button_item(
@@ -277,7 +292,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(1)
         }
         WM_CTLCOLORSTATIC | WM_CTLCOLORBTN => {
-            let (brush, background, ink) = COLORS.with(|c| c.get());
+            let (brush, background, ink) = card(hwnd, |c| c.colors).unwrap_or_default();
             if brush == 0 {
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             }
@@ -289,7 +304,7 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             LRESULT(brush)
         }
         WM_ERASEBKGND => {
-            let (brush, _, _) = COLORS.with(|c| c.get());
+            let (brush, _, _) = card(hwnd, |c| c.colors).unwrap_or_default();
             if brush == 0 {
                 return unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) };
             }
@@ -300,7 +315,31 @@ unsafe extern "system" fn bar_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
             }
             LRESULT(1)
         }
+        WM_NCDESTROY => {
+            let ptr = unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0) } as *mut Card;
+            if !ptr.is_null() {
+                // SAFETY: the Box of `create`, taken out of the window once.
+                let state = unsafe { Box::from_raw(ptr) };
+                if state.colors.0 != 0 {
+                    unsafe {
+                        let _ = DeleteObject(HBRUSH(state.colors.0 as _).into());
+                    }
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+#[cfg(all(test, nea_tests))]
+impl VaultBar {
+    fn look(&self) -> Option<(Palette, f32)> {
+        card(self.popup, |c| c.look)
+    }
+
+    fn colors(&self) -> Option<(isize, u32, u32)> {
+        card(self.popup, |c| c.colors)
     }
 }
 

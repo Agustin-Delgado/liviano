@@ -335,6 +335,7 @@ fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
     }
     // Downloaded updates are part of the install, not the user's data.
     let _ = fs::remove_dir_all(updater::update_dir());
+    crate::notifications::unregister(crate::notifications::AUMID);
     if !quiet {
         let data = storage::data_dir();
         message(

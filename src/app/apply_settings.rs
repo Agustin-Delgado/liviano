@@ -37,7 +37,12 @@ impl App {
         let bar_changed = settings.show_bookmarks_bar != self.settings.show_bookmarks_bar;
         let bench_changed = settings.bench_enabled != self.settings.bench_enabled;
         let trackers_changed = settings.block_trackers != self.settings.block_trackers;
+        let forgotten: Vec<String> =
+            self.settings.notifications.keys().filter(|o| !settings.notifications.contains_key(*o)).cloned().collect();
         self.settings = settings;
+        if !forgotten.is_empty() {
+            self.notify_forget(&forgotten);
+        }
         if trackers_changed {
             crate::shield::set_cosmetic(self.settings.block_trackers);
             for tab in self.tabs.all() {

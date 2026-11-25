@@ -83,6 +83,8 @@ const ID_STATUS: i32 = 139;
 const ID_VERSION: i32 = 140;
 const ID_BOOKMARKS_BAR: i32 = 141;
 const ID_BOOKMARKS_BAR_LABEL: i32 = 142;
+const ID_NOTIFY_NOTE: i32 = 143;
+const ID_NOTIFY_FORGET: i32 = 144;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
@@ -150,6 +152,7 @@ struct State {
     status: HWND,
     ext_list: HWND,
     ext_note: HWND,
+    notify_note: HWND,
     font: HFONT,
     heading_font: HFONT,
     scale: f32,
@@ -853,19 +856,22 @@ fn controls() -> Vec<Spec> {
         Kind::Label,
         false,
     );
-    heading(&mut add, "Testing", (r, 610, 140, 22));
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 611, 20, 20), ID_BENCH, Kind::Button, false);
+    // The sites that asked to notify: Nea asks each one once.
+    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 608, 262, 22), ID_NOTIFY_NOTE, Kind::Label, false);
+    add(w!("BUTTON"), "Forget", button_style, none, (r + 270, 604, 86, 26), ID_NOTIFY_FORGET, Kind::Button, false);
+    heading(&mut add, "Testing", (r, 640, 140, 22));
+    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 641, 20, 20), ID_BENCH, Kind::Button, false);
     add(
         w!("STATIC"),
         "Script control (local pipe)",
         SS_NOTIFY,
         none,
-        (r + 174, 610, 182, 22),
+        (r + 174, 640, 182, 22),
         ID_BENCH_LABEL,
         Kind::Label,
         false,
     );
-    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 638, 356, 22), ID_VERSION, Kind::Label, false);
+    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 664, 356, 22), ID_VERSION, Kind::Label, false);
     add(
         w!("BUTTON"),
         "Close",
@@ -1146,6 +1152,7 @@ impl Build {
                         status: self.item(ID_STATUS),
                         ext_list: self.item(ID_EXT_LIST),
                         ext_note: self.item(ID_EXT_NOTE),
+                        notify_note: self.item(ID_NOTIFY_NOTE),
                         font: self.font,
                         heading_font: self.heading_font,
                         scale: self.scale,
@@ -1285,6 +1292,7 @@ fn fill_fields(st: &mut State) {
         SendMessageW(st.updates, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
     }
     set_text(st.version, &version_line());
+    set_text(st.notify_note, &settings::notifications_summary(&st.settings.notifications));
     fill_bench(st);
 }
 
@@ -1486,6 +1494,17 @@ fn add_awake(st: &mut State) -> Outcome {
     let index = st.settings.keep_awake.iter().position(|h| *h == host);
     fill_awake(st, index);
     status(st, &format!("{host} does not sleep now."));
+    Outcome::Changed
+}
+
+fn forget_notifications(st: &mut State) -> Outcome {
+    if st.settings.notifications.is_empty() {
+        status(st, "No site has asked to notify.");
+        return Outcome::Nothing;
+    }
+    st.settings.notifications.clear();
+    set_text(st.notify_note, &settings::notifications_summary(&st.settings.notifications));
+    status(st, "Each site asks again before it shows notifications.");
     Outcome::Changed
 }
 
@@ -1702,6 +1721,7 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
         (ID_BOOKMARKS_BAR_LABEL, STN_CLICKED) => toggle_bookmarks_bar(st, true),
         (ID_AWAKE_ADD, BN_CLICKED_CODE) => add_awake(st),
         (ID_AWAKE_REMOVE, BN_CLICKED_CODE) => remove_awake(st),
+        (ID_NOTIFY_FORGET, BN_CLICKED_CODE) => forget_notifications(st),
         (ID_KEYS_LIST, LBN_SELCHANGE) => {
             show_command(st);
             Outcome::Nothing

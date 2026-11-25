@@ -136,6 +136,7 @@ table marks the items that this method cannot test.
 | Signed updates | Verified. Nea checks soon after it starts and then every 4 hours. When a verified update is ready, the **Update** chip next to the gear (and **Restart to update** in the menu of the tab strip) restarts Nea into the new version and opens the tabs again. A development build never downloads or installs an update. The updater uses the releases of this repository. |
 | Script control | Verified. Read [building.md](building.md#script-control). |
 | Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. |
+| Web notifications | Unit tests cover the site keys, the toast text and a real toast in the notification center (an ignored test, without the pop-up). Not verified with a page in this pass. A person checks the question, the toast and its click. Read [Notifications](#notifications). |
 
 [docs/benchmarks.md](benchmarks.md) compares the memory of Nea with Edge. [docs/memory.md](memory.md) tells how Nea keeps its memory low.
 
@@ -275,6 +276,29 @@ Nea keeps the bar in memory. A paint reads no file, and Nea measures the
 titles one time for each change. A change in the bookmarks panel, Ctrl+D
 and the commands of the bar update it immediately.
 
+## Notifications
+
+A site such as Slack can show notifications in Windows, as in Chrome.
+
+- The first time a site asks, a question shows at the top right corner of
+  its page: **Allow**, **Block** or **Not now**. Nea asks each site once.
+  "Not now" lets the site ask again later.
+- A notification shows as a Windows notification with the title, the text
+  and the site. A click on it brings Nea to the front, on the space and the
+  tab of the site. A silent notification makes no sound. Windows keeps the
+  notifications that you did not close in the notification center until Nea
+  closes.
+- A tab of a site that may show notifications does not sleep: a sleeping
+  page sends nothing.
+- Settings → Privacy shows how many sites you allowed or blocked.
+  **Forget** clears all the decisions, and each site asks again.
+- A private tab asks too, and its decision lasts until Nea closes.
+- Only secure pages can ask: https, and http on the computer itself.
+
+Nea registers its notification name and icon for the current user in
+`HKCU\Software\Classes\AppUserModelId\Nea.Browser`. The uninstall removes
+it. The taskbar pins and the shortcuts do not change.
+
 ## Manual checks
 
 A person checks these items manually:
@@ -284,3 +308,4 @@ A person checks these items manually:
 - The floating video.
 - The password import.
 - The passkeys.
+- The notifications question, a toast from a real site, and a click on it from the pop-up and from the notification center.

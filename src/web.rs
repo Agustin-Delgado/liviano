@@ -74,6 +74,8 @@ pub enum Event {
     Extension(crate::extension_host::HostEvent),
     /// Where the page of a tab is scrolled: tab, address, x, y (`read_scroll`).
     Scrolled(u64, String, i64, i64),
+    /// A page asked to notify, sent a notification or closed one (see `notify_watch`).
+    Notify(u64, crate::notify_watch::Message),
 }
 
 impl Event {
@@ -102,6 +104,7 @@ impl Event {
             Event::Vault(..) => &"event:Vault",
             Event::Extension(_) => &"event:Extension",
             Event::Scrolled(..) => &"event:Scrolled",
+            Event::Notify(..) => &"event:Notify",
         }
     }
 
@@ -135,7 +138,8 @@ impl Event {
             | Event::FullScreen(id)
             | Event::ZoomChanged(id, _)
             | Event::Vault(id, _)
-            | Event::Scrolled(id, ..) => *id,
+            | Event::Scrolled(id, ..)
+            | Event::Notify(id, _) => *id,
             _ => 0,
         }
     }

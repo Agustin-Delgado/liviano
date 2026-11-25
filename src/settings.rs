@@ -1,7 +1,7 @@
 //! User settings (settings.json). Every field has a default, so a missing or
 //! partial file is fine and new fields never break an old file.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use serde::{Deserialize, Serialize};
 
@@ -76,6 +76,9 @@ pub struct Settings {
     pub passwords_offer: bool,
     /// Origins where saving is never offered ("Never for this site").
     pub passwords_never: BTreeSet<String>,
+    /// Origins ("https://app.slack.com") and whether they may show
+    /// notifications: true allowed, false blocked. A site not here asks.
+    pub notifications: BTreeMap<String, bool>,
 }
 
 impl Default for Settings {
@@ -101,6 +104,7 @@ impl Default for Settings {
             bench_enabled: false,
             passwords_offer: true,
             passwords_never: BTreeSet::new(),
+            notifications: BTreeMap::new(),
         }
     }
 }
@@ -115,7 +119,22 @@ pub fn from_window(current: &Settings, edited: Settings) -> Settings {
         popups_allowed: current.popups_allowed.clone(),
         passwords_never: current.passwords_never.clone(),
         update_url: current.update_url.clone(),
+        // The window can only forget them all; the app adds each one.
+        notifications: if edited.notifications.is_empty() { BTreeMap::new() } else { current.notifications.clone() },
         ..edited
+    }
+}
+
+/// The notifications line of Settings.
+pub fn notifications_summary(decisions: &BTreeMap<String, bool>) -> String {
+    let allowed = decisions.values().filter(|a| **a).count();
+    let blocked = decisions.len() - allowed;
+    let sites = |n: usize| if n == 1 { "1 site".to_string() } else { format!("{n} sites") };
+    match (allowed, blocked) {
+        (0, 0) => "No site has asked to notify.".to_string(),
+        (a, 0) => format!("Notifications: {} allowed", sites(a)),
+        (0, b) => format!("Notifications: {} blocked", sites(b)),
+        (a, b) => format!("Notifications: {} allowed, {b} blocked", sites(a)),
     }
 }
 
