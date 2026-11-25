@@ -11,8 +11,9 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Back / forward | Alt+Left / Alt+Right |
 | Previous tab / next tab | Ctrl+Shift+Tab / Ctrl+Tab (and Ctrl+PgUp / Ctrl+PgDn) |
 | Go to tab 1 to 8 / go to last tab | Ctrl+1 … Ctrl+8 / Ctrl+9 |
-| Go to space 1 to 9 | Ctrl+Shift+1 … Ctrl+Shift+9 |
-| Previous space / next space | Ctrl+Shift+PgUp / Ctrl+Shift+PgDn |
+| New space | Ctrl+N |
+| Go to space 1 to 9 | Alt+1 … Alt+9 |
+| Previous space / next space | Ctrl+Left / Ctrl+Right |
 | Previous space / next space, with the mouse | Shift+wheel over the tabs |
 | Previous space / next space, on a touchpad | Swipe sideways with two fingers over the tabs |
 | Tab strip on top / on the side | Ctrl+Shift+S |
@@ -52,7 +53,19 @@ These commands are in the tab menu (right-click) and have no default
 shortcut: "Pin tab", "Keep site awake", "Block ads on this site" and "Allow
 pop-ups on this site". You can assign a shortcut to them in Settings.
 
-"New space" is in the menu of the tab strip and has no default shortcut. You
-can assign one in Settings. A swipe past the last space also makes a new
-space. The space shortcuts do not use Ctrl+Alt: on some
-keyboards (for example Spanish), Ctrl+Alt is AltGr, which types characters.
+Ctrl+N makes a new space and opens the field to name it. "New space" is
+also in the menu of the tab strip, and a swipe past the last space also
+makes a new space.
+
+Ctrl+Left and Ctrl+Right go to the previous and the next space only when
+you do not type. In a text field they move the cursor by word, as always:
+in the field, in the find bar, in Settings, and in a text field or text
+editor of a page. If you click in a frame of a page (for example an
+embedded video), Nea also treats it as a text field: click outside the
+frame, or use Alt+1 … Alt+9.
+
+The space shortcuts do not use Ctrl+Alt: on some keyboards (for example
+Spanish), Ctrl+Alt is AltGr, which types characters. AltGr+1 types its
+character and does not go to space 1.
+
+If you changed a space shortcut in Settings, your shortcut stays.

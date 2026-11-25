@@ -48,6 +48,7 @@ mod system_dll;
 mod tab_groups;
 mod tabbar;
 mod tabs;
+mod text_focus;
 mod tooltip;
 mod unzip;
 mod update_sign;

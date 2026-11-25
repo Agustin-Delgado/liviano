@@ -31,7 +31,7 @@ use crate::{
 pub const FIRST_SPACE: u64 = 0;
 /// What the first space is called until it is renamed.
 pub const FIRST_NAME: &str = "Personal";
-/// Ctrl+Shift+1…9 reach each of them.
+/// Alt+1…9 reach each of them.
 pub const MAX_SPACES: usize = 9;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -180,7 +180,7 @@ impl<W> TabList<W> {
         self.spaces.get(index).map(|s| s.id)
     }
 
-    /// Ctrl+Shift+1…9: the space at that position.
+    /// Alt+1…9: the space at that position.
     pub fn space_by_number(&self, n: u8) -> Option<u64> {
         self.spaces.get(usize::from(n).checked_sub(1)?).map(|s| s.id)
     }

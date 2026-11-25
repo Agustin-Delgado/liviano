@@ -23,7 +23,7 @@ use windows::{
         },
         UI::{
             Controls::WM_MOUSELEAVE,
-            Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+            Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_MENU},
             WindowsAndMessaging::*,
         },
     },
@@ -480,6 +480,18 @@ pub fn run() -> windows::core::Result<()> {
     Ok(())
 }
 
+thread_local! {
+    /// The last chord the message loop ran held Alt (and not Ctrl: AltGr).
+    static ALT_CHORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A native text field (the field, the find bar, Settings): an Edit.
+fn is_text_field(hwnd: HWND) -> bool {
+    let mut class = [0u16; 16];
+    let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+    String::from_utf16_lossy(&class[..len]).eq_ignore_ascii_case("edit")
+}
+
 /// The main window, for timers set from the message loop.
 fn main_window() -> HWND {
     with_app(|app| app.hwnd).unwrap_or_default()
@@ -504,11 +516,26 @@ fn message_loop() {
             }
             if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
                 let chord = web::current_chord(msg.wParam.0 as u32);
-                let command = with_app(|app| app.shortcuts.lookup(chord)).flatten();
+                // In a text field (the field, find, Settings) a word move
+                // is the field's.
+                let command = if chord.moves_the_caret() && is_text_field(msg.hwnd) {
+                    None
+                } else {
+                    with_app(|app| app.shortcuts.lookup(chord)).flatten()
+                };
                 if let Some(command) = command {
+                    ALT_CHORD.set(chord.alt && !chord.ctrl);
                     with_app(|app| app.run(command));
                     continue;
                 }
+                if msg.wParam.0 as u16 != VK_MENU.0 {
+                    ALT_CHORD.set(false);
+                }
+            }
+            // The Alt of an Alt chord (Alt+1): its release would be a lone
+            // Alt to the window, which opens the window menu.
+            if msg.message == WM_SYSKEYUP && msg.wParam.0 as u16 == VK_MENU.0 && ALT_CHORD.replace(false) {
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);

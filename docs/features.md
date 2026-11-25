@@ -160,9 +160,10 @@ the background. A new window has one space, "Personal".
   also right-click an empty area of the tab strip and select "New space":
   the field then opens to name it. New spaces are "Space 2", "Space 3"…
   until you rename them. Nea keeps at most nine spaces.
-- **Shortcuts:** Ctrl+Shift+1 … Ctrl+Shift+9 go to space 1 to 9.
-  Ctrl+Shift+PgDn and Ctrl+Shift+PgUp go to the next and the previous space.
-  The tabs slide in from the side of the space, as with a swipe.
+- **Shortcuts:** Ctrl+N makes a new space. Alt+1 … Alt+9 go to space 1
+  to 9. Ctrl+Right and Ctrl+Left go to the next and the previous space,
+  except in a text field, where they move the cursor by word. The tabs
+  slide in from the side of the space, as with a swipe.
 - **Ctrl+K** finds the tabs of all spaces. A tab of a different space shows
   the name of its space. Select it to go to its space and its tab.
 - **Which space:** with two spaces or more, the ground of the tab strip has

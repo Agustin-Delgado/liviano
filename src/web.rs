@@ -225,6 +225,8 @@ pub struct WebTab {
     /// Shown out of the window, 1 pixel high, since then, so that the
     /// engine drops what draws it at full size (refer to `park`).
     parked: Option<std::time::Instant>,
+    /// The page's keyboard is in a text field (`text_focus`).
+    pub typing: Rc<Cell<bool>>,
 }
 
 /// The engine switches of Nea. FedCM (`navigator.credentials.get` with
@@ -398,8 +400,13 @@ impl WebTab {
                 passwords: true,
                 find: None,
                 parked: None,
+                typing: Rc::new(Cell::new(false)),
             };
             tab.apply_theme(theme);
+            // Without it the word moves stay with the page and Ctrl+Left
+            // does not switch spaces from it: nothing breaks.
+            let _ = crate::text_focus::watch(&tab.webview, tab.typing.clone());
+            let typing = tab.typing.clone();
 
             let settings = tab.webview.Settings()?;
             settings.SetIsStatusBarEnabled(true)?;
@@ -547,7 +554,12 @@ impl WebTab {
                     }
                     let mut vk = 0u32;
                     args.VirtualKey(&mut vk)?;
-                    if let Some(command) = shortcuts.lookup(current_chord(vk)) {
+                    let chord = current_chord(vk);
+                    // In a text field a word move is the page's.
+                    if typing.get() && chord.moves_the_caret() {
+                        return Ok(());
+                    }
+                    if let Some(command) = shortcuts.lookup(chord) {
                         args.SetHandled(true)?;
                         push(Event::Command(command));
                     }

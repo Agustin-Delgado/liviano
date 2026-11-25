@@ -50,7 +50,7 @@ pub enum Command {
     ToggleGroup,
     Fullscreen,
     ResetZoom,
-    /// Ctrl+Shift+1…9: the space at that position (`spaces`).
+    /// Alt+1…9: the space at that position (`spaces`).
     GoToSpace(u8),
     NextSpace,
     PrevSpace,
@@ -181,10 +181,21 @@ pub struct Chord {
     pub vk: u32,
 }
 
+impl Chord {
+    /// Ctrl with an arrow, Home, End, Backspace or Delete (Shift too):
+    /// in a text field it moves the caret or deletes by word, and the
+    /// field keeps it even when a command has the chord.
+    pub fn moves_the_caret(self) -> bool {
+        const CARET: [u32; 8] = [VK_LEFT, VK_RIGHT, VK_UP, VK_DOWN, VK_HOME, VK_END, VK_BACK, VK_DELETE];
+        self.ctrl && !self.alt && CARET.contains(&self.vk)
+    }
+}
+
 const fn chord(ctrl: bool, shift: bool, alt: bool, vk: u32) -> Chord {
     Chord { ctrl, shift, alt, vk }
 }
 
+const VK_BACK: u32 = 0x08;
 const VK_TAB: u32 = 0x09;
 const VK_SPACE: u32 = 0x20;
 const VK_PRIOR: u32 = 0x21;
@@ -283,16 +294,18 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(true, false, true, key(b'L')), Command::Passwords),
         // Nea's own chord: G for group, free in the rest of it.
         (chord(true, true, false, key(b'G')), Command::GroupTab),
-        // The tab chords with Shift, one step up: from tab to space. Not
+        // Two keys: spaces are an everyday move. Ctrl+Left and Ctrl+Right
+        // stay word moves in a text field (`Chord::moves_the_caret`). Not
         // Ctrl+Alt: on a Spanish keyboard that is AltGr, which types.
-        (chord(true, true, false, VK_NEXT), Command::NextSpace),
-        (chord(true, true, false, VK_PRIOR), Command::PrevSpace),
+        (chord(true, false, false, VK_LEFT), Command::PrevSpace),
+        (chord(true, false, false, VK_RIGHT), Command::NextSpace),
+        (chord(true, false, false, key(b'N')), Command::NewSpace),
     ];
     for n in 1..=9u8 {
         table.push((chord(true, false, false, key(b'0' + n)), Command::GoToTab(n)));
     }
     for n in 1..=9u8 {
-        table.push((chord(true, true, false, key(b'0' + n)), Command::GoToSpace(n)));
+        table.push((chord(false, false, true, key(b'0' + n)), Command::GoToSpace(n)));
     }
     table
 }
@@ -348,7 +361,6 @@ pub fn all_commands() -> Vec<Command> {
         Command::TogglePopups,
         Command::UngroupTab,
         Command::ToggleGroup,
-        Command::NewSpace,
     ]) {
         if !all.contains(&command) {
             all.push(command);

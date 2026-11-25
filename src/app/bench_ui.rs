@@ -627,6 +627,10 @@ impl App {
             "content": [content.left, content.top, content.right, content.bottom],
             "fullscreen": self.fullscreen.on(),
             "zoom": self.tabs.active_tab().map(|t| (t.zoom * 100.0).round()),
+            "typing": self.tabs.active_tab().and_then(|t| match &t.live {
+                Live::Ready(web) => Some(web.typing.get()),
+                _ => None,
+            }),
             "zoom_chip": self.layout.zoom.map(|z| json!({ "percent": z.percent, "rect": [z.rect.left, z.rect.top, z.rect.right, z.rect.bottom] })),
             "version": crate::updater::CURRENT_VERSION,
             "update_chip": self.layout.update.map(|r| json!({ "version": self.update, "rect": [r.left, r.top, r.right, r.bottom] })),
