@@ -1168,7 +1168,7 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
-        let next = next.or(self.spaces_advance(now));
+        let next = crate::anim::sooner(next, self.spaces_advance(now));
         let tabs_dx = self.paint_slide();
         let palette = self.palette;
         let mut surface = std::mem::take(&mut self.surface);
@@ -1275,7 +1275,7 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
-        let next = next.or(self.spaces_advance(now));
+        let next = crate::anim::sooner(next, self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
         if self.motion.rail_moving() || self.motion.indicator_moving() {

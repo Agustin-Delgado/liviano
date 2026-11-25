@@ -416,8 +416,12 @@ impl App {
             }
         }
         // The frame clock draws the move on its next frame; a paint per
-        // wheel message would draw more often than the screen shows.
-        if !self.motion_was_running {
+        // wheel message would draw more often than the screen shows. A
+        // slower motion that runs already (the loading ring) has its frame
+        // brought forward to the next one.
+        if self.motion_was_running {
+            crate::anim::repaint_area(self.hwnd, super::strip_frame_area, crate::anim::FRAME_MS);
+        } else {
             self.invalidate_strip();
         }
     }

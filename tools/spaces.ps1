@@ -16,6 +16,10 @@
     rapid    next_space every 30 to 80 ms (random) for -Seconds.
     reverse  next_space, then prev_space 40 to 90 ms later, mid-slide,
              for -Seconds.
+    swipe    a reload of the active page, then a two-finger swipe to the
+             next space (then back) while the page loads, every 900 ms. The swipe is
+             horizontal wheel messages posted to Nea's window (not system
+             input), as a precision touchpad sends them.
 
   It reports, for the pattern: the frame gaps of the strip (the "strip"
   frame marks; a gap of 150 ms or more is a pause, not a frame), the
@@ -23,14 +27,14 @@
   and the time of each command from trace.log.
 
   The script sends no keys or clicks to the system. It does not move a
-  window to the front.
+  window to the front. The swipe posts window messages to Nea only.
 
 .EXAMPLE
   tools\spaces.ps1 -Exe target\release\nea.exe -Pattern rapid
 #>
 param(
     [string]$Exe = '',
-    [ValidateSet('slow', 'rapid', 'reverse')][string]$Pattern = 'rapid',
+    [ValidateSet('slow', 'rapid', 'reverse', 'swipe')][string]$Pattern = 'rapid',
     [int]$Seconds = 4,
     [int]$TabsPerSpace = 5,
     # The display's frame time: 8.333 on a 120 Hz screen.
@@ -54,6 +58,12 @@ function Stats([double[]]$values) {
     $at = { param($p) $sorted[[Math]::Min($sorted.Count - 1, [Math]::Floor($p * ($sorted.Count - 1) + 0.5))] }
     [pscustomobject]@{ p50 = (& $at 0.5); p95 = (& $at 0.95); max = $sorted[-1]; count = $values.Count }
 }
+
+Add-Type -Namespace NeaBench -Name Win -MemberDefinition @'
+[DllImport("user32.dll")] public static extern bool PostMessageW(IntPtr h, uint m, IntPtr w, IntPtr l);
+[DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+[StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
+'@
 
 $data = Join-Path ([IO.Path]::GetTempPath()) ('neaspaces-data-' + [Guid]::NewGuid().ToString('N').Substring(0, 8))
 New-Item -ItemType Directory -Path $data | Out-Null
@@ -117,6 +127,30 @@ try {
             while ($clock.ElapsedMilliseconds -lt $Seconds * 1000) {
                 Invoke-Nea run @{ name = 'next_space' } | Out-Null; $sent++
                 & $wait $random.Next(30, 81)
+            }
+        }
+        'swipe' {
+            $process.Refresh()
+            $hwnd = $process.MainWindowHandle
+            $r = New-Object NeaBench.Win+RECT
+            [NeaBench.Win]::GetWindowRect($hwnd, [ref]$r) | Out-Null
+            # A point on the strip, in screen coordinates.
+            $x = if ($Top) { $r.Left + 500 } else { $r.Left + 110 }
+            $y = if ($Top) { $r.Top + 20 } else { $r.Top + 300 }
+            $point = [IntPtr](($y -shl 16) -bor ($x -band 0xFFFF))
+            while ($clock.ElapsedMilliseconds -lt $Seconds * 1000) {
+                Invoke-Nea run @{ name = 'reload' } | Out-Null
+                & $wait 60
+                # About 600 wheel units over 200 ms: one space's travel.
+                # Positive: the next space comes in.
+                $delta = if ($sent % 2) { -24 } else { 24 }
+                $wparam = [IntPtr](($delta -band 0xFFFF) -shl 16)
+                for ($m = 0; $m -lt 25; $m++) {
+                    [NeaBench.Win]::PostMessageW($hwnd, 0x020E, $wparam, $point) | Out-Null
+                    & $wait 8
+                }
+                $sent++
+                & $wait 800
             }
         }
         'reverse' {

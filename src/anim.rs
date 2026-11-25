@@ -795,6 +795,17 @@ fn tick(frame_us: u64) {
     });
 }
 
+/// The sooner of two requests for a frame (in ms, None: none). Two
+/// motions of one window ask once: the one that asks for the next frame
+/// wins over a slow one (the loading ring), or the fast one is drawn at
+/// the slow one's pace.
+pub fn sooner(a: Option<u32>, b: Option<u32>) -> Option<u32> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        _ => a.or(b),
+    }
+}
+
 /// Repaints `hwnd` (or `rect` of it) on the next frame. A window that is
 /// still moving calls this again while it paints.
 pub fn repaint(hwnd: HWND, rect: Option<RECT>) {
