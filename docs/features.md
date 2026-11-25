@@ -247,7 +247,7 @@ default shortcut. You can assign a shortcut in Settings.
 ## Bookmarks bar
 
 The bookmarks bar shows your bookmarks above the tabs, as Safari and Arc do.
-It shows only when you have one or more bookmarks. Ctrl+Shift+B bookmarks
+It shows only when you have one or more bookmarks. Ctrl+D bookmarks
 the current page.
 
 - **Tab strip on top:** a slim bar (28 px) under the strip. Each bookmark is
@@ -269,10 +269,10 @@ the current page.
 - **Drag** a bookmark along the bar to change its place. The bookmarks panel
   (Ctrl+Shift+O) uses the same order. A new bookmark goes first.
 - To hide or show the bar, use Settings → Tabs → "Show bookmarks bar", or
-  Alt+Shift+B.
+  Ctrl+Shift+B.
 
 Nea keeps the bar in memory. A paint reads no file, and Nea measures the
-titles one time for each change. A change in the bookmarks panel, Ctrl+Shift+B
+titles one time for each change. A change in the bookmarks panel, Ctrl+D
 and the commands of the bar update it immediately.
 
 ## Manual checks

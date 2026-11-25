@@ -263,7 +263,8 @@ fn defaults() -> Vec<(Chord, Command)> {
         (chord(true, true, false, key(b'S')), Command::ToggleTabLayout),
         (chord(true, false, false, key(b'S')), Command::ToggleSidebar),
         (chord(true, false, false, key(b'F')), Command::Find),
-        (chord(true, false, false, key(b'D')), Command::DuplicateTab),
+        // Nea's own chord: Ctrl+D is the bookmark of every browser.
+        (chord(true, true, false, key(b'D')), Command::DuplicateTab),
         (chord(true, true, false, key(b'C')), Command::CopyAddress),
         (chord(true, true, false, key(b'V')), Command::PasteAndGo),
         (chord(true, true, false, key(b'J')), Command::Downloads),
@@ -274,10 +275,8 @@ fn defaults() -> Vec<(Chord, Command)> {
         // The engine zooms with Ctrl+= and Ctrl+- (and Ctrl+wheel); Ctrl+0 is
         // the reset of every browser.
         (chord(true, false, false, key(b'0')), Command::ResetZoom),
-        (chord(true, true, false, key(b'B')), Command::ToggleBookmark),
-        // Nea's own chord: Ctrl+Shift+B is taken by the bookmark of the
-        // page, and Ctrl+Alt is AltGr on many keyboards.
-        (chord(false, true, true, key(b'B')), Command::ToggleBookmarksBar),
+        (chord(true, false, false, key(b'D')), Command::ToggleBookmark),
+        (chord(true, true, false, key(b'B')), Command::ToggleBookmarksBar),
         // Nea's own chord: a free chord beside the other panels'.
         (chord(true, true, false, key(b'O')), Command::Bookmarks),
         (chord(true, false, false, key(b'Y')), Command::History),

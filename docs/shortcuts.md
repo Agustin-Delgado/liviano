@@ -19,11 +19,11 @@ You can change all shortcuts in Settings (Ctrl+,).
 | Tab strip on top / on the side | Ctrl+Shift+S |
 | Hide tabs / show tabs | Ctrl+S |
 | Find in page | Ctrl+F |
-| Duplicate tab | Ctrl+D |
+| Duplicate tab | Ctrl+Shift+D |
 | Copy address / paste and go | Ctrl+Shift+C / Ctrl+Shift+V |
 | Reload / hard reload | F5 or Ctrl+R / Ctrl+F5 |
-| Bookmark page | Ctrl+Shift+B |
-| Show or hide the bookmarks bar | Alt+Shift+B |
+| Bookmark page | Ctrl+D |
+| Show or hide the bookmarks bar | Ctrl+Shift+B |
 | Bookmarks / history / downloads | Ctrl+Shift+O / Ctrl+Y / Ctrl+Shift+J |
 | Reader mode | Ctrl+Shift+R |
 | Floating video | Ctrl+Shift+P |
