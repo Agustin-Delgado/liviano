@@ -1,7 +1,7 @@
 # Design and motion
 
 The native interface follows the language of a web design system. It uses
-neutral grays, an indigo for active items and seven type steps. No text is
+neutral grays, the ink as the primary for active items (black or white, no hue) and seven type steps. No text is
 heavier than medium. The tokens are in `src/design.rs`. The motion is in
 `src/anim.rs` (`curves` and `specs`).
 
@@ -14,7 +14,7 @@ heavier than medium. The tokens are in `src/design.rs`. The motion is in
 | Hover / row | #F0F0F0 / #F3F3F3 |
 | Ink | ink #171717, quiet #525252, muted #696969, subtle #929292 |
 | Line | #E8E8E8, strong #D7D7D7 |
-| Brand (indigo) | #6468F0, hover #5756E4, text on brand #FCFCFC |
+| Primary | The ink: #171717 (hover #404040) on the light shell, #EDEDED (hover #FFFFFF) on the dark one. Text on it is the ground: #FCFCFC / #141414. No hue |
 | Tooltip | ink background #171717, text #FAFAFA, caption 11 px medium, padding 8×2, offset 8 px |
 | Type | caption 11, small 12, body 13, emphasis 14; maximum weight 500 |
 | Corners | mark 2, chip 4, control 6, field 8, panel 12 |
@@ -30,8 +30,8 @@ heavier than medium. The tokens are in `src/design.rs`. The motion is in
 | Back, forward, reload | 28×28 buttons with a ghost background and hover. A disabled button uses `subtle` and has no hover. Stroke 1.5 px. |
 
 The dark theme is specific to Nea, because the design system has no dark
-theme. It keeps the same steps and roles, in reverse. The indigo changes to
-#818CF9 for contrast on a dark background.
+theme. It keeps the same steps and roles, in reverse. The primary is the ink, so
+it is white on a dark background.
 
 Two items from Search agree with this language and did not change:
 
@@ -134,7 +134,7 @@ all items move to their final position immediately.
 The logo is a white feather on a graphite square with round corners. The
 graphite goes from #51515C at the top to #27272F at the bottom. The feather
 shows lightness. It points up, which shows forward movement. The graphite is
-neutral on purpose, because the indigo is for active items in the window.
+neutral on purpose, like the rest of the window.
 
 A script makes the feather, not a person. A few numbers in `tools/logo.py`
 set its shape. They give the curved rachis, the width of each vane, the
