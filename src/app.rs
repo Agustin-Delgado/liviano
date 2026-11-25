@@ -1278,8 +1278,11 @@ impl App {
         let next = next.or(self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
-        if self.motion.rail_moving() || self.motion.indicator_moving() || self.spaces_moving() {
+        if self.motion.rail_moving() || self.motion.indicator_moving() {
             return self.moving_area(&fills);
+        }
+        if self.spaces_moving() {
+            return self.slide_area(&fills, old);
         }
         match tabbar::changed_area(old, &self.strip_sheet()) {
             Some(area) => {
@@ -1311,6 +1314,30 @@ impl App {
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), Some(&strip.win()), false);
         }
+    }
+
+    /// What a frame of a space slide repaints: the rows of the two lists
+    /// and whatever else changed. The rest of the column stands still. A
+    /// frame of the whole column took about 5 ms, close to what a 120 Hz
+    /// frame leaves; the rows alone take about 1 ms less.
+    fn slide_area(&self, fills: &[(tabbar::Rect, design::Rgb)], old: &tabbar::Sheet) -> Option<RECT> {
+        let mut area = self.moving_area(fills)?;
+        let Some((top, bottom)) = self.slide_rows() else { return Some(area) };
+        // A card's drop shadow reaches past its row (as in `sheet`).
+        let margin = (4.0 * self.scale).ceil() as i32;
+        let rows = RECT { top: area.top.max(top - margin), bottom: area.bottom.min(bottom + margin), ..area };
+        if rows.bottom <= rows.top {
+            return Some(area);
+        }
+        area = rows;
+        if let Some(changed) = tabbar::changed_area(old, &self.strip_sheet()) {
+            let (width, height) = self.client_size();
+            area.left = area.left.min((changed.left.floor() as i32).max(0));
+            area.top = area.top.min((changed.top.floor() as i32).max(0));
+            area.right = area.right.max((changed.right.ceil() as i32).min(width));
+            area.bottom = area.bottom.max((changed.bottom.ceil() as i32).min(height));
+        }
+        Some(area)
     }
 
     /// What a frame of the strip's motion has to repaint: the strip (or the

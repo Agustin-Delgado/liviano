@@ -611,6 +611,8 @@ impl App {
         json!({
             "tabs": tabs,
             "active": self.tabs.active,
+            // The tabs whose pages are on screen, of any space.
+            "shown": self.tabs.all().filter(|t| matches!(&t.live, Live::Ready(w) if w.is_shown())).map(|t| t.id).collect::<Vec<_>>(),
             "layout": if self.vertical { "vertical" } else { "horizontal" },
             "sidebar_collapsed": self.collapsed,
             "splits": self.split_pairs().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),

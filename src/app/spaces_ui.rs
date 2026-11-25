@@ -57,6 +57,10 @@ const TIMER_SWIPE: usize = 0x4C;
 const CARD_HOLD_MS: u32 = 1000;
 const TIMER_CARD: usize = 0x4D;
 
+/// The list landed after switches whose pages were held: the page of the
+/// space it landed on shows.
+const TIMER_PAGE: usize = 0x4E;
+
 /// What is drawn beside the sliding list.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Beside {
@@ -98,6 +102,10 @@ pub(super) struct SpacesUi {
     /// The slide in the last paint: a frame draws the strip again only
     /// when it changed.
     painted: f32,
+    /// A switch came while the list still slid: the engine's show and hide
+    /// wait until the list lands, so the spaces passed on the way show no
+    /// page. Each show or hide holds the thread 5-70 ms, many frames.
+    page_held: bool,
 }
 
 unsafe extern "system" fn on_swipe_rest(hwnd: HWND, _: u32, id: usize, _: u32) {
@@ -105,6 +113,13 @@ unsafe extern "system" fn on_swipe_rest(hwnd: HWND, _: u32, id: usize, _: u32) {
         let _ = KillTimer(Some(hwnd), id);
     }
     with_app(|app| app.swipe_rest());
+}
+
+unsafe extern "system" fn on_page_lands(hwnd: HWND, _: u32, id: usize, _: u32) {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), id);
+    }
+    with_app(|app| app.space_page_lands());
 }
 
 unsafe extern "system" fn on_card_hold(hwnd: HWND, _: u32, id: usize, _: u32) {
@@ -162,16 +177,22 @@ impl App {
     /// The switch in the model and on the page: the tabs change lists, the
     /// new space's live page shows (an empty space opens the field). The
     /// list lands at once; the caller slides it. A space a swipe made and
-    /// left empty goes away.
+    /// left empty goes away. A switch while the list still slides from the
+    /// last one holds the page until the list lands (`page_held`).
     fn swap_space(&mut self, id: u64) -> bool {
         if id == self.tabs.space || self.tabs.space_by_id(id).is_none() {
             return false;
         }
+        let held = self.spaces.slide.as_ref().is_some_and(|s| s.settle.is_some());
         if self.mode.is_some() {
             self.close_omnibar();
         }
         if let Some(leaving) = self.tabs.active {
-            self.capture_thumb(leaving);
+            // A page held off screen keeps the picture it had.
+            if matches!(self.tabs.get(leaving).map(|t| &t.live), Some(crate::tabs::Live::Ready(web)) if web.is_shown())
+            {
+                self.capture_thumb(leaving);
+            }
             if let Some(crate::tabs::Live::Ready(web)) = self.tabs.get(leaving).map(|t| &t.live) {
                 web.read_scroll(leaving);
             }
@@ -188,9 +209,20 @@ impl App {
             }
         }
         self.motion.swap_tabs();
-        self.relayout();
+        self.spaces.page_held = held;
+        if held {
+            // `relayout` without `show_active`: the page on screen stays.
+            self.tidy_pairs();
+            self.lay_out();
+            self.place_omnibar();
+            self.update_title();
+            self.invalidate();
+        } else {
+            self.relayout();
+        }
         self.session_dirty = true;
         match self.tabs.active {
+            Some(_) if held => {}
             Some(tab) => self.focus_when_settled(tab),
             None => self.open_omnibar(Mode::NewTab),
         }
@@ -446,9 +478,26 @@ impl App {
             slide.offset = settle.value(now);
             if !settle.moving(now) {
                 self.spaces.slide = None;
+                if self.spaces.page_held {
+                    // Not from inside the paint that calls this.
+                    unsafe {
+                        SetTimer(Some(self.hwnd), TIMER_PAGE, 1, Some(on_page_lands));
+                    }
+                }
             }
         }
         self.spaces.slide.is_some().then_some(crate::anim::FRAME_MS)
+    }
+
+    /// The list landed: the page of its space shows and takes the keyboard.
+    fn space_page_lands(&mut self) {
+        if !std::mem::take(&mut self.spaces.page_held) {
+            return;
+        }
+        self.show_active();
+        if let Some(tab) = self.tabs.active {
+            self.focus_when_settled(tab);
+        }
     }
 
     /// The tab list slides between spaces (or follows the fingers).
@@ -506,16 +555,31 @@ impl App {
         }
     }
 
-    /// The other space's list during a slide, from the model: the same
-    /// layout as the active list's, with no hover and no motion.
-    fn paint_beside(&self, g: &Painter, id: u64, dx: f32, pal: &Palette, base: &tabbar::Paint) {
-        let tabs: Vec<&Tab<WebTab>> = self.tabs.parked.iter().filter(|t| t.space == id).collect();
+    /// The rows of the column a frame of the slide draws: those of the
+    /// two lists, which are all that moves. None: the whole strip.
+    pub(super) fn slide_rows(&self) -> Option<(i32, i32)> {
+        let slide = self.spaces.slide.as_ref().filter(|_| !crate::anim::reduced())?;
+        let rows = tabbar::list_rows(&self.layout)?;
+        let Beside::Space(id) = slide.beside else { return Some(rows) };
+        let tabs = self.beside_tabs(id);
         let infos: Vec<tabbar::TabInfo> = tabs.iter().map(|t| super::tab_info(t)).collect();
         let groups = self.group_infos_of(&tabs);
+        match tabbar::list_rows(&self.beside_layout(&infos, &groups)) {
+            Some((top, bottom)) => Some((rows.0.min(top), rows.1.max(bottom))),
+            None => Some(rows),
+        }
+    }
+
+    fn beside_tabs(&self, id: u64) -> Vec<&Tab<WebTab>> {
+        self.tabs.parked.iter().filter(|t| t.space == id).collect()
+    }
+
+    /// The layout of another space's list: the active list's, with its tabs.
+    fn beside_layout(&self, infos: &[tabbar::TabInfo], groups: &[tabbar::GroupInfo]) -> tabbar::Layout {
         let (width, height) = self.client_size();
         let mut layout = tabbar::layout_chrome(
-            &infos,
-            &groups,
+            infos,
+            groups,
             width,
             height,
             self.vertical,
@@ -527,6 +591,16 @@ impl App {
             self.space_mark_width(),
         );
         self.place_bookmarks_in(&mut layout);
+        layout
+    }
+
+    /// The other space's list during a slide, from the model: the same
+    /// layout as the active list's, with no hover and no motion.
+    fn paint_beside(&self, g: &Painter, id: u64, dx: f32, pal: &Palette, base: &tabbar::Paint) {
+        let tabs = self.beside_tabs(id);
+        let infos: Vec<tabbar::TabInfo> = tabs.iter().map(|t| super::tab_info(t)).collect();
+        let groups = self.group_infos_of(&tabs);
+        let layout = self.beside_layout(&infos, &groups);
         let active = self.tabs.space_by_id(id).and_then(|s| s.last_active);
         let paint = tabbar::Paint {
             layout: &layout,
@@ -790,6 +864,7 @@ impl App {
                 },
             })),
             "fresh": self.spaces.fresh,
+            "page_held": self.spaces.page_held,
             "card": card_state(),
         })
     }

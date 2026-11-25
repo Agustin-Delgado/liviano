@@ -847,6 +847,21 @@ pub fn tabs_area(layout: &Layout, scale: f32) -> RectF {
     RectF::new(left as f32, 0.0, (end - frame::px(2, scale)) as f32, layout.strip.bottom as f32)
 }
 
+/// The rows the tab list takes in the column, top and bottom: from its
+/// first tab or label to the + button under the last. None on a top strip,
+/// whose list is the strip's one row.
+pub fn list_rows(layout: &Layout) -> Option<(i32, i32)> {
+    if !layout.vertical || layout.strip.width() == 0 {
+        return None;
+    }
+    let rects = layout.items.iter().map(|i| i.rect).chain(layout.labels.iter().map(|l| l.rect));
+    let rows = rects.chain([layout.new_tab]).filter(|r| r.height() > 0);
+    rows.fold(None, |rows: Option<(i32, i32)>, r| match rows {
+        Some((top, bottom)) => Some((top.min(r.top), bottom.max(r.bottom))),
+        None => Some((r.top, r.bottom)),
+    })
+}
+
 /// The tab list (split grounds, the live card, the tabs, the group labels
 /// and the + button), slid by `p.tabs_dx` and cut to `tabs_area`. A swipe
 /// draws the neighbour space's list this way too, beside this one.
