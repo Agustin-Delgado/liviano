@@ -167,17 +167,18 @@ the background. A new window has one space, "Personal".
   slide in from the side of the space, as with a swipe.
 - **Ctrl+K** finds the tabs of all spaces. A tab of a different space shows
   the name of its space. Select it to go to its space and its tab.
-- **Which space:** with two spaces or more, the ground of the tab strip has
-  a light tint of the color of the active space. A top strip has a 2 px
-  line in that color at its bottom. The column shows the color dot and the
+- **Which space:** with two spaces or more, a top strip has a 2 px line
+  in the color of the active space at its bottom. The column shows the color dot and the
   name of the active space at its bottom, next to the gear. When a switch
   is done (with a key, a swipe or a menu), the color dot and the name of
   the new space show on a small card at the bottom center of the page for
   about one second. The card does not take clicks or the keyboard. It moves
   with the window, and it does not show when the window is minimized or
   when a video fills the screen.
-- **Rename, color, delete:** click or right-click the name at the bottom of
-  the column. On a top strip, right-click an empty area of the strip and
+- **Go to a space:** click the name at the bottom of the column. The menu
+  lists every space, with a check on the active one; select one to go to it.
+- **Rename, color, delete:** the same menu, under the list of spaces (a
+  right click opens it too). On a top strip, right-click an empty area of the strip and
   select "This space". The commands are "Rename space…", the color, "New
   space" and "Delete space (keep its tabs)". A deleted space never closes a
   tab: its tabs go to the space before it (the first space gives its tabs

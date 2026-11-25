@@ -1,5 +1,5 @@
 //! Spaces on screen: the swipe that slides the tab list from one space to
-//! the next, the switch itself, the space's tint, its mark, the card with
+//! the next, the switch itself, the space's mark, the card with
 //! its name at the foot of the page (`space_card`), the menus of a space and of a tab, renaming in the single field and the
 //! commands. The rules (what a switch moves, what a delete keeps, how far
 //! a swipe goes) live in `spaces`.
@@ -24,7 +24,7 @@ use windows::{
 use super::{App, Mode, WebTab, wide, with_app};
 use crate::{
     anim::{Tween, specs},
-    design::{Palette, group_tone, size},
+    design::{Palette, group_tone},
     gfx::{self, Align, Color, Font, Painter, RectF},
     shortcuts::Command,
     space_card::SpaceCard,
@@ -44,6 +44,8 @@ const MENU_COLOR: usize = 310;
 pub(super) const MENU_MOVE_NEW: usize = 320;
 /// "Move to space ▸": the nth space.
 const MENU_MOVE_TO: usize = 330;
+/// In a space's menu: the nth space, to go to it.
+const MENU_GO_TO: usize = 340;
 
 /// The wheel is still this long: the fingers left the touchpad, and the
 /// swipe settles.
@@ -54,10 +56,6 @@ const TIMER_SWIPE: usize = 0x4C;
 /// sinks out.
 const CARD_HOLD_MS: u32 = 1000;
 const TIMER_CARD: usize = 0x4D;
-
-/// How much of the space's colour the strip's ground takes.
-const TINT_LIGHT: f32 = 0.06;
-const TINT_DARK: f32 = 0.09;
 
 /// What is drawn beside the sliding list.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -124,18 +122,6 @@ impl App {
             return None;
         }
         Some(gfx::measure(&self.tabs.active_space().name, mark_font(self.scale)).ceil() as i32)
-    }
-
-    /// The palette the chrome is drawn with: with two spaces or more, the
-    /// ground of the strip takes a little of the active space's colour.
-    pub(super) fn space_palette(&self) -> Palette {
-        let mut pal = self.palette;
-        if self.tabs.spaces.len() < 2 {
-            return pal;
-        }
-        let tone = group_tone(self.tabs.active_space().color, pal.dark).fill;
-        pal.chrome = pal.chrome.mix(tone, if pal.dark { TINT_DARK } else { TINT_LIGHT });
-        pal
     }
 
     // ---------- switching ----------
@@ -564,15 +550,12 @@ impl App {
     }
 
     /// The mark at the foot of the column: the active space's dot and name.
+    /// Like a group's header, it has no ground: the name goes to `ink`
+    /// under the pointer.
     fn paint_mark(&self, g: &Painter, mark: Rect, name: &str, tone: crate::design::Rgb, pal: &Palette) {
         let px = |v: f32| v * self.scale;
         let rect = RectF::from(mark);
-        let over = self.motion.hover(HoverKey::SpaceMark);
-        let pressed = self.motion.pressed(HoverKey::SpaceMark);
-        if over + pressed > 0.0 {
-            let ground = pal.tab_hover.mix(pal.pin_live, pressed);
-            g.round(rect, px(size::RADIUS_CONTROL), Color::from(ground).with_alpha(over.max(pressed)));
-        }
+        let over = self.motion.hover(HoverKey::SpaceMark).max(self.motion.pressed(HoverKey::SpaceMark));
         let dot = px(MARK_DOT);
         let (_, cy) = rect.center();
         let dot_x = rect.left + px(MARK_PAD as f32);
@@ -640,14 +623,14 @@ impl App {
     /// The tooltip over the mark: the space, and how to go to another.
     pub(super) fn space_tip(&self) -> Option<String> {
         let name = &self.tabs.active_space().name;
-        Some(format!("{name}. Swipe sideways on the tabs to go to a different space"))
+        Some(format!("{name}. Click to go to a different space, or swipe sideways on the tabs"))
     }
 
     pub(super) fn space_tip_anchor(&self) -> Option<Rect> {
         self.layout.space_mark
     }
 
-    /// A press on the mark opens the active space's menu.
+    /// A press on the mark opens the spaces' menu.
     pub(super) fn space_mouse_down(&mut self, x: i32, y: i32) {
         self.motion.press(HoverKey::SpaceMark);
         self.invalidate_strip();
@@ -728,6 +711,11 @@ impl App {
 
     fn space_menu_chosen(&mut self, space: u64, chosen: usize) -> bool {
         match chosen {
+            n if (MENU_GO_TO..MENU_GO_TO + MAX_SPACES).contains(&n) => {
+                if let Some(id) = self.tabs.spaces.get(n - MENU_GO_TO).map(|s| s.id) {
+                    self.switch_space(id);
+                }
+            }
             MENU_RENAME => self.open_omnibar(Mode::RenameSpace(space)),
             MENU_NEW => self.new_space(),
             MENU_DELETE => self.delete_space(space),
@@ -741,10 +729,17 @@ impl App {
         true
     }
 
-    /// The menu of a space: a click on the mark, or a right click on it.
+    /// The menu of the mark (a click or a right click on it): every space,
+    /// the active one checked, to go to another; then `space`'s own items
+    /// and "New space".
     pub(super) fn space_menu(&mut self, x: i32, y: i32, space: u64) {
         let chosen = unsafe {
             let Ok(menu) = CreatePopupMenu() else { return };
+            for (i, s) in self.tabs.spaces.iter().enumerate() {
+                let check = if s.id == self.tabs.space { MF_CHECKED } else { MF_UNCHECKED };
+                let _ = AppendMenuW(menu, MF_STRING | check, MENU_GO_TO + i, &wide(&s.name));
+            }
+            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             self.append_space_menu_items(menu, space);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let full = if self.tabs.spaces.len() >= MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
@@ -760,6 +755,8 @@ impl App {
             let _ = DestroyMenu(menu);
             chosen
         };
+        // The menu held the mouse: the hover is wherever the pointer is now.
+        self.rehover();
         self.space_menu_chosen(space, chosen);
     }
 

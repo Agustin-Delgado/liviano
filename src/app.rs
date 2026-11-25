@@ -1166,7 +1166,7 @@ impl App {
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
         let next = next.or(self.spaces_advance(now));
         let tabs_dx = self.paint_slide();
-        let palette = self.space_palette();
+        let palette = self.palette;
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
@@ -2202,6 +2202,20 @@ impl App {
             self.tip_follow_hover();
             self.invalidate_hover_area();
         }
+    }
+
+    /// A modal loop (a popup menu) took the mouse, and no move or leave
+    /// came here meanwhile: the hover is set again from where the pointer
+    /// is, and the leave is tracked anew.
+    pub(super) fn rehover(&mut self) {
+        let mut point = POINT::default();
+        let inside = unsafe {
+            GetCursorPos(&mut point).is_ok()
+                && windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point).as_bool()
+        };
+        self.tracking_mouse = false;
+        let hover = if inside { self.layout.hit(point.x, point.y) } else { None };
+        self.set_hover(hover);
     }
 
     /// Everything a hover can light up lives in the strip, the caption row
