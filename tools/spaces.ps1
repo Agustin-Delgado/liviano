@@ -5,8 +5,8 @@
 .DESCRIPTION
   The script starts a new Nea with a temporary NEA_DATA_DIR, script
   control on a separate pipe and NEA_TRACE=1. The session has 3 spaces of
-  -TabsPerSpace tabs each, in the vertical layout. The first tab of each
-  space is a real page.
+  -TabsPerSpace tabs each, in the side list (-Top: in the top strip).
+  The first tab of each space is a real page.
 
   A warm-up visits each space once, so that each space's live page is
   made and loaded. Then the script runs one pattern of next_space and
@@ -36,6 +36,8 @@ param(
     # The display's frame time: 8.333 on a 120 Hz screen.
     [double]$TargetMs = 16.667,
     [int]$Seed = 7,
+    # Tabs in a strip on top, not in the side list.
+    [switch]$Top,
     [switch]$ShowGaps,
     [switch]$KeepData
 )
@@ -68,7 +70,7 @@ for ($s = 0; $s -lt 3; $s++) {
     }
 }
 $session = @{
-    tabs = $saved; active = 0; vertical_tabs = $true; sidebar_collapsed = $false
+    tabs = $saved; active = 0; vertical_tabs = (-not $Top); sidebar_collapsed = $false
     window = @(80, 80, 1480, 980); maximized = $false; spaces = $spaces; active_space = 0
 }
 [IO.File]::WriteAllText((Join-Path $data 'session.json'), ($session | ConvertTo-Json -Compress -Depth 6))
