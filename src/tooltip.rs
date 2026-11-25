@@ -33,13 +33,15 @@ use crate::{
 /// Room around the pill for its shadow (0 4px 10px -2px).
 const SHADOW: f32 = 6.0;
 
-struct Drawn {
-    hwnd: HWND,
-    dc: HDC,
+/// A per-pixel layered popup's picture: a bitmap and where it goes. The
+/// space card draws the same way.
+pub(crate) struct Drawn {
+    pub hwnd: HWND,
+    pub dc: HDC,
     bitmap: HBITMAP,
     old: HGDIOBJ,
-    size: SIZE,
-    origin: POINT,
+    pub size: SIZE,
+    pub origin: POINT,
 }
 
 struct State {
@@ -192,7 +194,7 @@ fn step() -> bool {
     })
 }
 
-fn new_bitmap(hwnd: HWND, size: SIZE, origin: POINT) -> Option<Drawn> {
+pub(crate) fn new_bitmap(hwnd: HWND, size: SIZE, origin: POINT) -> Option<Drawn> {
     unsafe {
         let dc = CreateCompatibleDC(None);
         let info = BITMAPINFO {
@@ -217,7 +219,7 @@ fn new_bitmap(hwnd: HWND, size: SIZE, origin: POINT) -> Option<Drawn> {
     }
 }
 
-fn release(drawn: &mut Option<Drawn>) {
+pub(crate) fn release(drawn: &mut Option<Drawn>) {
     if let Some(d) = drawn.take() {
         unsafe {
             SelectObject(d.dc, d.old);
@@ -229,7 +231,7 @@ fn release(drawn: &mut Option<Drawn>) {
 
 /// Puts the bitmap on screen at its place, at `alpha`; with `content`
 /// false only the opacity changes.
-fn update(d: &Drawn, alpha: Option<u8>, content: bool) {
+pub(crate) fn update(d: &Drawn, alpha: Option<u8>, content: bool) {
     let blend = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,

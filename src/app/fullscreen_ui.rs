@@ -134,6 +134,9 @@ impl App {
         self.close_omnibar();
         self.hide_card();
         self.hide_tip();
+        if by_page.is_some() {
+            self.hide_space_name();
+        }
         let hwnd = self.hwnd;
         unsafe {
             let mut placement = WINDOWPLACEMENT { length: size_of::<WINDOWPLACEMENT>() as u32, ..Default::default() };

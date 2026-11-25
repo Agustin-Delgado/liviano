@@ -39,6 +39,7 @@ mod settings;
 mod settings_window;
 mod shield;
 mod shortcuts;
+mod space_card;
 mod spaces;
 mod split;
 mod sqlite;

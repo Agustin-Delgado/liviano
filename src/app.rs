@@ -729,6 +729,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 if app.window_sized(kind) {
                     app.relayout()
                 }
+                app.space_name_follow();
             })
             .is_none()
             {
@@ -741,6 +742,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 app.session_dirty = true;
                 app.autofill_follow();
                 app.place_omnibar();
+                app.space_name_follow();
             });
             LRESULT(0)
         }
@@ -1126,7 +1128,7 @@ impl App {
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
         let next = next.or(self.spaces_advance(now));
-        let tabs_dx = self.paint_slide(now);
+        let tabs_dx = self.paint_slide();
         let palette = self.space_palette();
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
@@ -1187,7 +1189,7 @@ impl App {
                 for piece in chrome {
                     let drawn = surface.paint(hdc, piece, |g| {
                         tabbar::paint(g, width, height, &paint);
-                        self.paint_spaces(g, now, &palette, &paint);
+                        self.paint_spaces(g, &palette, &paint);
                         crate::bookmark_bar::paint(g, &bar);
                     });
                     if !drawn {
@@ -1235,7 +1237,7 @@ impl App {
         let next = next.or(self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
-        if self.motion.rail_moving() || self.motion.indicator_moving() || self.spaces_moving(now) {
+        if self.motion.rail_moving() || self.motion.indicator_moving() || self.spaces_moving() {
             return self.moving_area(&fills);
         }
         match tabbar::changed_area(old, &self.strip_sheet()) {

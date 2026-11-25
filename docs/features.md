@@ -168,9 +168,12 @@ the background. A new window has one space, "Personal".
 - **Which space:** with two spaces or more, the ground of the tab strip has
   a light tint of the color of the active space. A top strip has a 2 px
   line in that color at its bottom. The column shows the color dot and the
-  name of the active space at its bottom, next to the gear. During a switch
-  and for one second after it, the name of the space shows on a small card
-  in the middle of the tabs.
+  name of the active space at its bottom, next to the gear. When a switch
+  is done (with a key, a swipe or a menu), the color dot and the name of
+  the new space show on a small card at the bottom center of the page for
+  about one second. The card does not take clicks or the keyboard. It moves
+  with the window, and it does not show when the window is minimized or
+  when a video fills the screen.
 - **Rename, color, delete:** click or right-click the name at the bottom of
   the column. On a top strip, right-click an empty area of the strip and
   select "This space". The commands are "Rename space…", the color, "New
