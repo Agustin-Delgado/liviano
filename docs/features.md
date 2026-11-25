@@ -115,7 +115,7 @@ table marks the items that this method cannot test.
 | Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s, suspends them after the time in Settings and discards them later. It keeps at most 8 live views out of sight, and 4 of the views that were out of sight for 5 min. When memory is low, it discards them immediately. Refer to [memory.md](memory.md). |
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
-| Spaces | Verified: create, name, color, delete, switch with the shortcuts, the switcher and Ctrl+K, move a tab, persistence, deferred restore and old session files. A person checks the menus of a space and of a tab. |
+| Spaces | Verified: swipe (to the next space, back, too short, past the first space, past the last space and back), switch with the shortcuts and Ctrl+K, move a tab, persistence, deferred restore and old session files. The swipe was sent as wheel messages: a person checks it on a real touchpad. A person checks the menus of a space and of a tab. |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |
 | Reader mode | Verified (Readability). |
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
@@ -146,25 +146,37 @@ A space is a set of tabs with a name and a color, for example "Work" and
 different space to see its tabs. The tabs of the other spaces stay open in
 the background. A new window has one space, "Personal".
 
-- **New space:** right-click an empty area of the tab strip and select "New
-  space". The field opens to name it: type the name and push Enter. The new
-  space is empty, so the field then opens for its first tab. New spaces are
-  "Space 2", "Space 3"… until you rename them. Nea keeps at most nine spaces.
-- **Switcher:** with two spaces or more, a small switcher shows each space
-  with its color dot and its name. On a top strip, it is after Back, Forward
-  and Reload. On the side, it is at the bottom of the column, next to the
-  gear. If the row is full, it goes on its own row above the gear. If the
-  names do not fit, only the active space shows its name, and then only the
-  dots show. The active space uses the indigo. Click a space to go to it.
-  The tooltip shows its name and its shortcut.
+- **Swipe:** put two fingers on the touchpad over the tabs (the top strip
+  or the column) and move them to the side. The tabs move with your
+  fingers, and the tabs of the next space (or of the previous space) come in
+  beside them. Lift your fingers: if the tabs moved more than a third of the
+  way, or if you swiped quickly, the other space comes in. If not, the tabs
+  go back. One swipe moves one space. Before the first space, the tabs
+  stretch a little and go back. With a mouse, hold Shift and turn the
+  wheel over the tabs: each turn moves one space.
+- **New space:** swipe past the last space (it must have one tab or more).
+  A new, empty space comes in, and the field opens for its first tab. If you
+  swipe back before you open a tab in it, Nea removes the new space. You can
+  also right-click an empty area of the tab strip and select "New space":
+  the field then opens to name it. New spaces are "Space 2", "Space 3"…
+  until you rename them. Nea keeps at most nine spaces.
 - **Shortcuts:** Ctrl+Shift+1 … Ctrl+Shift+9 go to space 1 to 9.
   Ctrl+Shift+PgDn and Ctrl+Shift+PgUp go to the next and the previous space.
+  The tabs slide in from the side of the space, as with a swipe.
 - **Ctrl+K** finds the tabs of all spaces. A tab of a different space shows
   the name of its space. Select it to go to its space and its tab.
-- **Right-click a space** to see these commands: "Rename space…", the color,
-  "New space" and "Delete space (keep its tabs)". A deleted space never
-  closes a tab: its tabs go to the space before it (the first space gives
-  its tabs to the next one).
+- **Which space:** with two spaces or more, the ground of the tab strip has
+  a light tint of the color of the active space. A top strip has a 2 px
+  line in that color at its bottom. The column shows the color dot and the
+  name of the active space at its bottom, next to the gear. During a switch
+  and for one second after it, the name of the space shows on a small card
+  in the middle of the tabs.
+- **Rename, color, delete:** click or right-click the name at the bottom of
+  the column. On a top strip, right-click an empty area of the strip and
+  select "This space". The commands are "Rename space…", the color, "New
+  space" and "Delete space (keep its tabs)". A deleted space never closes a
+  tab: its tabs go to the space before it (the first space gives its tabs
+  to the next one).
 - **Move a tab:** right-click a tab and select "Move to space", then a space
   or "New space". The tab leaves its group. The two tabs of a split view
   pair move together.
@@ -175,8 +187,10 @@ close the last tab of a space, the window stays open.
 
 A switch is as fast as a tab switch. Nea moves the tabs from one list to the
 other, shows one page and hides one. It creates no page and closes no page.
-The tabs of the new space fade in, and the card of the active tab slides to
-its new place. If the Windows animations are off, the change is immediate.
+During a swipe, Nea draws only the tab strip: the page changes one time,
+when you lift your fingers and the other space comes in. If the Windows
+animations are off, the tabs do not follow the fingers, and the change is
+immediate.
 The tabs of the other spaces are background tabs: they go to sleep and are
 discarded as all other background tabs.
 

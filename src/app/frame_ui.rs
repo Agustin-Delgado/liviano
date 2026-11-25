@@ -254,6 +254,7 @@ impl App {
             let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("New tab"));
             let full = if self.tabs.spaces.len() >= crate::spaces::MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
             let _ = AppendMenuW(menu, MF_STRING | full, NEW_SPACE, &wide("New space"));
+            self.append_this_space(menu);
             let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
             let _ = AppendMenuW(menu, MF_STRING, TAB_LAYOUT, &wide(layout_label(self.vertical)));
             let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));
@@ -278,7 +279,9 @@ impl App {
             NEW_TAB => self.run(Command::NewTab),
             NEW_SPACE => self.run(Command::NewSpace),
             RESTART => self.restart_to_update(),
-            _ => {}
+            other => {
+                self.this_space_choice(other);
+            }
         }
     }
 

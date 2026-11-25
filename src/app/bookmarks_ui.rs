@@ -109,6 +109,11 @@ impl BarUi {
         }
         self.widths.as_ref().map_or(&[], |(_, w)| w)
     }
+
+    /// The widths `widths` measured at `scale`, without measuring.
+    fn measured(&self, scale: f32) -> &[i32] {
+        self.widths.as_ref().filter(|(at, _)| *at == scale).map_or(&[], |(_, w)| w)
+    }
 }
 
 /// Where a bookmark opens.
@@ -128,10 +133,21 @@ fn click_target(ctrl: bool) -> Open {
 impl App {
     /// The bar goes into the layout of now (called by `lay_out`).
     pub(super) fn place_bookmarks(&mut self) {
+        if !self.vertical {
+            self.bookmarks.widths(self.scale);
+        }
+        let mut layout = std::mem::take(&mut self.layout);
+        self.place_bookmarks_in(&mut layout);
+        self.layout = layout;
+    }
+
+    /// Places the bar in `layout` (also the other space's list during a
+    /// swipe, so that its tabs sit where this space's do).
+    pub(super) fn place_bookmarks_in(&self, layout: &mut tabbar::Layout) {
         let wanted = self.settings.show_bookmarks_bar && !self.collapsed;
         let count = if wanted { self.bookmarks.entries.len() } else { 0 };
-        let widths: &[i32] = if count > 0 && !self.vertical { self.bookmarks.widths(self.scale) } else { &[] };
-        bookmark_bar::place(&mut self.layout, count, widths, self.scale);
+        let widths: &[i32] = if count > 0 && !self.vertical { self.bookmarks.measured(self.scale) } else { &[] };
+        bookmark_bar::place(layout, count, widths, self.scale);
     }
 
     /// What the bar draws this paint.

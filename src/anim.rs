@@ -256,6 +256,9 @@ pub mod specs {
     /// most of the way in the first frames (a press answered at once) and
     /// settles softly, a little longer so the rows' fade reads.
     pub const COLLAPSE: Spec = Spec::new(220, OUT_STRONG);
+    /// The tab list sliding to another space: a key's whole switch, or the
+    /// rest of a swipe once the fingers leave.
+    pub const SPACE_SLIDE: Spec = Spec::new(200, OUT_STRONG);
     /// The rail sliding in from its edge (the app's drawer).
     pub const RAIL: Spec = Spec::new(250, MOVE);
     /// A check box filling in.

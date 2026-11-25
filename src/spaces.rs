@@ -1,6 +1,6 @@
 //! Spaces, without the engine: named sets of tabs ("Work", "Personal")
-//! that the window goes between with one key. The rules live here, on
-//! `TabList`, so they are tested without a window:
+//! that the window goes between with a swipe or one key. The rules live
+//! here, on `TabList`, so they are tested without a window:
 //!
 //! - only the active space's tabs are in `TabList::tabs`; the other
 //!   spaces' tabs wait in `TabList::parked`, each space's in its own order.
@@ -10,7 +10,9 @@
 //!   view. The app then shows one page and hides one (`views_ui`);
 //! - there is always at least one space, and deleting one never loses a
 //!   tab: its tabs go to the space before it;
-//! - a group's tabs and a split pair's two tabs are always in one space.
+//! - a group's tabs and a split pair's two tabs are always in one space;
+//! - a swipe is worked out here too (`Swipe`, `swipe_commits`): how far
+//!   the list goes with the fingers and where it settles.
 //!
 //! "Session" means the restore file (`session`): these are spaces.
 
@@ -21,7 +23,6 @@ use serde::{Deserialize, Serialize};
 use crate::{
     session::Session,
     tab_groups::GroupColor,
-    tabbar::Rect,
     tabs::{Tab, TabList},
 };
 
@@ -30,7 +31,7 @@ use crate::{
 pub const FIRST_SPACE: u64 = 0;
 /// What the first space is called until it is renamed.
 pub const FIRST_NAME: &str = "Personal";
-/// Ctrl+Shift+1…9 reach each of them, and they fit in the switcher.
+/// Ctrl+Shift+1…9 reach each of them.
 pub const MAX_SPACES: usize = 9;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -90,7 +91,7 @@ impl<W> TabList<W> {
         tabs.iter().filter(|t| t.space == space).map(|t| t.id).collect()
     }
 
-    /// Every tab, space by space in switcher order, each space's in strip
+    /// Every tab, space by space in their order, each space's in strip
     /// order: the order session.json writes them in.
     pub fn in_space_order(&self) -> Vec<&Tab<W>> {
         let mut out = Vec::with_capacity(self.count());
@@ -113,14 +114,14 @@ impl<W> TabList<W> {
     }
 
     /// The first colour no space wears, or the next in turn.
-    fn next_space_color(&self) -> GroupColor {
+    pub fn next_space_color(&self) -> GroupColor {
         GroupColor::ALL
             .into_iter()
             .find(|c| !self.spaces.iter().any(|s| s.color == *c))
             .unwrap_or(GroupColor::ALL[self.spaces.len() % GroupColor::ALL.len()])
     }
 
-    /// A new, empty space at the end of the switcher. None when there are
+    /// A new, empty space after the others. None when there are
     /// `MAX_SPACES` already.
     pub fn add_space(&mut self) -> Option<u64> {
         if self.spaces.len() >= MAX_SPACES {
@@ -170,6 +171,13 @@ impl<W> TabList<W> {
         let current = self.space_index(self.space)? as isize;
         let index = (current + offset).rem_euclid(self.spaces.len() as isize);
         self.spaces.get(index as usize).map(|s| s.id).filter(|id| *id != self.space)
+    }
+
+    /// The space right before (`side` -1) or after (+1) the active one,
+    /// with no wrap: what a swipe pulls in.
+    pub fn space_beside(&self, side: isize) -> Option<u64> {
+        let index = self.space_index(self.space)?.checked_add_signed(side)?;
+        self.spaces.get(index).map(|s| s.id)
     }
 
     /// Ctrl+Shift+1…9: the space at that position.
@@ -354,89 +362,119 @@ impl<W> TabList<W> {
     }
 }
 
-/// What the switcher needs to know about one space.
-#[derive(Clone, Debug, PartialEq)]
-pub struct SpaceInfo<'a> {
-    pub id: u64,
-    pub name: &'a str,
-    pub color: GroupColor,
-    pub active: bool,
-    /// The width of its name in the switcher's type, in pixels.
-    pub name_w: i32,
-}
+// ---------- the mark at the foot of the column ----------
 
-/// One space in the switcher: where it is and whether it shows its name
-/// (else only its colour dot).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct SpaceChip {
-    pub id: u64,
-    pub rect: Rect,
-    pub named: bool,
-}
-
-/// A chip's height: the group label's, a little under a tab's.
-pub const CHIP_H: i32 = 24;
-/// A chip that shows only its dot is a square.
-const DOT_CHIP_W: i32 = 24;
-pub const CHIP_PAD: i32 = 8;
-pub const CHIP_DOT: f32 = 6.0;
-pub const DOT_GAP: i32 = 6;
+/// The mark: pad, colour dot, gap, name, pad, on the gear's row.
+pub const MARK_PAD: i32 = 8;
+pub const MARK_DOT: f32 = 6.0;
+pub const MARK_GAP: i32 = 6;
 /// Past this, a long name is cut.
-const NAME_MAX_W: i32 = 96;
-const CHIP_GAP: i32 = 2;
+const MARK_NAME_MAX_W: i32 = 96;
+/// Narrower than this, the mark has no room for its dot and does not show.
+pub const MARK_MIN_W: i32 = 24;
 
 fn px(v: i32, scale: f32) -> i32 {
     (v as f32 * scale).round() as i32
 }
 
-fn chip_w(space: &SpaceInfo, named: bool, scale: f32) -> i32 {
-    if named {
-        px(CHIP_PAD, scale)
-            + (CHIP_DOT * scale).round() as i32
-            + px(DOT_GAP, scale)
-            + space.name_w.clamp(0, px(NAME_MAX_W, scale))
-            + px(CHIP_PAD, scale)
-    } else {
-        px(DOT_CHIP_W, scale)
+/// The width of the mark for a name `name_w` pixels wide.
+pub fn mark_width(name_w: i32, scale: f32) -> i32 {
+    px(MARK_PAD, scale)
+        + (MARK_DOT * scale).round() as i32
+        + px(MARK_GAP, scale)
+        + name_w.clamp(0, px(MARK_NAME_MAX_W, scale))
+        + px(MARK_PAD, scale)
+}
+
+// ---------- the swipe ----------
+
+/// The fingers' travel, in wheel units, that carries the list one whole
+/// width: the same swipe on a top strip and in the column.
+pub const SWIPE_TRAVEL: f32 = 600.0;
+/// The share of the list's width a swipe must carry it to go to the space
+/// beside.
+pub const COMMIT_SHARE: f32 = 1.0 / 3.0;
+/// A flick this fast (in widths of the list per ms: 3 widths a second)
+/// goes to the space beside, however short. In widths, so that the same
+/// flick counts on a top strip and in the narrow column.
+pub const FLICK_SPEED: f32 = 0.003;
+/// A flick must still carry the list this far (px): a tremor is no flick.
+const FLICK_MIN: f32 = 16.0;
+/// The speed of the fingers is read over their last movement only.
+const SPEED_WINDOW_MS: f32 = 100.0;
+/// The rubber band at the end never takes the list further than this share
+/// of its width.
+const RUBBER_SHARE: f32 = 0.25;
+
+/// How far the list goes for `pull` px pulled past its end (no space
+/// there): less and less, never as far as a quarter of `width`.
+pub fn rubber(pull: f32, width: f32) -> f32 {
+    let limit = width * RUBBER_SHARE;
+    if limit <= 0.0 {
+        return 0.0;
     }
+    pull.signum() * limit * (1.0 - 1.0 / (pull.abs() / limit * 0.55 + 1.0))
 }
 
-/// The narrowest a switcher of `count` spaces gets: only the dots.
-pub fn dots_width(count: usize, scale: f32) -> i32 {
-    let n = count as i32;
-    n * px(DOT_CHIP_W, scale) + (n - 1).max(0) * px(CHIP_GAP, scale)
+/// Where the list is drawn for the fingers' `pull`: with the fingers up to
+/// a whole width when a space is there (`open`), on the rubber band when
+/// not.
+pub fn swipe_offset(pull: f32, width: f32, open: bool) -> f32 {
+    if open { pull.clamp(-width, width) } else { rubber(pull, width) }
 }
 
-/// The switcher's chips in a row from `left`, centred between `top` and
-/// `bottom`. All names show when they fit in `room`; else only the active
-/// space's; else only the dots (also when even those do not fit).
-pub fn chip_row(spaces: &[SpaceInfo], left: i32, room: i32, top: i32, bottom: i32, scale: f32) -> Vec<SpaceChip> {
-    let gap = px(CHIP_GAP, scale);
-    let width = |named: &dyn Fn(&SpaceInfo) -> bool| -> i32 {
-        spaces.iter().map(|s| chip_w(s, named(s), scale) + gap).sum::<i32>() - gap
-    };
-    let all = |_: &SpaceInfo| true;
-    let active = |s: &SpaceInfo| s.active;
-    let none = |_: &SpaceInfo| false;
-    let named: &dyn Fn(&SpaceInfo) -> bool = if width(&all) <= room {
-        &all
-    } else if width(&active) <= room {
-        &active
-    } else {
-        &none
-    };
-    let h = px(CHIP_H, scale);
-    let chip_top = top + (bottom - top - h) / 2;
-    let mut x = left;
-    spaces
-        .iter()
-        .map(|s| {
-            let w = chip_w(s, named(s), scale);
-            let chip = SpaceChip { id: s.id, rect: Rect::new(x, chip_top, x + w, chip_top + h), named: named(s) };
-            x += w + gap;
-            chip
-        })
-        .collect()
+/// Where a swipe settles when the fingers stop: true to go to the space it
+/// pulls in. `offset`: how far the list is slid (negative: to the left,
+/// the next space coming in); `speed`: its last speed, px per ms, the same
+/// sign; `width`: the list's. A flick back cancels, however far the list
+/// went.
+pub fn swipe_commits(offset: f32, speed: f32, width: f32) -> bool {
+    if offset == 0.0 || width <= 0.0 {
+        return false;
+    }
+    let outward = speed * offset.signum() / width;
+    if outward <= -FLICK_SPEED {
+        return false;
+    }
+    (outward >= FLICK_SPEED && offset.abs() >= FLICK_MIN) || offset.abs() >= width * COMMIT_SHARE
+}
+
+/// One swipe of the fingers over the tab list: the wheel's deltas in, the
+/// pull and its speed out.
+#[derive(Clone, Debug, Default)]
+pub struct Swipe {
+    /// The fingers' travel since the swipe began, px (negative: to the
+    /// left, toward the next space).
+    pub pull: f32,
+    /// The last moves: when, and the offset drawn then.
+    samples: std::collections::VecDeque<(Instant, f32)>,
+}
+
+impl Swipe {
+    /// A swipe that takes over a list already slid to `offset`.
+    pub fn from(offset: f32) -> Self {
+        Self { pull: offset, samples: Default::default() }
+    }
+
+    /// Notes that the list is drawn at `offset` at `at`.
+    pub fn sample(&mut self, at: Instant, offset: f32) {
+        self.samples.push_back((at, offset));
+        while self
+            .samples
+            .front()
+            .is_some_and(|(t, _)| at.saturating_duration_since(*t).as_secs_f32() * 1000.0 > SPEED_WINDOW_MS)
+        {
+            self.samples.pop_front();
+        }
+    }
+
+    /// The list's speed over the last moves, px per ms; 0 with fewer than
+    /// two.
+    pub fn speed(&self) -> f32 {
+        let (Some(&(t0, a)), Some(&(t1, b))) = (self.samples.front(), self.samples.back()) else { return 0.0 };
+        let ms = t1.saturating_duration_since(t0).as_secs_f32() * 1000.0;
+        if ms <= 0.0 { 0.0 } else { (b - a) / ms }
+    }
 }
 
 #[cfg(all(test, nea_tests))]

@@ -666,6 +666,21 @@ fn on_omnibar(signal: Signal) {
     with_app(|app| app.on_omnibar(signal));
 }
 
+/// What the strip is told about a tab.
+fn tab_info(t: &crate::tabs::Tab<WebTab>) -> TabInfo<'_> {
+    TabInfo {
+        id: t.id,
+        label: t.label(),
+        initial: t.initial(),
+        pinned: t.pinned,
+        asleep: matches!(t.live, Live::Asleep),
+        loading: t.loading,
+        private: t.private,
+        icon: if t.private { None } else { crate::favicon::for_url(&t.url) },
+        group: t.group,
+    }
+}
+
 fn x_y(lparam: LPARAM) -> (i32, i32) {
     ((lparam.0 & 0xFFFF) as i16 as i32, ((lparam.0 >> 16) & 0xFFFF) as i16 as i32)
 }
@@ -795,6 +810,26 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let (x, y) = x_y(lparam);
             with_app(|app| app.mouse_down(x, y));
             LRESULT(0)
+        }
+        // A two-finger swipe on a precision touchpad comes as a horizontal
+        // wheel, and a mouse has Shift+wheel: over the strip, both go
+        // between spaces.
+        WM_MOUSEHWHEEL | WM_MOUSEWHEEL => {
+            let horizontal = msg == WM_MOUSEHWHEEL;
+            let shift = wparam.0 & 0x0004 != 0; // MK_SHIFT
+            if !horizontal && !shift {
+                return default();
+            }
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+            let mut point =
+                POINT { x: (lparam.0 & 0xFFFF) as i16 as i32, y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32 };
+            unsafe {
+                let _ = windows::Win32::Graphics::Gdi::ScreenToClient(hwnd, &mut point);
+            }
+            match with_app(|app| app.space_wheel(point.x, point.y, delta, horizontal)) {
+                Some(true) => LRESULT(0),
+                _ => default(),
+            }
         }
         WM_LBUTTONUP => {
             let (x, y) = x_y(lparam);
@@ -990,21 +1025,7 @@ impl App {
     }
 
     fn tab_infos(&self) -> Vec<TabInfo<'_>> {
-        self.tabs
-            .tabs
-            .iter()
-            .map(|t| TabInfo {
-                id: t.id,
-                label: t.label(),
-                initial: t.initial(),
-                pinned: t.pinned,
-                asleep: matches!(t.live, Live::Asleep),
-                loading: t.loading,
-                private: t.private,
-                icon: if t.private { None } else { crate::favicon::for_url(&t.url) },
-                group: t.group,
-            })
-            .collect()
+        self.tabs.tabs.iter().map(tab_info).collect()
     }
 
     fn relayout(&mut self) {
@@ -1037,7 +1058,7 @@ impl App {
             self.extension_slots(),
             self.zoom_shown(),
             self.update.is_some(),
-            &self.space_infos(),
+            self.space_mark_width(),
         );
         self.place_bookmarks();
         if self.fullscreen.on() {
@@ -1105,6 +1126,8 @@ impl App {
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
         let next = next.or(self.spaces_advance(now));
+        let tabs_dx = self.paint_slide(now);
+        let palette = self.space_palette();
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
@@ -1115,7 +1138,7 @@ impl App {
             layout: &self.layout,
             tabs: &infos,
             active: self.tabs.active,
-            palette: &self.palette,
+            palette: &palette,
             hint: hint.as_deref(),
             scale: self.scale,
             pairs: &pairs,
@@ -1127,11 +1150,12 @@ impl App {
             pressed: self.frame.pressed,
             window_active: !self.frame.inactive,
             nav: self.nav.state,
+            tabs_dx,
         };
         let bar = crate::bookmark_bar::BarPaint {
             layout: &self.layout,
             entries: self.bookmark_entries(),
-            palette: &self.palette,
+            palette: &palette,
             motion: &self.motion,
             scale: self.scale,
             held: self.bookmark_held(),
@@ -1163,11 +1187,11 @@ impl App {
                 for piece in chrome {
                     let drawn = surface.paint(hdc, piece, |g| {
                         tabbar::paint(g, width, height, &paint);
-                        self.paint_spaces(g, now);
+                        self.paint_spaces(g, now, &palette, &paint);
                         crate::bookmark_bar::paint(g, &bar);
                     });
                     if !drawn {
-                        gfx::fill_gdi(hdc, piece, self.palette.chrome);
+                        gfx::fill_gdi(hdc, piece, palette.chrome);
                     }
                 }
             }
@@ -1182,7 +1206,8 @@ impl App {
         // Still moving: the frame clock repaints what moves, and stops by
         // itself when nothing asks again.
         if next.is_some() || self.motion_was_running {
-            crate::anim::mark(if self.motion.only_spinning(now) { "ring" } else { "strip" });
+            let ring = self.motion.only_spinning(now) && !self.spaces_sliding();
+            crate::anim::mark(if ring { "ring" } else { "strip" });
             crate::anim::frame_shown(started);
         }
         if next.is_none() && self.motion_was_running {
@@ -1197,9 +1222,7 @@ impl App {
 
     fn strip_sheet(&self) -> tabbar::Sheet {
         let loading: Vec<u64> = self.tabs.tabs.iter().filter(|t| t.loading).map(|t| t.id).collect();
-        let mut sheet = self.motion.sheet(&self.layout, self.tabs.active, &loading, self.scale);
-        self.spaces_sheet(&mut sheet, self.frame_now.unwrap_or_else(Instant::now));
-        sheet
+        self.motion.sheet(&self.layout, self.tabs.active, &loading, self.scale)
     }
 
     /// The part of the window the next frame of the strip's motion draws:
@@ -1212,7 +1235,7 @@ impl App {
         let next = next.or(self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
-        if self.motion.rail_moving() || self.motion.indicator_moving() {
+        if self.motion.rail_moving() || self.motion.indicator_moving() || self.spaces_moving(now) {
             return self.moving_area(&fills);
         }
         match tabbar::changed_area(old, &self.strip_sheet()) {
@@ -2186,7 +2209,7 @@ impl App {
             }
             Some(Hit::Close(id)) => self.close_tab(id),
             Some(Hit::Group(group)) => self.group_mouse_down(group, x, y),
-            Some(Hit::Space(space)) => self.space_mouse_down(space),
+            Some(Hit::SpaceMark) => self.space_mouse_down(x, y),
             Some(Hit::NewTab) => {
                 self.motion.press(tabbar::HoverKey::NewTab);
                 self.open_omnibar(Mode::NewTab);
@@ -2237,8 +2260,8 @@ impl App {
             self.group_menu(x, y, group);
             return;
         }
-        if let Some(Hit::Space(space)) = self.layout.hit(x, y) {
-            self.space_menu(x, y, space);
+        if let Some(Hit::SpaceMark) = self.layout.hit(x, y) {
+            self.space_menu(x, y, self.tabs.space);
             return;
         }
         if let Some(Hit::Bookmark(index)) = self.layout.hit(x, y) {

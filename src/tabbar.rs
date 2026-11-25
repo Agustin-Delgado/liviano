@@ -10,7 +10,6 @@ use crate::{
     design::{Palette, Rgb, group_tint, group_tone, motion, size},
     frame::{self, Frame, WindowButton},
     gfx::{Align, Color, Font, Painter, RectF},
-    spaces::{SpaceChip, SpaceInfo},
     tab_groups::{Drop, GroupColor},
 };
 
@@ -37,8 +36,9 @@ pub enum Hit {
     /// "Update", shown when a verified update waits. A click restarts the
     /// app into the new version.
     Update,
-    /// A space in the switcher (shown with two spaces or more).
-    Space(u64),
+    /// The active space's mark at the foot of the column (shown with two
+    /// spaces or more).
+    SpaceMark,
     /// A bookmark on the bookmarks bar, by its place in the bar's list.
     Bookmark(usize),
     /// The bar's overflow button ("»" or the "…" tile).
@@ -249,9 +249,10 @@ pub struct Layout {
     /// The update chip, when a verified update waits for a restart: left of
     /// the zoom chip (or of what the zoom chip goes beside).
     pub update: Option<Rect>,
-    /// The space switcher: after back, forward and reload on a top strip,
-    /// at the foot of the column. Empty with one space.
-    pub spaces: Vec<SpaceChip>,
+    /// The active space's mark (its colour dot and name): at the foot of
+    /// the column, left of the gear's controls. None on a top strip and
+    /// with one space.
+    pub space_mark: Option<Rect>,
     /// The bookmarks bar, when it shows (`bookmark_bar::place`).
     pub bookmarks: crate::bookmark_bar::BarLayout,
 }
@@ -306,14 +307,15 @@ pub fn layout_with(
     extensions: Option<usize>,
     zoom: Option<u32>,
 ) -> Layout {
-    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false, &[])
+    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false, None)
 }
 
 /// `extensions`: with `Some(pinned)`, the strip also holds the extensions
 /// button and that many pinned extensions (as many as fit). `zoom`: the
 /// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
 /// `update`: the update chip shows (a verified update waits for a restart).
-/// `spaces`: the space switcher's spaces, none for no switcher.
+/// `space_mark`: the width of the active space's name, when the column
+/// shows the space mark (two spaces or more).
 #[allow(clippy::too_many_arguments)]
 pub fn layout_chrome(
     tabs: &[TabInfo],
@@ -326,7 +328,7 @@ pub fn layout_chrome(
     extensions: Option<usize>,
     zoom: Option<u32>,
     update: bool,
-    spaces: &[SpaceInfo],
+    space_mark: Option<i32>,
 ) -> Layout {
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
@@ -356,26 +358,24 @@ pub fn layout_chrome(
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
     } else {
-        layout_horizontal(tabs, groups, width, height, m, extensions, chips, spaces)
+        layout_horizontal(tabs, groups, width, height, m, extensions, chips)
     };
     if let Some(pinned) = extensions {
         place_extensions(&mut layout, pinned, chips, m);
     }
     place_zoom(&mut layout, zoom, m);
     place_update(&mut layout, update, m);
-    if vertical && !spaces.is_empty() {
-        // The foot row, from the column's pad to the first control; when
-        // even the dots do not fit there, a row of their own above it.
+    if let Some(name_w) = space_mark.filter(|_| vertical) {
+        // On the gear's row, from the column's pad to the first control:
+        // the name gives way first, and a mark with no room for its dot
+        // does not show.
         let gear = layout.settings;
         let end = layout.update.or(layout.zoom.map(|z| z.rect)).unwrap_or_else(|| leftmost_control(&layout)).left;
-        let (left, gap) = (m.px(8), m.px(2));
-        let room = end - gap - left;
-        layout.spaces = if crate::spaces::dots_width(spaces.len(), m.scale) <= room {
-            crate::spaces::chip_row(spaces, left, room, gear.top, gear.bottom, m.scale)
-        } else {
-            let (top, bottom) = (gear.top - gap - gear.height(), gear.top - gap);
-            crate::spaces::chip_row(spaces, left, layout.strip.width() - 2 * left, top, bottom, m.scale)
-        };
+        let left = m.px(8);
+        let right = (left + crate::spaces::mark_width(name_w, m.scale)).min(end - m.px(2));
+        if right - left >= m.px(crate::spaces::MARK_MIN_W) {
+            layout.space_mark = Some(Rect::new(left, gear.top, right, gear.bottom));
+        }
     }
     layout
 }
@@ -489,7 +489,6 @@ fn group_of<'a>(tab: &TabInfo, groups: &'a [GroupInfo<'a>]) -> Option<&'a GroupI
     tab.group.and_then(|g| groups.iter().find(|i| i.id == g))
 }
 
-#[allow(clippy::too_many_arguments)]
 fn layout_horizontal(
     tabs: &[TabInfo],
     groups: &[GroupInfo],
@@ -498,7 +497,6 @@ fn layout_horizontal(
     m: &Metrics,
     extensions: Option<usize>,
     chips: i32,
-    spaces: &[SpaceInfo],
 ) -> Layout {
     // The strip's edge margin: the air above and under its controls, also
     // left of the capsule and right of the gear. The strip is the controls
@@ -529,9 +527,7 @@ fn layout_horizontal(
     // (and the extensions) close the strip at the right.
     let frame = Frame::new(Rect::new(0, 0, width, bar), edge, m.scale);
     let nav = nav_row(frame.right() + m.px(frame::NAV_LEAD), item_top, item_bottom, m);
-    // The space switcher sits between the page's buttons and the tabs.
-    let switcher = crate::spaces::chip_row(spaces, nav[2].right + pad, width / 4, item_top, item_bottom, m.scale);
-    let start = switcher.last().map_or(nav[2].right, |c| c.rect.right) + pad;
+    let start = nav[2].right + pad;
     let settings = Rect::new(width - edge - m.px(SETTINGS_W), item_top, width - edge, item_bottom);
     let reserved =
         extensions.map_or(0, |n| extensions_width(n, width, m)) + chips + m.px(SETTINGS_W + 2) + edge + m.px(DRAG_ROOM);
@@ -582,7 +578,6 @@ fn layout_horizontal(
         frame,
         nav,
         settings,
-        spaces: switcher,
         ..Default::default()
     }
 }
@@ -717,8 +712,8 @@ impl Layout {
         if let Some(i) = self.extension_marks.iter().position(|r| r.contains(x, y)) {
             return Some(Hit::PinnedExtension(i));
         }
-        if let Some(chip) = self.spaces.iter().find(|c| c.rect.contains(x, y)) {
-            return Some(Hit::Space(chip.id));
+        if self.space_mark.is_some_and(|r| r.contains(x, y)) {
+            return Some(Hit::SpaceMark);
         }
         if let Some(label) = self.labels.iter().find(|l| l.rect.contains(x, y)) {
             return Some(Hit::Group(label.id));
@@ -784,6 +779,9 @@ pub struct Paint<'a> {
     pub window_active: bool,
     /// Which of back, forward and reload can act.
     pub nav: NavState,
+    /// How far the tab list is slid sideways, in px: a swipe between
+    /// spaces moves it with the fingers (0 at rest).
+    pub tabs_dx: f32,
 }
 
 impl From<Rect> for RectF {
@@ -824,6 +822,39 @@ pub fn paint(g: &Painter, width: i32, height: i32, p: &Paint) {
 }
 
 fn paint_strip(g: &Painter, p: &Paint) {
+    paint_tab_list(g, p);
+    paint_controls(g, p);
+}
+
+/// Where the tab list is drawn: the column, or the top strip from the
+/// page's buttons to the first control at its right. On a top strip the
+/// tabs, past their smallest width, run on under the extensions and the
+/// gear: they are cut short of them. A list sliding between spaces is cut
+/// to it too.
+pub fn tabs_area(layout: &Layout, scale: f32) -> RectF {
+    if layout.vertical || layout.strip.width() == 0 {
+        return RectF::from(layout.strip);
+    }
+    let end = [layout.extension_marks.first().copied(), Some(layout.extensions), Some(layout.settings)]
+        .into_iter()
+        .flatten()
+        .filter(|r| r.width() > 0)
+        .map(|r| r.left)
+        .min()
+        .unwrap_or(layout.strip.right);
+    // Half the pad after Reload: a tab sliding out goes before it reaches the button.
+    let left = layout.nav[2].right + frame::px(4, scale);
+    RectF::new(left as f32, 0.0, (end - frame::px(2, scale)) as f32, layout.strip.bottom as f32)
+}
+
+/// The tab list (split grounds, the live card, the tabs, the group labels
+/// and the + button), slid by `p.tabs_dx` and cut to `tabs_area`. A swipe
+/// draws the neighbour space's list this way too, beside this one.
+pub fn paint_tab_list(g: &Painter, p: &Paint) {
+    g.clip(tabs_area(p.layout, p.scale), |g| g.offset(p.tabs_dx, 0.0, |g| paint_list(g, p)));
+}
+
+fn paint_list(g: &Painter, p: &Paint) {
     let pal = p.palette;
     let px = |v: f32| v * p.scale;
     let radius = px(size::RADIUS);
@@ -854,23 +885,30 @@ fn paint_strip(g: &Painter, p: &Paint) {
         })
     });
 
-    // On a top strip the tabs, past their smallest width, run on under
-    // the extensions and the gear: they are cut short of them.
-    let tabs_area = if p.layout.vertical || p.layout.strip.width() == 0 {
-        RectF::from(p.layout.strip)
-    } else {
-        let end = [p.layout.extension_marks.first().copied(), Some(p.layout.extensions), Some(p.layout.settings)]
-            .into_iter()
-            .flatten()
-            .filter(|r| r.width() > 0)
-            .map(|r| r.left)
-            .min()
-            .unwrap_or(p.layout.strip.right);
-        RectF::new(0.0, 0.0, (end - frame::px(2, p.scale)) as f32, p.layout.strip.bottom as f32)
-    };
-    g.clip(tabs_area, |g| paint_tabs(g, p, shown_partner));
+    paint_tabs(g, p, shown_partner);
+    paint_new_tab(g, p);
+}
 
-    paint_controls(g, p);
+/// The + button, after the last tab (the "New tab" row in the column).
+fn paint_new_tab(g: &Painter, p: &Paint) {
+    if p.layout.strip.width() == 0 {
+        return;
+    }
+    let pal = p.palette;
+    let px = |v: f32| v * p.scale;
+    let plus = p.motion.rect_of_new_tab(p.layout);
+    let over = p.motion.hover(HoverKey::NewTab);
+    ghost_ground(g, plus, px(size::RADIUS), over, p.motion.pressed(HoverKey::NewTab), pal);
+    let ink = pal.ink_asleep.mix(pal.ink_muted, over);
+    if p.layout.vertical {
+        let mark_x = plus.left + px(8.0);
+        let (_, cy) = plus.center();
+        draw_plus(g, RectF::new(mark_x, cy - px(8.0), mark_x + px(16.0), cy + px(8.0)), px(4.5), ink, p.scale);
+        let text = RectF::new(mark_x + px(24.0), plus.top, plus.right - px(8.0), plus.bottom);
+        g.text("New tab", text, Font::new(px(size::TEXT), size::REGULAR, Align::Leading), ink);
+    } else {
+        draw_plus(g, plus, px(5.0), ink, p.scale);
+    }
 }
 
 /// The group lines, the live tab's card, the tabs and the group labels.
@@ -1134,20 +1172,6 @@ fn paint_controls(g: &Painter, p: &Paint) {
     let vertical = p.layout.vertical;
 
     if p.layout.strip.width() > 0 {
-        let plus = p.motion.rect_of_new_tab(p.layout);
-        let over = p.motion.hover(HoverKey::NewTab);
-        ghost_ground(g, plus, radius, over, p.motion.pressed(HoverKey::NewTab), pal);
-        let ink = pal.ink_asleep.mix(pal.ink_muted, over);
-        if vertical {
-            let mark_x = plus.left + px(8.0);
-            let (_, cy) = plus.center();
-            draw_plus(g, RectF::new(mark_x, cy - px(8.0), mark_x + px(16.0), cy + px(8.0)), px(4.5), ink, p.scale);
-            let text = RectF::new(mark_x + px(24.0), plus.top, plus.right - px(8.0), plus.bottom);
-            g.text("New tab", text, Font::new(px(size::TEXT), size::REGULAR, Align::Leading), ink);
-        } else {
-            draw_plus(g, plus, px(5.0), ink, p.scale);
-        }
-
         let s = p.layout.strip;
         let line = if vertical {
             RectF::new(s.right as f32 - 1.0, 0.0, s.right as f32, s.bottom as f32)
@@ -1371,7 +1395,7 @@ pub enum HoverKey {
     Settings,
     Zoom,
     Update,
-    Space(u64),
+    SpaceMark,
     Bookmark(usize),
     BookmarksMore,
 }
@@ -1390,7 +1414,7 @@ impl HoverKey {
             Hit::Settings => [Some(HoverKey::Settings), None],
             Hit::Zoom => [Some(HoverKey::Zoom), None],
             Hit::Update => [Some(HoverKey::Update), None],
-            Hit::Space(id) => [Some(HoverKey::Space(id)), None],
+            Hit::SpaceMark => [Some(HoverKey::SpaceMark), None],
             Hit::Bookmark(i) => [Some(HoverKey::Bookmark(i)), None],
             Hit::BookmarksMore => [Some(HoverKey::BookmarksMore), None],
         }
@@ -1442,8 +1466,8 @@ pub struct Motion {
     indicator_slide: Option<(RectF, Tween<f32>)>,
     indicator_drawn: Option<RectF>,
     spin: f32,
-    /// The next layout is another space's set of tabs: they fade in where
-    /// they are, without unfolding one by one (refer to `swap_tabs`).
+    /// The next layout is another space's set of tabs: it lands at once
+    /// (refer to `swap_tabs`).
     swapping: bool,
     /// Windows' "Show animations in Windows" is off: the ring stands still
     /// (the rest lands at once through `anim::reduced`).
@@ -1480,8 +1504,9 @@ impl Motion {
     }
 
     /// The strip is about to show a different set of tabs (a space
-    /// switch): its tabs fade in in place, the live card slides to the new
-    /// live tab, and nothing unfolds.
+    /// switch): the new list lands at once, with no tab unfolding, gliding
+    /// or fading and no live card sliding. The whole list slides instead
+    /// (`spaces_ui`).
     pub fn swap_tabs(&mut self) {
         self.swapping = true;
     }
@@ -1528,7 +1553,12 @@ impl Motion {
             self.rail = None;
         }
 
-        let same_strip = self.strip == layout.strip && self.strip.width() > 0;
+        let swapping = std::mem::take(&mut self.swapping);
+        let same_strip = self.strip == layout.strip && self.strip.width() > 0 && !swapping;
+        if swapping {
+            self.live = None;
+            self.live_fade = None;
+        }
         let hidden: Vec<u64> = layout.items.iter().filter(|i| i.hidden).map(|i| i.id).collect();
         // A group folding or unfolding moves everything on the
         // collapsible's curve, so its tabs and their neighbours keep pace.
@@ -1562,10 +1592,8 @@ impl Motion {
                         }
                     }
                     None if !self.drawn.is_empty() && !gone => {
-                        if !self.swapping {
-                            let from = folded(target, layout.vertical);
-                            self.moves.insert(id, Tween::new(from, target, now, specs::MORPH));
-                        }
+                        let from = folded(target, layout.vertical);
+                        self.moves.insert(id, Tween::new(from, target, now, specs::MORPH));
                         self.appear.insert(id, Tween::new(0.0, 1.0, now, specs::MORPH));
                     }
                     None => {}
@@ -1575,7 +1603,6 @@ impl Motion {
             self.moves.clear();
             self.appear.clear();
         }
-        self.swapping = false;
         self.hidden = hidden;
         self.moves.retain(|_, t| t.moving(now));
         self.appear.retain(|_, t| t.moving(now));

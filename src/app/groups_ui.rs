@@ -14,12 +14,13 @@ use windows::{
     core::{PCWSTR, w},
 };
 
-use super::{App, Mode, wide};
+use super::{App, Mode, WebTab, wide};
 use crate::{
     gfx,
     shortcuts::Command,
     tab_groups::{Drop, GroupColor},
     tabbar::{self, GroupInfo},
+    tabs::Tab,
 };
 
 /// In a tab's menu.
@@ -51,9 +52,16 @@ pub(super) struct GroupsUi {
 impl App {
     /// The groups as the strip draws them, in strip order.
     pub(super) fn group_infos(&self) -> Vec<GroupInfo<'_>> {
+        let tabs: Vec<&Tab<WebTab>> = self.tabs.tabs.iter().collect();
+        self.group_infos_of(&tabs)
+    }
+
+    /// The groups of `tabs` (one space's, in strip order) as the strip
+    /// draws them.
+    pub(super) fn group_infos_of(&self, tabs: &[&Tab<WebTab>]) -> Vec<GroupInfo<'_>> {
         let font = tabbar::label_font(self.scale);
         let mut ids: Vec<u64> = Vec::new();
-        for tab in &self.tabs.tabs {
+        for tab in tabs {
             if let Some(g) = tab.group.filter(|g| !ids.contains(g)) {
                 ids.push(g);
             }
@@ -68,7 +76,7 @@ impl App {
                     title: self.group_heading(g.id, &g.name),
                     color: g.color,
                     collapsed: g.collapsed,
-                    count: self.tabs.tabs.iter().filter(|t| t.group == Some(g.id)).count(),
+                    count: tabs.iter().filter(|t| t.group == Some(g.id)).count(),
                     label_w: tabbar::label_width(text_w, self.scale),
                 }
             })
