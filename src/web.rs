@@ -565,7 +565,11 @@ impl WebTab {
                     }
                     if let Some(command) = shortcuts.lookup(chord) {
                         args.SetHandled(true)?;
-                        push(Event::Command(command));
+                        let mut status = COREWEBVIEW2_PHYSICAL_KEY_STATUS::default();
+                        args.PhysicalKeyStatus(&mut status)?;
+                        if !(status.WasKeyDown.as_bool() && command.once_per_press()) {
+                            push(Event::Command(command));
+                        }
                     }
                     Ok(())
                 })),

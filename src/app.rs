@@ -529,7 +529,11 @@ fn message_loop() {
                 };
                 if let Some(command) = command {
                     ALT_CHORD.set(chord.alt && !chord.ctrl);
-                    with_app(|app| app.run(command));
+                    // Bit 30: the key was already down (a repeat).
+                    let repeat = (msg.lParam.0 >> 30) & 1 == 1;
+                    if !(repeat && command.once_per_press()) {
+                        with_app(|app| app.run(command));
+                    }
                     continue;
                 }
                 if msg.wParam.0 as u16 != VK_MENU.0 {

@@ -24,7 +24,7 @@ use windows::{
 use super::{App, Mode, WebTab, wide, with_app};
 use crate::{
     anim::{Tween, specs},
-    design::{Palette, group_tone},
+    design::{Palette, group_tone, size},
     gfx::{self, Align, Color, Font, Painter, RectF},
     shortcuts::Command,
     space_card::SpaceCard,
@@ -549,13 +549,14 @@ impl App {
         tabbar::paint_tab_list(g, &paint);
     }
 
-    /// The mark at the foot of the column: the active space's dot and name.
-    /// Like a group's header, it has no ground: the name goes to `ink`
-    /// under the pointer.
+    /// The mark at the foot of the column: the active space's dot and name,
+    /// on the same ghost ground as the gear beside it.
     fn paint_mark(&self, g: &Painter, mark: Rect, name: &str, tone: crate::design::Rgb, pal: &Palette) {
         let px = |v: f32| v * self.scale;
         let rect = RectF::from(mark);
-        let over = self.motion.hover(HoverKey::SpaceMark).max(self.motion.pressed(HoverKey::SpaceMark));
+        let over = self.motion.hover(HoverKey::SpaceMark);
+        let pressed = self.motion.pressed(HoverKey::SpaceMark);
+        tabbar::ghost_ground(g, rect, px(size::RADIUS), over, pressed, pal);
         let dot = px(MARK_DOT);
         let (_, cy) = rect.center();
         let dot_x = rect.left + px(MARK_PAD as f32);
@@ -620,10 +621,9 @@ impl App {
 
     // ---------- the mark ----------
 
-    /// The tooltip over the mark: the space, and how to go to another.
+    /// The tooltip over the mark: what a click does (the name is on it).
     pub(super) fn space_tip(&self) -> Option<String> {
-        let name = &self.tabs.active_space().name;
-        Some(format!("{name}. Click to go to a different space, or swipe sideways on the tabs"))
+        Some("Change space".to_owned())
     }
 
     pub(super) fn space_tip_anchor(&self) -> Option<Rect> {

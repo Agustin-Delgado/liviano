@@ -1300,7 +1300,7 @@ fn draw_nav(g: &Painter, rect: RectF, button: NavButton, ink: Color, scale: f32)
 
 /// A ghost button's ground (the design system's ghost variant): nothing at rest, the
 /// hover grey under the pointer, a step deeper while a press is answered.
-fn ghost_ground(g: &Painter, rect: RectF, radius: f32, over: f32, pressed: f32, pal: &Palette) {
+pub fn ghost_ground(g: &Painter, rect: RectF, radius: f32, over: f32, pressed: f32, pal: &Palette) {
     if over > 0.0 || pressed > 0.0 {
         let fill = pal.tab_hover.mix(pal.pin_live, pressed);
         g.round(rect, radius, Color::from(fill).with_alpha(over.max(pressed)));
@@ -1829,6 +1829,9 @@ impl Motion {
             control(HoverKey::PinnedExtension(i), *mark);
         }
         control(HoverKey::Settings, layout.settings);
+        if let Some(mark) = layout.space_mark {
+            control(HoverKey::SpaceMark, mark);
+        }
         if let Some(update) = layout.update {
             control(HoverKey::Update, update);
         }

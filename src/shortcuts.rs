@@ -58,6 +58,12 @@ pub enum Command {
 }
 
 impl Command {
+    /// A held key runs it once, not again with each repeat: the next and
+    /// the previous space go round, so a held key would spin through them.
+    pub fn once_per_press(self) -> bool {
+        matches!(self, Command::NextSpace | Command::PrevSpace)
+    }
+
     /// Stable names used by the settings file.
     pub fn name(self) -> String {
         match self {
