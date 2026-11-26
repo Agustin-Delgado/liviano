@@ -27,6 +27,7 @@ heavier than medium. The tokens are in `src/design.rs`. The motion is in
 | Zoom chip | 40 × 28 px, control corner (6). The percent is in caption (11) medium, `ink_muted`. The ground is `tab_tile`, as a pinned tab at rest. On hover, the ground goes to `hover` and the text to `ink`. A press, and each change of the level, flashes the ground to `line` for 150 ms. The gap to the next control is 2 px. |
 | Update chip | 52 × 28 px, left of the zoom chip (or where the zoom chip goes), with the same 2 px gap. It shows only while a verified update waits for a restart. The zoom chip's corner, ground, hover and press. The text is "Update" in caption (11) medium, `accent`. On hover, the text goes to `accent_hover`. The tooltip is "Restart to update to x.y.z". |
 | Bookmarks bar | Top strip: a 28 px band under the strip, with one line under the band. Chips 24 px high, control corner (6), a ghost ground: nothing at rest, `hover` under the pointer, `line` for 150 ms on a press. The icon is 16 px, 8 px from the left edge, then 6 px to the title. The title is small (12) regular, `ink_muted`, `ink` on hover. A chip is 160 px at most, with a 2 px gap. The **»** button is 28 px wide at the right end. Column: tiles 36 px high and at least 40 px wide, stretched to fill the row, with a 2 px gap and the field corner (8). The ground is `tab_tile`, as a pinned tab, `hover` on hover. The icon (or the initial) is centered. Up to three rows; the last cell is the **…** tile. 6 px of air under the tiles. |
+| Menu | One component (`src/menu.rs`) draws each menu: the tab, the group, the space, the bookmark, the extensions button, the history of Back and Forward and the lists of the other features. The panel uses `field`, the panel corner (12), a 1 px ring (black/0.08; white/0.12 in dark) and `shadow-pop` (0 1 3 black/0.06 and 0 12 32 -8 black/0.18; 1.6 times as strong in dark). Padding 4. A row is 28 px high with the field corner (8), thus the corners of the row and the panel have one center. The text is text (13) regular in `ink`, 8 px from the edge of the row. A disabled item uses `ink_asleep`. A note (a line that only informs) is small (12) in `ink_muted`. The highlight is `selection`, with no animation. A check mark (1.5 px stroke, `ink`) or a 10 px color dot is in a 16 px column before the label, then 8 px. The keys of a command are small (12) in `ink_muted` at the right end, at least 24 px from the label. A submenu arrow uses `ink_muted`. In a color list, the dot is before the label and the check mark is at the right end. A separator is one line in `line` across the panel, in a 9 px block. Width 176 to 360 px; a longer label gets an ellipsis. A submenu covers 4 px of its parent, with its first row level with the row that opens it. A list too long for the screen scrolls (wheel, arrow keys) and shows a 16 px band with an arrow at the end that has more rows. |
 | Back, forward, reload | 28×28 buttons with a ghost background and hover. A disabled button uses `subtle` and has no hover. Stroke 1.5 px. |
 
 The dark theme is specific to Nea, because the design system has no dark
@@ -44,7 +45,7 @@ Two items from Search agree with this language and did not change:
 |---|---|
 | Hover and press on buttons, tabs and rows | 150 ms, `ease-out` (0, 0, 0.2, 1) |
 | The field and its list | It opens as a macOS panel (Spotlight). It grows from 0.96 with the spring in 320 ms, with most of the growth in the first 100 ms. The fade takes 140 ms, `ease-out`. It closes in 150 ms, `ease`: it shrinks to 0.96 and fades out. In the middle position, it grows from its center. In the top and bottom positions, it grows from its edge, with 4 px of travel. |
-| Menu | 120 ms to open, 100 ms to close, `ease` |
+| Menu | It shows at once, with no animation: the first frame is the full menu. It closes with a 100 ms fade, `ease`. A submenu shows and closes at once. The pointer rests 180 ms on an item before its submenu opens. |
 | Settings (dialog) | 100 ms, `ease` |
 | Tooltip | 600 ms delay, 100 ms to open, 80 ms to close. It closes after 100 ms. If a different tooltip closed less than 300 ms before, it opens with no delay. |
 | Toast and password bar | 396 ms to open with a `linear()` spring (it goes to 1.038 and settles). It moves up 6 px. 400 ms to close. |
@@ -105,9 +106,38 @@ all items move to their final position immediately.
   it, it disappears immediately. Thus the page gets the space with no wait.
   It slides in only when you show it, or when you leave full screen. A
   window that comes back from the taskbar shows the column at once.
-- **Menus and combo boxes.** Nea has no custom context menu. It uses the
-  Windows menus (`TrackPopupMenu`) and the Windows combo box lists. They keep
-  the system transitions.
+- **Nea draws its menus.** A Windows menu (`TrackPopupMenu`) has the
+  system colors, type and corners, not those of Nea. Each level of a Nea
+  menu is a small window with per-pixel alpha, as the field's backdrop
+  is. The windows never take the activation or the keyboard focus, thus
+  the page keeps its focus and its selection, as with a Windows menu.
+  While a menu is open, two low-level hooks and one window event give
+  the keys to the menu and tell it about a click outside it or a different
+  program in front. When no menu is open, nothing of the menus is alive:
+  no window, no bitmap, no drawing target, no timer and no hook. The combo box lists in Settings and the window menu (Alt+Space, or
+  a right-click on the caption) stay the Windows ones. The menu of a page
+  is the engine's.
+- **A menu does not animate when it opens.** The design system opens a
+  menu in 120 ms. Nea shows the full menu in the first frame, because a
+  menu is read and used at once. Only the close has a fade.
+- **A letter moves the highlight in a menu and selects nothing.** Windows
+  runs an item at once when its first letter is the only match. Nea only
+  moves the highlight. Press Enter to select the item.
+- **A menu takes the keys, but not the shortcuts.** While a menu is open,
+  the arrow keys, Home, End, Enter, Space, Escape, the letters and all
+  other keys go to the menu and not to the page. A key with Ctrl or Alt
+  closes the menu and then does what it does without a menu. Alt, the
+  Windows key and F10 close the menu. The volume keys and Print Screen
+  go on as usual.
+- **A menu tells a screen reader less than a Windows menu.** A Nea menu
+  has no accessibility tree: its items are not objects that a screen
+  reader can list, and the menu does not have the system focus. When a
+  screen reader runs (the Windows flag `SPI_GETSCREENREADER`), Nea sends
+  the menu start and end events, and for each change of the highlight it
+  sets the name of the menu window to the item (with "checked", "not
+  checked", "submenu" and its keys) and sends a name change and a focus
+  event for that window. Without a screen reader, Nea sends no event:
+  each event took about 1 ms on the test computer.
 - **No `DwmFlush`.** `DwmFlush` blocks the interface thread until the next
   compositor frame. The clock is one 15 ms timer. The timer exists only while
   an item moves.

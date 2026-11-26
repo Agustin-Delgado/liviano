@@ -6,22 +6,14 @@
 //! The list is small and the bar is on screen, so it stays in memory. Each
 //! write of bookmarks.json gives the bar the new list (`bookmarks_changed`).
 
-use windows::{
-    Win32::{
-        Foundation::POINT,
-        UI::{
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
-            WindowsAndMessaging::*,
-        },
-    },
-    core::{PCWSTR, w},
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 
-use super::{App, Mode, wide};
+use super::{App, Mode};
 use crate::{
     bookmark_bar::{self, Entry},
     bookmarks::{Bookmark, Bookmarks},
     gfx,
+    menu::Menu,
     shortcuts::Command,
     tabbar::{self, Hit, Rect},
 };
@@ -283,38 +275,21 @@ impl App {
 
     // ---------- menus ----------
 
-    fn track_menu(&mut self, menu: HMENU, x: i32, y: i32) -> usize {
-        unsafe {
-            let mut point = POINT { x, y };
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
-                .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
-        }
-    }
-
     /// The right-click menu of a bookmark.
     pub(super) fn bookmark_menu(&mut self, x: i32, y: i32, index: usize) {
         if index >= self.bookmarks.entries.len() {
             return;
         }
         self.close_omnibar();
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN_NEW_TAB, w!("Open in new tab"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_OPEN_PRIVATE, w!("Open in new private tab"));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_RENAME, w!("Rename…"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_REMOVE, w!("Remove"));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_HIDE_BAR, &wide(&self.hide_bar_label()));
-            self.track_menu(menu, x, y)
-        };
+        let mut menu = Menu::new();
+        menu.item(MENU_OPEN_NEW_TAB, "Open in new tab");
+        menu.item(MENU_OPEN_PRIVATE, "Open in new private tab");
+        menu.separator();
+        menu.item(MENU_RENAME, "Rename…");
+        menu.item(MENU_REMOVE, "Remove");
+        menu.separator();
+        menu.item(MENU_HIDE_BAR, &self.with_chord("Hide bookmarks bar", Command::ToggleBookmarksBar));
+        let chosen = self.show_menu(menu, x, y);
         match chosen {
             MENU_OPEN_NEW_TAB => self.open_bookmark(index, Open::Background),
             MENU_OPEN_PRIVATE => self.open_bookmark(index, Open::Private),
@@ -326,11 +301,6 @@ impl App {
             MENU_HIDE_BAR => self.toggle_bookmarks_bar(),
             _ => {}
         }
-    }
-
-    fn hide_bar_label(&self) -> String {
-        let chord = self.chord_hint(Command::ToggleBookmarksBar);
-        if chord.is_empty() { "Hide bookmarks bar".to_string() } else { format!("Hide bookmarks bar\t{chord}") }
     }
 
     /// "»" (or the "…" tile): the bookmarks that do not fit. A choice opens
@@ -349,15 +319,13 @@ impl App {
             .take(MORE_LIMIT)
             .map(|(i, e)| (i, menu_text(&e.label)))
             .collect();
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            for (i, label) in &hidden {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_MORE + i, &wide(label));
-            }
-            // Under the button, as a menu of a toolbar opens.
-            let (x, y) = if self.layout.bookmarks.tiles { (more.left, more.bottom) } else { (more.right, more.bottom) };
-            self.track_menu(menu, x, y)
-        };
+        let mut menu = Menu::new();
+        for (i, label) in &hidden {
+            menu.item(MENU_MORE + i, label);
+        }
+        // Under the button, as a menu of a toolbar opens.
+        let (x, y) = if self.layout.bookmarks.tiles { (more.left, more.bottom) } else { (more.right, more.bottom) };
+        let chosen = self.show_menu(menu, x, y);
         if chosen >= MENU_MORE {
             self.open_bookmark(chosen - MENU_MORE, Open::Here);
         }
@@ -426,11 +394,10 @@ impl App {
     }
 }
 
-/// A title as a menu item: "&" would underline the next letter.
+/// A title as a menu item: cut to a length that a menu can show.
 fn menu_text(label: &str) -> String {
     let short: String = label.chars().take(60).collect();
-    let short = if short.len() < label.len() { format!("{short}…") } else { short };
-    short.replace('&', "&&")
+    if short.len() < label.len() { format!("{short}…") } else { short }
 }
 
 #[cfg(all(test, nea_tests))]

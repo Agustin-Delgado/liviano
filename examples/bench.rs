@@ -38,6 +38,7 @@ const USAGE: &str = "usage: bench [--pipe NAME] <command> [arguments]
   run <name> | run --keys <shortcut>
   type <text> [--submit]
   close [--tab N]
+  menu <open|state|key|hover|click|close> [--x N --y N] [--left] [--key K] [--level N] [--item N]
   raw <json>            send one request as it is
   stdin                 read one JSON request per line from the input
   memtree <pid> [pid…]  private memory of these processes and their children (no pipe)";
@@ -49,7 +50,8 @@ struct Args {
 
 impl Args {
     fn parse(raw: Vec<String>) -> Self {
-        let takes_value = ["--tab", "--timeout", "--path", "--keys", "--pipe"];
+        let takes_value =
+            ["--tab", "--timeout", "--path", "--keys", "--pipe", "--x", "--y", "--key", "--level", "--item"];
         let (mut positional, mut flags) = (Vec::new(), Vec::new());
         let mut iter = raw.into_iter();
         while let Some(arg) = iter.next() {
@@ -99,6 +101,15 @@ fn action(args: &Args) -> Result<Action, String> {
         },
         "type" => Action::Type { text: word(1).unwrap_or_default(), submit: args.has("--submit") },
         "close" => Action::Close { tab },
+        "menu" => Action::Menu {
+            op: word(1).ok_or("menu needs a request: open, state, key, hover, click or close")?,
+            x: args.number("--x")?.map(|v| v as i32),
+            y: args.number("--y")?.map(|v| v as i32),
+            left: args.has("--left"),
+            key: args.value("--key").map(str::to_string),
+            level: args.number("--level")?.map(|v| v as usize),
+            item: args.number("--item")?.map(|v| v as usize),
+        },
         other => return Err(format!("unknown command: {other}\n{USAGE}")),
     })
 }

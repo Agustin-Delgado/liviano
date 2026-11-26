@@ -125,6 +125,17 @@ pub(super) fn drain() {
             }
             continue;
         }
+        // The menus answer without the app: it waits inside the menu's loop
+        // while one is open.
+        if let Action::Menu { op, x, y, left, key, level, item } = &job.action {
+            let request =
+                crate::menu::Script { op, x: *x, y: *y, left: *left, key: key.as_deref(), level: *level, item: *item };
+            match crate::menu::script(bench::window(), &request) {
+                Ok(state) => job.reply.ok(state),
+                Err(message) => job.reply.error(&message),
+            }
+            continue;
+        }
         let mut slot = Some(job);
         with_app(|app| {
             if let Some(job) = slot.take() {
@@ -404,7 +415,9 @@ impl App {
                 }
             }
             // Answered on the pipe thread; never queued.
-            Action::Ping | Action::Memory | Action::Type { .. } => reply.error("request not expected here"),
+            Action::Ping | Action::Memory | Action::Type { .. } | Action::Menu { .. } => {
+                reply.error("request not expected here")
+            }
         }
     }
 

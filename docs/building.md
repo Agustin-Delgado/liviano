@@ -153,8 +153,19 @@ cargo run --release --example bench -- run new_tab   # any command by its name
 cargo run --release --example bench -- type "example.com" --submit
 cargo run --release --example bench -- state         # tabs, field, pairs, private tabs, groups
 cargo run --release --example bench -- shield        # blocks, rules, pop-ups and cookie list
+cargo run --release --example bench -- menu open --x 60 --y 120   # a right click on the window
+cargo run --release --example bench -- menu key --key down         # up, down, home, end, left, right, enter, escape, a letter
+cargo run --release --example bench -- menu state    # the open levels, their items, the time to the first frame
+cargo run --release --example bench -- menu close
 cargo run --release --example bench -- quit
 ```
+
+The `menu` requests also run while a menu is open, when all other requests
+wait: `open` (with `--left` for a left click), `state`, `key`, `hover` and
+`click` (an item, with `--level` and `--item`) and `close`. `tools\menus.ps1`
+uses them: it measures the memory of the app before and after many menus,
+measures the time from the click to the first frame, and saves captures of
+the menus in the light and the dark theme.
 
 `tools\bench.ps1` does the same from PowerShell. `tools\measure.ps1` runs the
 memory scenarios. `NEA_CREDENTIAL_PREFIX` (for example `NeaTest:`) keeps the

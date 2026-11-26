@@ -14,8 +14,9 @@ use windows::Win32::{
     },
 };
 
-use super::{App, wide, with_app};
+use super::{App, with_app};
 use crate::{
+    menu::{Anchor, Menu},
     shortcuts::Command,
     tabbar::{Hit, HoverKey, NavButton, NavState, Rect},
     tabs::Live,
@@ -53,8 +54,7 @@ pub(super) fn history_entries(json: &str, back: bool) -> Vec<(i64, String)> {
         if text.chars().count() > TITLE_CHARS {
             cut.push('…');
         }
-        // A lone '&' would underline the next letter in a Windows menu.
-        cut.replace('&', "&&")
+        cut
     };
     let picked: Vec<&Value> = if back {
         entries.iter().take(current.min(entries.len())).rev().collect()
@@ -181,28 +181,11 @@ impl App {
             return;
         }
         let anchor = self.screen_rect(self.nav_rect(if back { NavButton::Back } else { NavButton::Forward }));
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            for (i, (_, label)) in entries.iter().enumerate() {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_ENTRY + i, &wide(label));
-            }
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(
-                menu,
-                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_TOPALIGN,
-                anchor.left,
-                anchor.bottom,
-                None,
-                self.hwnd,
-                None,
-            )
-            .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
-        };
+        let mut menu = Menu::new();
+        for (i, (_, label)) in entries.iter().enumerate() {
+            menu.item(MENU_ENTRY + i, label);
+        }
+        let chosen = self.show_menu_at(menu, Anchor::point(anchor.left, anchor.bottom));
         let Some((entry, _)) = chosen.checked_sub(MENU_ENTRY).and_then(|i| entries.get(i)) else { return };
         if let Some(Live::Ready(web)) = self.tabs.get(tab).map(|t| &t.live) {
             web.go_to_history_entry(*entry);

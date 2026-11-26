@@ -3,20 +3,12 @@
 //! it along the strip, renaming in the single field and the commands. The
 //! rules (contiguity, folding, persistence) live in `tab_groups`.
 
-use windows::{
-    Win32::{
-        Foundation::POINT,
-        UI::{
-            Input::KeyboardAndMouse::{ReleaseCapture, SetCapture},
-            WindowsAndMessaging::*,
-        },
-    },
-    core::{PCWSTR, w},
-};
+use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture};
 
-use super::{App, Mode, WebTab, wide};
+use super::{App, Mode, WebTab};
 use crate::{
     gfx,
+    menu::Menu,
     shortcuts::Command,
     tab_groups::{Drop, GroupColor},
     tabbar::{self, GroupInfo},
@@ -47,6 +39,17 @@ pub(super) struct GroupsUi {
     press: Option<(u64, i32, i32, bool)>,
     /// "New tab in group": the group the tab typed in the field joins.
     new_tab_in: Option<u64>,
+}
+
+/// The nine colours as a menu: a dot in each colour, and a check mark at
+/// `current`. The nth colour of `GroupColor::ALL` has the id `first` + n.
+pub(super) fn color_menu(first: usize, current: GroupColor, dark: bool) -> Menu {
+    let mut menu = Menu::new();
+    for (i, color) in GroupColor::ALL.iter().enumerate() {
+        let fill = crate::design::group_tone(*color, dark).fill;
+        menu.check(first + i, color.label(), *color == current).swatch(fill);
+    }
+    menu
 }
 
 impl App {
@@ -208,33 +211,30 @@ impl App {
     // ---------- menus ----------
 
     /// The group part of a tab's menu. Nothing for a pinned tab.
-    pub(super) fn append_group_items(&self, menu: HMENU, tab: u64) {
+    pub(super) fn append_group_items(&self, menu: &mut Menu, tab: u64) {
         let Some(t) = self.tabs.get(tab) else { return };
         if t.pinned {
             return;
         }
         let own = t.group;
-        unsafe {
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_GROUP, w!("Add tab to new group"));
-            let others: Vec<(usize, String)> = self
-                .group_order()
-                .into_iter()
-                .enumerate()
-                .filter(|(_, g)| Some(*g) != own)
-                .filter_map(|(i, g)| self.tabs.group(g).map(|g| (i, g.title())))
-                .collect();
-            if !others.is_empty()
-                && let Ok(sub) = CreatePopupMenu()
-            {
-                for (i, title) in others {
-                    let _ = AppendMenuW(sub, MF_STRING, MENU_JOIN_GROUP + i, &wide(&title));
-                }
-                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Add to group"));
+        menu.separator();
+        menu.item(MENU_NEW_GROUP, &self.with_chord("Add tab to new group", Command::GroupTab));
+        let others: Vec<(usize, String)> = self
+            .group_order()
+            .into_iter()
+            .enumerate()
+            .filter(|(_, g)| Some(*g) != own)
+            .filter_map(|(i, g)| self.tabs.group(g).map(|g| (i, g.title())))
+            .collect();
+        if !others.is_empty() {
+            let mut sub = Menu::new();
+            for (i, title) in others {
+                sub.item(MENU_JOIN_GROUP + i, &title);
             }
-            if own.is_some() {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_LEAVE_GROUP, w!("Remove tab from group"));
-            }
+            menu.submenu("Add to group", sub);
+        }
+        if own.is_some() {
+            menu.item(MENU_LEAVE_GROUP, "Remove tab from group");
         }
     }
 
@@ -271,33 +271,15 @@ impl App {
     /// A right click on a label.
     pub(super) fn group_menu(&mut self, x: i32, y: i32, group: u64) {
         let Some(g) = self.tabs.group(group).cloned() else { return };
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_RENAME, w!("Rename group…"));
-            if let Ok(colors) = CreatePopupMenu() {
-                for (i, color) in GroupColor::ALL.iter().enumerate() {
-                    let check = if *color == g.color { MF_CHECKED } else { MF_UNCHECKED };
-                    let _ = AppendMenuW(colors, MF_STRING | check, MENU_COLOR + i, &wide(color.label()));
-                }
-                let _ = AppendMenuW(menu, MF_POPUP, colors.0 as usize, w!("Color"));
-            }
-            let _ = AppendMenuW(menu, MF_STRING, MENU_NEW_TAB_IN, w!("New tab in group"));
-            let fold = if g.collapsed { w!("Expand group") } else { w!("Collapse group") };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_FOLD, fold);
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_UNGROUP, w!("Ungroup"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_GROUP, w!("Close group"));
-            let mut point = POINT { x, y };
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
-                .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
-        };
+        let mut menu = Menu::new();
+        menu.item(MENU_RENAME, "Rename group…");
+        menu.submenu("Color", color_menu(MENU_COLOR, g.color, self.palette.dark));
+        menu.item(MENU_NEW_TAB_IN, "New tab in group");
+        menu.item(MENU_FOLD, if g.collapsed { "Expand group" } else { "Collapse group" });
+        menu.separator();
+        menu.item(MENU_UNGROUP, "Ungroup");
+        menu.item(MENU_CLOSE_GROUP, "Close group");
+        let chosen = self.show_menu(menu, x, y);
         match chosen {
             MENU_RENAME => self.open_rename(group),
             MENU_NEW_TAB_IN => self.new_tab_in(group),
