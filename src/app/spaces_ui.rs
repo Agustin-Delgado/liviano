@@ -13,19 +13,14 @@
 
 use std::time::Instant;
 
-use windows::{
-    Win32::{
-        Foundation::{HWND, POINT},
-        UI::WindowsAndMessaging::*,
-    },
-    core::{PCWSTR, w},
-};
+use windows::Win32::{Foundation::HWND, UI::WindowsAndMessaging::*};
 
-use super::{App, Mode, WebTab, wide, with_app};
+use super::{App, Mode, WebTab, with_app};
 use crate::{
     anim::{Tween, specs},
     design::{Palette, group_tone, size},
     gfx::{self, Align, Color, Font, Painter, RectF},
+    menu::Menu,
     shortcuts::Command,
     spaces::{MARK_DOT, MARK_GAP, MARK_PAD, MAX_SPACES, SWIPE_TRAVEL, Swipe, swipe_commits, swipe_offset},
     tab_groups::GroupColor,
@@ -676,20 +671,18 @@ impl App {
     // ---------- menus ----------
 
     /// "Move to space ▸" in a tab's menu: the other spaces and "New space".
-    pub(super) fn append_space_items(&self, menu: HMENU, tab: u64) {
+    pub(super) fn append_space_items(&self, menu: &mut Menu, tab: u64) {
         let Some(own) = self.tabs.space_of(tab) else { return };
-        unsafe {
-            let Ok(sub) = CreatePopupMenu() else { return };
-            for (i, space) in self.tabs.spaces.iter().enumerate().filter(|(_, s)| s.id != own) {
-                let _ = AppendMenuW(sub, MF_STRING, MENU_MOVE_TO + i, &wide(&space.name));
-            }
-            if self.tabs.spaces.len() > 1 {
-                let _ = AppendMenuW(sub, MF_SEPARATOR, 0, PCWSTR::null());
-            }
-            let full = if self.tabs.spaces.len() >= MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
-            let _ = AppendMenuW(sub, MF_STRING | full, MENU_MOVE_NEW, w!("New space"));
-            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("Move to space"));
+        let mut sub = Menu::new();
+        for (i, space) in self.tabs.spaces.iter().enumerate().filter(|(_, s)| s.id != own) {
+            let fill = group_tone(space.color, self.palette.dark).fill;
+            sub.item(MENU_MOVE_TO + i, &space.name).swatch(fill);
         }
+        if self.tabs.spaces.len() > 1 {
+            sub.separator();
+        }
+        sub.item(MENU_MOVE_NEW, "New space").enabled(self.tabs.spaces.len() < MAX_SPACES);
+        menu.submenu("Move to space", sub);
     }
 
     /// Runs a space item chosen in a tab's menu; false when `chosen` is not one.
@@ -714,12 +707,10 @@ impl App {
 
     /// The items of the active space ("Rename space…", "Color ▸", "Delete
     /// space"), as a "This space ▸" menu in `menu`: the window menu's.
-    pub(super) fn append_this_space(&self, menu: HMENU) {
-        unsafe {
-            let Ok(sub) = CreatePopupMenu() else { return };
-            self.append_space_menu_items(sub, self.tabs.space);
-            let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, w!("This space"));
-        }
+    pub(super) fn append_this_space(&self, menu: &mut Menu) {
+        let mut sub = Menu::new();
+        self.append_space_menu_items(&mut sub, self.tabs.space);
+        menu.submenu("This space", sub);
     }
 
     /// Runs an item of `append_this_space`; false when `chosen` is not one.
@@ -727,22 +718,13 @@ impl App {
         self.space_menu_chosen(self.tabs.space, chosen)
     }
 
-    fn append_space_menu_items(&self, menu: HMENU, space: u64) {
+    fn append_space_menu_items(&self, menu: &mut Menu, space: u64) {
         let Some(s) = self.tabs.space_by_id(space) else { return };
-        unsafe {
-            let _ = AppendMenuW(menu, MF_STRING, MENU_RENAME, w!("Rename space…"));
-            if let Ok(colors) = CreatePopupMenu() {
-                for (i, color) in GroupColor::ALL.iter().enumerate() {
-                    let check = if *color == s.color { MF_CHECKED } else { MF_UNCHECKED };
-                    let _ = AppendMenuW(colors, MF_STRING | check, MENU_COLOR + i, &wide(color.label()));
-                }
-                let _ = AppendMenuW(menu, MF_POPUP, colors.0 as usize, w!("Color"));
-            }
-            // Its tabs are kept: they go to the space before it. The last
-            // space cannot go.
-            let only = if self.tabs.spaces.len() < 2 { MF_GRAYED } else { MF_ENABLED };
-            let _ = AppendMenuW(menu, MF_STRING | only, MENU_DELETE, w!("Delete space (keep its tabs)"));
-        }
+        menu.item(MENU_RENAME, "Rename space…");
+        menu.submenu("Color", super::groups_ui::color_menu(MENU_COLOR, s.color, self.palette.dark));
+        // Its tabs are kept: they go to the space before it. The last
+        // space cannot go.
+        menu.item(MENU_DELETE, "Delete space (keep its tabs)").enabled(self.tabs.spaces.len() >= 2);
     }
 
     fn space_menu_chosen(&mut self, space: u64, chosen: usize) -> bool {
@@ -762,23 +744,12 @@ impl App {
 
     /// The menu of a space: a click on the mark, or a right click on it.
     pub(super) fn space_menu(&mut self, x: i32, y: i32, space: u64) {
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            self.append_space_menu_items(menu, space);
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let full = if self.tabs.spaces.len() >= MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
-            let _ = AppendMenuW(menu, MF_STRING | full, MENU_NEW, w!("New space"));
-            let mut point = POINT { x, y };
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
-                .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
-        };
+        let mut menu = Menu::new();
+        self.append_space_menu_items(&mut menu, space);
+        menu.separator();
+        let room = self.tabs.spaces.len() < MAX_SPACES;
+        menu.item(MENU_NEW, &self.with_chord("New space", Command::NewSpace)).enabled(room);
+        let chosen = self.show_menu(menu, x, y);
         self.space_menu_chosen(space, chosen);
     }
 

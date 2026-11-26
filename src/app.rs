@@ -59,6 +59,7 @@ use crate::{
     design::{self, Palette},
     gfx,
     history::{Entry, History},
+    menu::{Anchor, Menu},
     omnibar::{Omnibar, Signal},
     omnibox,
     panels::PanelKind,
@@ -388,6 +389,7 @@ pub fn run() -> windows::core::Result<()> {
     crate::favicon::set_scale(scale);
     omnibar.set_font(font, scale);
     omnibar.set_palette(&palette);
+    crate::menu::set_palette(&palette);
     apply_window_theme(hwnd, &palette);
 
     let (tabs, restored) = TabList::from_session(&session);
@@ -879,6 +881,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_RBUTTONUP => {
             let (x, y) = x_y(lparam);
             let _doing = crate::diag::doing(&"tab menu", 0);
+            crate::menu::clicked();
             with_app(|app| app.context_menu(x, y));
             LRESULT(0)
         }
@@ -1313,6 +1316,7 @@ impl App {
         self.palette = palette;
         apply_window_theme(self.hwnd, &self.palette);
         self.omnibar.set_palette(&self.palette);
+        crate::menu::set_palette(&self.palette);
         crate::settings_window::set_palette(&self.palette);
         // They keep the colours they were shown with: they come back with
         // the new ones at the next hover.
@@ -2283,71 +2287,85 @@ impl App {
         let popups = crate::curtain::host_of(&tab.url).map(|_| self.popups_allowed_for(&tab.url, tab.private));
         let paired = self.split.splits.partner(id).is_some();
         let can_split = self.settings.split_view && !paired && self.tabs.active.is_some_and(|a| a != id);
-        unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-            let _ = AppendMenuW(menu, MF_STRING, MENU_PIN, &wide(if pinned { "Unpin tab" } else { "Pin tab" }));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_DUPLICATE, w!("Duplicate tab"));
-            let _ =
-                AppendMenuW(menu, MF_STRING | check(awake), MENU_KEEP_AWAKE, w!("Keep site awake (uses more memory)"));
-            if let Some(on) = shielded {
-                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_SHIELD, w!("Block ads on this site"));
-            }
-            if let Some(on) = popups {
-                let _ = AppendMenuW(menu, MF_STRING | check(on), MENU_POPUPS, w!("Allow pop-ups on this site"));
-            }
-            if paired {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_UNSPLIT, w!("Close split view"));
-            } else if can_split {
-                let _ = AppendMenuW(menu, MF_STRING, MENU_SPLIT, w!("Open next to the current page"));
-            }
-            self.append_group_items(menu, id);
-            self.append_space_items(menu, id);
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_TAB_LAYOUT, &wide(frame_ui::layout_label(self.vertical)));
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE, w!("Close tab"));
-            let _ = AppendMenuW(menu, MF_STRING, MENU_CLOSE_OTHERS, w!("Close other tabs"));
-            let mut point = POINT { x, y };
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
-                .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            if chosen == MENU_TAB_LAYOUT {
-                self.run(Command::ToggleTabLayout);
-                return;
-            }
-            if self.group_menu_choice(id, chosen) || self.space_menu_choice(id, chosen) {
-                return;
-            }
-            if chosen != 0 && self.tabs.active != Some(id) && chosen != MENU_CLOSE && chosen != MENU_SPLIT {
-                self.select(id);
-            }
-            match chosen {
-                MENU_SPLIT => self.split_with(id),
-                MENU_UNSPLIT => self.unsplit(id),
-                MENU_PIN => {
-                    self.toggle_pin_with_pair(id);
-                    self.session_dirty = true;
-                    self.relayout_soft();
-                }
-                MENU_DUPLICATE => self.run(Command::DuplicateTab),
-                MENU_KEEP_AWAKE => self.run(Command::KeepAwake),
-                MENU_SHIELD => self.run(Command::ToggleShield),
-                MENU_POPUPS => self.run(Command::TogglePopups),
-                MENU_CLOSE => self.close_tab(id),
-                MENU_CLOSE_OTHERS => {
-                    let others: Vec<u64> =
-                        self.tabs.tabs.iter().filter(|t| t.id != id && !t.pinned).map(|t| t.id).collect();
-                    self.close_tabs(&others);
-                }
-                _ => {}
-            }
+        let mut menu = Menu::new();
+        menu.item(MENU_PIN, if pinned { "Unpin tab" } else { "Pin tab" });
+        menu.item(MENU_DUPLICATE, &self.with_chord("Duplicate tab", Command::DuplicateTab));
+        menu.check(MENU_KEEP_AWAKE, "Keep site awake (uses more memory)", awake);
+        if let Some(on) = shielded {
+            menu.check(MENU_SHIELD, "Block ads on this site", on);
         }
+        if let Some(on) = popups {
+            menu.check(MENU_POPUPS, "Allow pop-ups on this site", on);
+        }
+        if paired {
+            menu.item(MENU_UNSPLIT, "Close split view");
+        } else if can_split {
+            menu.item(MENU_SPLIT, "Open next to the current page");
+        }
+        self.append_group_items(&mut menu, id);
+        self.append_space_items(&mut menu, id);
+        menu.separator();
+        menu.item(MENU_TAB_LAYOUT, &self.with_chord(frame_ui::layout_label(self.vertical), Command::ToggleTabLayout));
+        menu.separator();
+        menu.item(MENU_CLOSE, "Close tab");
+        menu.item(MENU_CLOSE_OTHERS, "Close other tabs");
+        let chosen = self.show_menu(menu, x, y);
+        if chosen == MENU_TAB_LAYOUT {
+            self.run(Command::ToggleTabLayout);
+            return;
+        }
+        if self.group_menu_choice(id, chosen) || self.space_menu_choice(id, chosen) {
+            return;
+        }
+        if chosen != 0 && self.tabs.active != Some(id) && chosen != MENU_CLOSE && chosen != MENU_SPLIT {
+            self.select(id);
+        }
+        match chosen {
+            MENU_SPLIT => self.split_with(id),
+            MENU_UNSPLIT => self.unsplit(id),
+            MENU_PIN => {
+                self.toggle_pin_with_pair(id);
+                self.session_dirty = true;
+                self.relayout_soft();
+            }
+            MENU_DUPLICATE => self.run(Command::DuplicateTab),
+            MENU_KEEP_AWAKE => self.run(Command::KeepAwake),
+            MENU_SHIELD => self.run(Command::ToggleShield),
+            MENU_POPUPS => self.run(Command::TogglePopups),
+            MENU_CLOSE => self.close_tab(id),
+            MENU_CLOSE_OTHERS => {
+                let others: Vec<u64> =
+                    self.tabs.tabs.iter().filter(|t| t.id != id && !t.pinned).map(|t| t.id).collect();
+                self.close_tabs(&others);
+            }
+            _ => {}
+        }
+    }
+
+    /// Shows `menu` with its corner at (x, y) of the window. Returns the id
+    /// of the item selected, or 0.
+    fn show_menu(&mut self, menu: Menu, x: i32, y: i32) -> usize {
+        let mut point = POINT { x, y };
+        unsafe {
+            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
+        }
+        self.show_menu_at(menu, Anchor::point(point.x, point.y))
+    }
+
+    /// Shows `menu` at `at` (screen pixels). Returns the id of the item
+    /// selected, or 0.
+    fn show_menu_at(&mut self, menu: Menu, at: Anchor) -> usize {
+        self.hide_tip();
+        self.hide_card();
+        // Its time is the person reading the menu.
+        self.save_before_modal();
+        crate::menu::track(self.hwnd, menu, at)
+    }
+
+    /// `label` with the keys of `command` after it, when it has keys.
+    fn with_chord(&self, label: &str, command: Command) -> String {
+        let chord = self.chord_hint(command);
+        if chord.is_empty() { label.to_string() } else { format!("{label}	{chord}") }
     }
 
     // ---------- the single field ----------

@@ -17,16 +17,14 @@ use windows::{
         Foundation::{HWND, LPARAM, POINT, WPARAM},
         UI::{
             Controls::Dialogs::{OFN_FILEMUSTEXIST, OFN_NOCHANGEDIR, OFN_PATHMUSTEXIST, OPENFILENAMEW},
-            WindowsAndMessaging::{
-                AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MB_ICONINFORMATION, MB_OK, MF_GRAYED,
-                MF_SEPARATOR, MF_STRING, MessageBoxW, PostMessageW, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
-            },
+            WindowsAndMessaging::{GetCursorPos, MB_ICONINFORMATION, MB_OK, MessageBoxW, PostMessageW},
         },
     },
     core::{BOOL, HSTRING, PCWSTR, PWSTR, w},
 };
 
 use crate::{
+    menu::{Anchor, Menu},
     sqlite::Sqlite,
     system_dll::Library,
     vault::{self, Secret, Store},
@@ -387,29 +385,23 @@ pub enum Source {
 /// field already closed. Nothing is read here but the list of browsers.
 pub fn choose(owner: HWND, at: Option<POINT>) -> Option<Source> {
     let found = browsers();
-    let chosen = unsafe {
-        let menu = CreatePopupMenu().ok()?;
-        for (i, browser) in found.iter().enumerate() {
-            let _ = AppendMenuW(menu, MF_STRING, i + 1, &wide(&format!("From {}", browser.name)));
-        }
-        if found.is_empty() {
-            let _ = AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, w!("No other browsers found"));
-        }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_CSV, w!("From a CSV file…"));
-        let point = at.unwrap_or_else(|| {
-            let mut point = POINT::default();
+    let mut menu = Menu::new();
+    for (i, browser) in found.iter().enumerate() {
+        menu.item(i + 1, &format!("From {}", browser.name));
+    }
+    if found.is_empty() {
+        menu.note("No other browsers found");
+    }
+    menu.separator();
+    menu.item(MENU_CSV, "From a CSV file…");
+    let point = at.unwrap_or_else(|| {
+        let mut point = POINT::default();
+        unsafe {
             let _ = GetCursorPos(&mut point);
-            point
-        });
-        // Its time is the person reading the menu.
-        let modal = crate::diag::modal();
-        let chosen =
-            TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, owner, None).0 as usize;
-        drop(modal);
-        let _ = DestroyMenu(menu);
-        chosen
-    };
+        }
+        point
+    });
+    let chosen = crate::menu::track(owner, menu, Anchor::point(point.x, point.y));
     match chosen {
         0 => None,
         MENU_CSV => pick_csv(owner).map(Source::Csv),

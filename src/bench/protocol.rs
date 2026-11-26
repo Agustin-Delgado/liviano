@@ -98,6 +98,25 @@ pub enum Action {
         color: Option<String>,
         collapsed: Option<bool>,
     },
+    /// Drives the menus that the app draws. `op` is one of:
+    /// `open` (a right click at `x`, `y` of the window, or a left click
+    /// with `left`), `state`, `key` (`key`: `up`, `down`, `home`, `end`,
+    /// `left`, `right`, `enter`, `escape` or one letter), `hover` and
+    /// `click` (`item` of `level`; the deepest level when `level` is left
+    /// out) and `close`. Each answer is the state of the menus: the open
+    /// levels with their items, the windows and bitmaps alive and the time
+    /// from the click to the first frame. These requests also run while a
+    /// menu is open.
+    Menu {
+        op: String,
+        x: Option<i32>,
+        y: Option<i32>,
+        #[serde(default)]
+        left: bool,
+        key: Option<String>,
+        level: Option<usize>,
+        item: Option<usize>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

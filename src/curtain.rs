@@ -16,15 +16,14 @@ use webview2_com::{
     WebMessageReceivedEventHandler, take_pwstr,
 };
 use windows::{
-    Win32::{
-        Foundation::HWND,
-        UI::{Input::KeyboardAndMouse::SetFocus, WindowsAndMessaging::*},
-    },
-    core::{HSTRING, PCWSTR, PWSTR},
+    Win32::Foundation::HWND,
+    core::{HSTRING, PWSTR},
 };
 
 use crate::{
-    inject, omnibox, storage,
+    inject,
+    menu::{Anchor, HAlign, Menu, VAlign},
+    omnibox, storage,
     web::{self, Event, WebTab},
 };
 
@@ -241,40 +240,20 @@ pub enum Choice {
 
 const MENU_ALL: usize = 10_000;
 
-fn menu_text(text: &str) -> HSTRING {
-    HSTRING::from(text.replace('&', "&&"))
-}
-
-/// The native list of what is hidden on `host`, at screen point (x, y).
+/// The list of what is hidden on `host`, at screen point (x, y).
 fn choose(owner: HWND, (x, y): (i32, i32), host: &str, rules: &[Rule]) -> Option<Choice> {
-    unsafe {
-        let menu = CreatePopupMenu().ok()?;
-        let _ = AppendMenuW(
-            menu,
-            MF_STRING | MF_GRAYED,
-            0,
-            &menu_text(&format!("Hidden on {host}: select an element to show again")),
-        );
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        for (index, rule) in rules.iter().enumerate() {
-            let text = if rule.label.is_empty() { &rule.selector } else { &rule.label };
-            let _ = AppendMenuW(menu, MF_STRING, index + 1, &menu_text(text));
-        }
-        let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-        let _ = AppendMenuW(menu, MF_STRING, MENU_ALL, &menu_text("Show all"));
-        // The keyboard focus is inside the page (another process's window);
-        // a popup menu wants its owner to hold it.
-        let _ = SetFocus(Some(owner));
-        // Its time is the person reading the menu.
-        let modal = crate::diag::modal();
-        let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_CENTERALIGN, x, y, None, owner, None).0 as usize;
-        drop(modal);
-        let _ = DestroyMenu(menu);
-        match chosen {
-            0 => None,
-            MENU_ALL => Some(Choice::RestoreAll),
-            n => Some(Choice::Restore(n - 1)),
-        }
+    let mut menu = Menu::new();
+    menu.note(&format!("Hidden on {host}: select an element to show again"));
+    menu.separator();
+    for (index, rule) in rules.iter().enumerate() {
+        menu.item(index + 1, if rule.label.is_empty() { &rule.selector } else { &rule.label });
+    }
+    menu.separator();
+    menu.item(MENU_ALL, "Show all");
+    match crate::menu::track(owner, menu, Anchor::aligned(x, y, HAlign::Center, VAlign::Top)) {
+        0 => None,
+        MENU_ALL => Some(Choice::RestoreAll),
+        n => Some(Choice::Restore(n - 1)),
     }
 }
 

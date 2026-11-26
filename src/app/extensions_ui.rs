@@ -33,6 +33,7 @@ use crate::{
     extension_host::{self, HostEvent},
     extensions::{self, Extension, Outcome, Registry, Staged},
     inject,
+    menu::{Anchor, HAlign, Menu, VAlign},
     settings_window::{self, ExtensionCommand},
     tabs::Live,
     webstore::{self, Answer, StoreRequest},
@@ -58,7 +59,6 @@ const ITEM_REMOVE: usize = 6;
 const MENU_INSTALL_HERE: usize = 900;
 const MENU_LOAD_UNPACKED: usize = 901;
 const MENU_SETTINGS: usize = 902;
-const MENU_NOTE: usize = 903;
 const MENU_WEB_STORE: usize = 904;
 /// Where "Get extensions" goes.
 const WEB_STORE_URL: &str = "https://chromewebstore.google.com";
@@ -221,12 +221,6 @@ fn browser_version() -> String {
     FALLBACK_BROWSER_VERSION.to_string()
 }
 
-fn append(menu: HMENU, flags: MENU_ITEM_FLAGS, id: usize, text: &str) {
-    unsafe {
-        let _ = AppendMenuW(menu, flags, id, &HSTRING::from(text));
-    }
-}
-
 /// One line of the menu that shows when no extension is installed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum EmptyLine {
@@ -249,12 +243,16 @@ fn empty_menu_lines(store_here: bool) -> Vec<EmptyLine> {
     lines
 }
 
-fn append_empty_lines(menu: HMENU, lines: &[EmptyLine]) {
+fn append_empty_lines(menu: &mut Menu, lines: &[EmptyLine]) {
     for line in lines {
         match *line {
-            EmptyLine::Note(text) => append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, text),
-            EmptyLine::Separator => append(menu, MF_SEPARATOR, 0, ""),
-            EmptyLine::Command(id, text) => append(menu, MF_STRING, id, text),
+            EmptyLine::Note(text) => {
+                menu.note(text);
+            }
+            EmptyLine::Separator => menu.separator(),
+            EmptyLine::Command(id, text) => {
+                menu.item(id, text);
+            }
         }
     }
 }
@@ -727,89 +725,76 @@ impl App {
             .and_then(|t| webstore::extension_id_from_link(&t.url))
             .filter(|id| self.extensions.registry.find_store(id).is_none());
         let engine_on = self.extensions.engine_on == Some(true);
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let check = |on: bool| if on { MF_CHECKED } else { MF_UNCHECKED };
-            let grey = |on: bool| if on { MF_ENABLED } else { MF_GRAYED };
-            if let Some(notice) = &self.extensions.notice {
-                let mut short: String = notice.chars().take(90).collect();
-                if short.len() < notice.len() {
-                    short.push('…');
-                }
-                append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, &short);
-                append(menu, MF_SEPARATOR, 0, "");
+        let mut menu = Menu::new();
+        if let Some(notice) = &self.extensions.notice {
+            let mut short: String = notice.chars().take(90).collect();
+            if short.len() < notice.len() {
+                short.push('…');
             }
-            if self.extensions.registry.extensions.is_empty() {
-                append_empty_lines(menu, &empty_menu_lines(store_here.is_some()));
+            menu.note(&short);
+            menu.separator();
+        }
+        if self.extensions.registry.extensions.is_empty() {
+            append_empty_lines(&mut menu, &empty_menu_lines(store_here.is_some()));
+        }
+        for (i, extension) in self.extensions.registry.extensions.iter().enumerate() {
+            let mut sub = Menu::new();
+            let base = MENU_BASE + i * MENU_STRIDE;
+            let usable = engine_on && extension.enabled && extension.engine_id.is_some();
+            let pages = [
+                (ITEM_POPUP, &extension.popup, "Open pop-up (in a tab)"),
+                (ITEM_OPTIONS, &extension.options, "Options"),
+                (ITEM_SIDE_PANEL, &extension.side_panel, "Side panel (in a tab)"),
+            ];
+            for (item, page, label) in pages {
+                if page.is_some() {
+                    sub.item(base + item, label).enabled(usable);
+                }
             }
-            for (i, extension) in self.extensions.registry.extensions.iter().enumerate() {
-                let Ok(sub) = CreatePopupMenu() else { continue };
-                let base = MENU_BASE + i * MENU_STRIDE;
-                let usable = engine_on && extension.enabled && extension.engine_id.is_some();
-                let pages = [
-                    (ITEM_POPUP, &extension.popup, "Open pop-up (in a tab)"),
-                    (ITEM_OPTIONS, &extension.options, "Options"),
-                    (ITEM_SIDE_PANEL, &extension.side_panel, "Side panel (in a tab)"),
-                ];
-                for (item, page, label) in pages {
-                    if page.is_some() {
-                        append(sub, MF_STRING | grey(usable), base + item, label);
-                    }
-                }
-                if pages.iter().any(|(_, p, _)| p.is_some()) {
-                    append(sub, MF_SEPARATOR, 0, "");
-                }
-                append(sub, MF_STRING | check(extension.enabled), base + ITEM_ENABLED, "Enabled");
-                append(sub, MF_STRING | check(extension.pinned), base + ITEM_PINNED, "Pin next to the button");
-                if extension.unpacked() {
-                    append(sub, MF_STRING, base + ITEM_RELOAD, "Reload from folder");
-                }
-                append(sub, MF_STRING, base + ITEM_REMOVE, "Remove…");
-                append(sub, MF_SEPARATOR, 0, "");
-                let about = format!("Version {} · {}", extension.version, source_label(extension));
-                append(sub, MF_STRING | MF_GRAYED, MENU_NOTE, &about);
-                let title =
-                    if extension.enabled { extension.name.clone() } else { format!("{} (disabled)", extension.name) };
-                let _ = AppendMenuW(menu, MF_POPUP, sub.0 as usize, &HSTRING::from(title));
+            if pages.iter().any(|(_, p, _)| p.is_some()) {
+                sub.separator();
             }
-            if !self.extensions.registry.extensions.is_empty() {
-                append(menu, MF_SEPARATOR, 0, "");
-                if store_here.is_some() {
-                    append(menu, MF_STRING, MENU_INSTALL_HERE, "Install extension from this page");
-                }
-                append(menu, MF_STRING, MENU_LOAD_UNPACKED, "Load unpacked extension…");
-                append(menu, MF_STRING, MENU_SETTINGS, "Extensions in Settings…");
-                append(menu, MF_SEPARATOR, 0, "");
-                let note = if self.restart_needed() {
-                    "Restart Nea to apply the extension changes"
-                } else {
-                    "Each enabled extension adds processes and memory"
-                };
-                append(menu, MF_STRING | MF_GRAYED, MENU_NOTE, note);
+            sub.check(base + ITEM_ENABLED, "Enabled", extension.enabled);
+            sub.check(base + ITEM_PINNED, "Pin next to the button", extension.pinned);
+            if extension.unpacked() {
+                sub.item(base + ITEM_RELOAD, "Reload from folder");
             }
-
-            let button = self.layout.extensions;
-            let mut point = POINT { x: button.left, y: button.bottom };
-            let flags = if self.layout.vertical {
-                point = POINT { x: button.right, y: button.top };
-                TPM_RETURNCMD | TPM_LEFTALIGN | TPM_BOTTOMALIGN
+            sub.item(base + ITEM_REMOVE, "Remove…");
+            sub.separator();
+            sub.note(&format!("Version {} · {}", extension.version, source_label(extension)));
+            let title =
+                if extension.enabled { extension.name.clone() } else { format!("{} (disabled)", extension.name) };
+            menu.submenu(&title, sub);
+        }
+        if !self.extensions.registry.extensions.is_empty() {
+            menu.separator();
+            if store_here.is_some() {
+                menu.item(MENU_INSTALL_HERE, "Install extension from this page");
+            }
+            menu.item(MENU_LOAD_UNPACKED, "Load unpacked extension…");
+            menu.item(MENU_SETTINGS, "Extensions in Settings…");
+            menu.separator();
+            menu.note(if self.restart_needed() {
+                "Restart Nea to apply the extension changes"
             } else {
-                TPM_RETURNCMD | TPM_RIGHTALIGN | TPM_TOPALIGN
-            };
-            if !self.layout.vertical {
-                point.x = button.right;
-            }
-            let _ = ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, flags, point.x, point.y, None, self.hwnd, None).0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
+                "Each enabled extension adds processes and memory"
+            });
+        }
+
+        // Under the button, its right edge on the button's; beside the
+        // button and up from it when the tabs are at the side.
+        let button = self.layout.extensions;
+        let (mut point, h, v) = if self.layout.vertical {
+            (POINT { x: button.right, y: button.top }, HAlign::Left, VAlign::Bottom)
+        } else {
+            (POINT { x: button.right, y: button.bottom }, HAlign::Right, VAlign::Top)
         };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd, &mut point);
+        }
+        let chosen = self.show_menu_at(menu, Anchor::aligned(point.x, point.y, h, v));
         match chosen {
-            0 | MENU_NOTE => {}
+            0 => {}
             MENU_INSTALL_HERE => {
                 if let Some(id) = store_here {
                     self.install_from_store(&id, None);

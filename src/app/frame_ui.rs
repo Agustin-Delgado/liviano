@@ -30,6 +30,7 @@ use windows::{
 use super::{App, wide, with_app, x_y};
 use crate::{
     frame::{self, FrameHit, WindowButton},
+    menu::Menu,
     shortcuts::Command,
     tabbar::Hit,
 };
@@ -249,30 +250,19 @@ impl App {
         const NEW_TAB: usize = 3;
         const RESTART: usize = 4;
         const NEW_SPACE: usize = 5;
-        let chosen = unsafe {
-            let Ok(menu) = CreatePopupMenu() else { return };
-            let _ = AppendMenuW(menu, MF_STRING, NEW_TAB, &wide("New tab"));
-            let full = if self.tabs.spaces.len() >= crate::spaces::MAX_SPACES { MF_GRAYED } else { MF_ENABLED };
-            let _ = AppendMenuW(menu, MF_STRING | full, NEW_SPACE, &wide("New space"));
-            self.append_this_space(menu);
-            let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-            let _ = AppendMenuW(menu, MF_STRING, TAB_LAYOUT, &wide(layout_label(self.vertical)));
-            let _ = AppendMenuW(menu, MF_STRING, SIDEBAR, &wide(sidebar_label(self.collapsed)));
-            if let Some(version) = &self.update {
-                let _ = AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null());
-                let _ = AppendMenuW(menu, MF_STRING, RESTART, &wide(&super::update_ui::restart_label(version)));
-            }
-            let mut point = POINT { x, y };
-            let _ = windows::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut point);
-            // Its time is the person reading the menu.
-            self.save_before_modal();
-            let modal = crate::diag::modal();
-            let chosen = TrackPopupMenu(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, point.x, point.y, None, self.hwnd, None)
-                .0 as usize;
-            drop(modal);
-            let _ = DestroyMenu(menu);
-            chosen
-        };
+        let mut menu = Menu::new();
+        menu.item(NEW_TAB, &self.with_chord("New tab", Command::NewTab));
+        let room = self.tabs.spaces.len() < crate::spaces::MAX_SPACES;
+        menu.item(NEW_SPACE, &self.with_chord("New space", Command::NewSpace)).enabled(room);
+        self.append_this_space(&mut menu);
+        menu.separator();
+        menu.item(TAB_LAYOUT, &self.with_chord(layout_label(self.vertical), Command::ToggleTabLayout));
+        menu.item(SIDEBAR, &self.with_chord(sidebar_label(self.collapsed), Command::ToggleSidebar));
+        if let Some(version) = &self.update {
+            menu.separator();
+            menu.item(RESTART, &super::update_ui::restart_label(version));
+        }
+        let chosen = self.show_menu(menu, x, y);
         match chosen {
             TAB_LAYOUT => self.run(Command::ToggleTabLayout),
             SIDEBAR => self.run(Command::ToggleSidebar),

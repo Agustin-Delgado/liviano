@@ -276,7 +276,8 @@ and the commands of the bar update it immediately.
 A person checks these items manually:
 
 - The drag of tabs and of the split view divider.
-- The menus: tab, extensions, hidden elements, the bookmarks bar and the accounts of a sign-in.
+- The menus with a real mouse and a real keyboard: tab, group, space, extensions, hidden elements, the bookmarks bar, the history of Back and Forward and the password import. A script checked how they open, their items, the keys, the submenus and how they close (`tools\menus.ps1`). A person checks the click outside a menu, the release of the right button on an item, a second monitor and a screen reader.
+- The accounts of a sign-in.
 - The floating video.
 - The password import.
 - The passkeys.
