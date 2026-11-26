@@ -320,7 +320,7 @@ try {
 
     if ($Usage) {
         Write-Host "Heavy use: $Tabs tabs, $UsageSec s"
-        $run = Start-Run @{ suspend_after_secs = 10; discard_after_secs = 30 } $null
+        $run = Start-Run @{ suspend_after_secs = 10; discard_after_mins = 1; live_tabs_limit = 4 } $null
         try {
             $first = (Invoke-Nea open @{ url = 'https://example.org/' }).tab
             Invoke-Nea wait @{ tab = $first; timeout_ms = 30000 } | Out-Null

@@ -29,8 +29,9 @@ already includes.
 
 ## Why Nea uses little memory
 
-The program itself uses a few MB. Background tabs go to sleep. After some
-time, Nea discards them and keeps only their address and title. At startup,
+The program itself uses a few MB. Background tabs go to sleep after one
+minute: their scripts stop and their memory goes back to the system. They
+are not closed, so a tab comes back as it was, with no load. At startup,
 Nea creates only the view of the active tab.
 
 The table shows the private memory of the full process tree. Each browser

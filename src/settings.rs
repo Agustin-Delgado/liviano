@@ -37,14 +37,17 @@ pub struct Settings {
     pub search_url: String,
     /// Seconds a background tab stays live before it is suspended.
     pub suspend_after_secs: u64,
-    /// Seconds a background tab stays suspended before its view is destroyed.
-    pub discard_after_secs: u64,
+    /// Minutes a background tab stays out of sight before its view is
+    /// destroyed. 0: never. A suspended tab uses almost no memory of the
+    /// computer and comes back as it was, so the default is 0: a tab is
+    /// discarded only when the system is low on memory.
+    pub discard_after_mins: u64,
     /// Views out of sight that stay live at most (the most recently seen);
-    /// the others are discarded at once. A suspended view still holds most
-    /// of its memory. Views out of sight for `memory::LONG_OUT_OF_SIGHT`
-    /// keep only half of it.
-    pub live_tabs_out_of_sight: usize,
-    /// System memory load (percent) above which background tabs are discarded at once.
+    /// the others are discarded at once. 0: no limit. Views out of sight
+    /// for `memory::LONG_OUT_OF_SIGHT` keep only half of it.
+    pub live_tabs_limit: usize,
+    /// System memory load (percent) from which background tabs are suspended
+    /// at once and only a few stay live (`memory::Pressure::Low`).
     pub memory_pressure_percent: u32,
     /// Hosts that never sleep nor get discarded (they cost more memory).
     pub keep_awake: BTreeSet<String>,
@@ -85,8 +88,8 @@ impl Default for Settings {
             field_position: FieldPosition::Top,
             search_url: "https://duckduckgo.com/?q={q}".to_string(),
             suspend_after_secs: 60,
-            discard_after_secs: 15 * 60,
-            live_tabs_out_of_sight: 8,
+            discard_after_mins: 0,
+            live_tabs_limit: 0,
             memory_pressure_percent: 85,
             keep_awake: BTreeSet::new(),
             shield_disabled: BTreeSet::new(),

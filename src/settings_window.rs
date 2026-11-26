@@ -749,9 +749,9 @@ fn controls() -> Vec<Spec> {
 
     label(&mut add, "Put tabs to sleep after (seconds)", (l, 278, 260, 22));
     add(w!("EDIT"), "", number_style, edge, (l + 264, 274, 76, 26), ID_SUSPEND, Kind::Edit, false);
-    label(&mut add, "Discard them after (minutes)", (l, 312, 260, 22));
+    label(&mut add, "Discard them after (minutes, 0 = never)", (l, 312, 260, 22));
     add(w!("EDIT"), "", number_style, edge, (l + 264, 308, 76, 26), ID_DISCARD, Kind::Edit, false);
-    label(&mut add, "Discard them at memory use (%)", (l, 346, 260, 22));
+    label(&mut add, "Save memory at memory use (%)", (l, 346, 260, 22));
     add(w!("EDIT"), "", number_style, edge, (l + 264, 342, 76, 26), ID_PRESSURE, Kind::Edit, false);
     label(&mut add, "Sites that never sleep (use more memory)", (l, 384, 340, 22));
     let list_style = tab | WS_VSCROLL.0 | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32;
@@ -1260,7 +1260,7 @@ fn fill_fields(st: &mut State) {
     }
     set_text(st.search, &st.settings.search_url);
     set_text(st.suspend, &st.settings.suspend_after_secs.to_string());
-    set_text(st.discard, &(st.settings.discard_after_secs / 60).max(1).to_string());
+    set_text(st.discard, &st.settings.discard_after_mins.to_string());
     set_text(st.pressure, &st.settings.memory_pressure_percent.to_string());
     let check = if st.settings.split_view { BST_CHECKED.0 } else { 0 };
     let preview = if st.settings.hover_preview { BST_CHECKED.0 } else { 0 };
@@ -1428,12 +1428,12 @@ fn commit_field(st: &mut State, id: i32) -> Outcome {
             }
             None => Some("Sleep: from 5 to 86400 seconds."),
         },
-        ID_DISCARD => match settings::parse_number(&text_of(st.discard), 1..=10_080) {
+        ID_DISCARD => match settings::parse_number(&text_of(st.discard), 0..=10_080) {
             Some(n) => {
-                s.discard_after_secs = n * 60;
+                s.discard_after_mins = n;
                 None
             }
-            None => Some("Discard: from 1 to 10080 minutes."),
+            None => Some("Discard: from 0 (never) to 10080 minutes."),
         },
         ID_PRESSURE => match settings::parse_number(&text_of(st.pressure), 10..=100) {
             Some(n) => {
@@ -1450,14 +1450,14 @@ fn commit_field(st: &mut State, id: i32) -> Outcome {
         match id {
             ID_SEARCH => set_text(st.search, &s.search_url),
             ID_SUSPEND => set_text(st.suspend, &s.suspend_after_secs.to_string()),
-            ID_DISCARD => set_text(st.discard, &(s.discard_after_secs / 60).max(1).to_string()),
+            ID_DISCARD => set_text(st.discard, &s.discard_after_mins.to_string()),
             _ => set_text(st.pressure, &s.memory_pressure_percent.to_string()),
         }
         return Outcome::Nothing;
     }
     if st.settings.search_url == before.search_url
         && st.settings.suspend_after_secs == before.suspend_after_secs
-        && st.settings.discard_after_secs == before.discard_after_secs
+        && st.settings.discard_after_mins == before.discard_after_mins
         && st.settings.memory_pressure_percent == before.memory_pressure_percent
     {
         return Outcome::Nothing;

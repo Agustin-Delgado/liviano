@@ -1622,8 +1622,9 @@ impl App {
     }
 
     fn sleep_tick(&mut self) {
-        let pressure = memory_load() >= self.settings.memory_pressure_percent;
+        let pressure = system_pressure(self.settings.memory_pressure_percent);
         self.sleep_pass(pressure);
+        self.engine_trim();
         self.idle_trim();
     }
 
@@ -1635,9 +1636,12 @@ impl App {
     /// Each stage is a call to the engine: one tick makes one discard or a
     /// few lighter calls, the longest idle tabs first, and the next tick
     /// comes sooner while work is left.
-    fn sleep_pass(&mut self, pressure: bool) {
+    fn sleep_pass(&mut self, pressure: crate::memory::Pressure) {
+        // Under pressure there is no time for a park or for a pause of the person.
+        let low = pressure != crate::memory::Pressure::None;
+        let urgent = pressure == crate::memory::Pressure::High;
         let now = Instant::now();
-        let policy = crate::memory::Policy::new(self.settings.suspend_after_secs, self.settings.discard_after_secs);
+        let policy = crate::memory::Policy::new(self.settings.suspend_after_secs, self.settings.discard_after_mins);
         let minimized = self.memory.minimized();
         let mut to_discard = Vec::new();
         let mut stages = Vec::new();
@@ -1670,7 +1674,7 @@ impl App {
             let step = crate::memory::step(&facts, &policy, pressure);
             // A page on screen in a minimized window comes back first: it
             // keeps what draws it (refer to `memory::park_step`).
-            let park = !pressure && !shown;
+            let park = !low && !shown;
             match step {
                 crate::memory::Step::Discard => to_discard.push((tab.last_active, tab.id, Some(facts))),
                 crate::memory::Step::Keep => {}
@@ -1680,28 +1684,28 @@ impl App {
                 capped.push((tab.last_active, tab.id));
             }
         }
-        to_discard.extend(
-            crate::memory::over_cap(&capped, self.settings.live_tabs_out_of_sight, now)
-                .into_iter()
-                .map(|(since, id)| (since, id, None)),
-        );
+        if let Some(limit) = crate::memory::live_limit(self.settings.live_tabs_limit, pressure) {
+            to_discard
+                .extend(crate::memory::over_cap(&capped, limit, now).into_iter().map(|(since, id)| (since, id, None)));
+        }
         // A call to the engine holds the window: never while the strip or
         // the field moves, and a discard (hundreds of ms when the engine is
         // busy) only once the person paused, unless memory is low.
         let work = !to_discard.is_empty() || !stages.is_empty();
-        let busy = !to_discard.is_empty() && !pressure && !quiet_for(QUIET_BEFORE_DISCARD);
+        let busy = !to_discard.is_empty() && !urgent && !quiet_for(QUIET_BEFORE_DISCARD);
         if work && (busy || self.something_moves(now)) {
             unsafe {
                 SetTimer(Some(self.hwnd), TIMER_SLEEP, SLEEP_AGAIN_MS, None);
             }
             return;
         }
-        if pressure {
+        if low {
             self.trim_under_pressure();
         }
         to_discard.sort_by_key(|(since, ..)| *since);
         stages.sort_by_key(|(since, ..)| *since);
         let mut discarded = 0;
+        let mut suspended = false;
         let started = Instant::now();
         let mut pending = to_discard.into_iter();
         for (_, id, facts) in pending.by_ref() {
@@ -1713,7 +1717,7 @@ impl App {
                     facts.playing_audio = true;
                     let step = crate::memory::step(&facts, &policy, pressure);
                     if step != crate::memory::Step::Keep {
-                        stages.insert(0, (now, id, step, !pressure));
+                        stages.insert(0, (now, id, step, !low));
                     }
                 }
                 continue;
@@ -1745,7 +1749,10 @@ impl App {
                                     more = true;
                                 }
                                 crate::memory::Park::Wait => more = true,
-                                crate::memory::Park::Done => web.suspend(),
+                                crate::memory::Park::Done => {
+                                    web.suspend();
+                                    suspended = true;
+                                }
                             }
                         }
                         crate::memory::Step::Lower => web.lower(),
@@ -1754,7 +1761,13 @@ impl App {
                 }
             }
         }
-        let next = if more { sleep_again_ms(started.elapsed()) } else { SLEEP_EVERY_MS };
+        if suspended {
+            self.suspended_a_view(now);
+        }
+        let mut next = if more { sleep_again_ms(started.elapsed()) } else { SLEEP_EVERY_MS };
+        if let Some(wait) = self.engine_trim_in(Instant::now()) {
+            next = next.min((wait.as_millis() as u32).max(SLEEP_AGAIN_MS));
+        }
         unsafe {
             SetTimer(Some(self.hwnd), TIMER_SLEEP, next, None);
         }
@@ -2772,9 +2785,16 @@ fn fuzzy_match(query: &str, text: &str) -> bool {
     query.chars().flat_map(char::to_lowercase).filter(|c| !c.is_whitespace()).all(|q| chars.any(|c| c == q))
 }
 
-fn memory_load() -> u32 {
+/// How low the system is on memory and on commit now (`memory::pressure`).
+fn system_pressure(memory_pressure_percent: u32) -> crate::memory::Pressure {
     let mut status = MEMORYSTATUSEX { dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32, ..Default::default() };
-    unsafe { if GlobalMemoryStatusEx(&mut status).is_ok() { status.dwMemoryLoad } else { 0 } }
+    unsafe {
+        if GlobalMemoryStatusEx(&mut status).is_err() {
+            return crate::memory::Pressure::None;
+        }
+    }
+    let commit = crate::memory::commit_percent(status.ullTotalPageFile, status.ullAvailPageFile);
+    crate::memory::pressure(status.dwMemoryLoad, commit, memory_pressure_percent)
 }
 
 const CF_UNICODETEXT: u32 = 13;

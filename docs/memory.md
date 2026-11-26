@@ -13,7 +13,11 @@ A tab that is not on screen goes through these stages:
 |---|---|---|---|
 | Lowered | 20 s after the tab left the screen | Memory target level "low": it drops caches and decoded images. Scripts and timers continue. | A few milliseconds |
 | Suspended | After the "suspend" setting (60 s) | First the view is parked (see below). Then `TrySuspend`: scripts and timers stop, and the working set is trimmed | A resume |
-| Discarded | After the "discard" setting (15 min) | The view and its renderer close. The address, the title and the scroll position stay. | The page loads again, at the same scroll position |
+| Discarded | Only when the system has almost no commit left, or after the "discard" setting (off by default) | The view and its renderer close. The address, the title and the scroll position stay. | The page loads again, at the same scroll position |
+
+By default, a tab is not discarded for its time out of sight: it stays
+suspended, and it comes back as it was, with no load. A suspended tab uses
+almost no memory of the computer (see "Trim of the suspended renderers").
 
 ### Parked before the suspend
 
@@ -38,18 +42,34 @@ took 15 to 46 ms (before: 15 to 174 ms; the views without a park were
 slower to come back, not faster). Under memory pressure, and for a page
 on screen in a minimized window, there is no park.
 
-A suspended view gives back its working set, but it keeps most of its
-commit (approximately 50 MB for each page in the test). Thus Nea also keeps
-a maximum number of live views out of sight: `live_tabs_out_of_sight` in
-`settings.json`, 8 by default. Nea discards the views that were seen least
-recently first. These tabs are never discarded, and are not counted:
-pinned tabs, private tabs, tabs that play sound and sites that you keep
-awake.
+### Trim of the suspended renderers
 
-The views that are out of sight for 5 min or more keep only half of the
-cap (4 by default). Thus eight tabs that you look at one after the other
-stay live while you go back and forth, but not for the rest of the day.
-With 10 tabs, this decreases the commit after 5 min from 740 MB to 512 MB.
+After a suspend, the renderer of the page still keeps some megabytes in
+memory (4 to 9 MB for each tab in the test). The renderer does not run, so
+2 s after a suspend Nea empties the working set of each renderer process
+that has only suspended pages (`EmptyWorkingSet`). The engine tells which
+main frames each renderer has (`GetProcessExtendedInfos`). A renderer that
+also has a live page, or no main frame, stays as it is. When the tab comes
+back, the system gives the pages back from its standby list or from the
+page file.
+
+### Commit, and the limit on live views
+
+A suspended view gives back its working set, but it keeps most of its
+commit (approximately 50 MB for each page in the test). Commit is space
+that the system holds in the page file. It is not memory in use. Thus Nea
+discards a suspended tab only when the commit of the system is almost at
+its limit (see "Low memory").
+
+Two settings in `settings.json` bring back a discard by time and by
+number. Both are 0 (off) by default. `discard_after_mins` discards a tab
+after that time out of sight. `live_tabs_limit` is a maximum number of
+live views out of sight: Nea discards the views that were seen least
+recently first, and the views that are out of sight for 5 min or more keep
+only half of the limit. These tabs are never discarded, and are not
+counted: pinned tabs, private tabs, tabs that play sound and sites that
+you keep awake.
+
 Each live view out of sight costs approximately 64 MB of commit: 50 MB in
 its renderer, 8.5 MB in the GPU process and 5.5 MB in the browser process
 (1400 × 900 window). After the park, the GPU part is approximately 0.
@@ -111,16 +131,30 @@ tab churn, this changed the app process from 25.2 MB working set and
 use the same step. The first paint after the pause takes the pages back
 from memory.
 
+At the same time, the engine processes that are not renderers (browser,
+GPU, utility) give back their working set too, and so do the renderers of
+suspended pages. Nea does not do this while a page plays sound: a person
+can watch a video with no input, and a trim of a process that runs can drop
+a frame.
+
 ## Low memory
 
-When the memory load is more than the "memory pressure" setting (85%), or
-when Windows signals low memory (`CreateMemoryResourceNotification`), Nea
-does these steps immediately:
+There are two levels.
 
-- It discards each tab out of sight that it can discard.
-- It suspends the other tabs out of sight.
+Low: the memory load is at the "memory pressure" setting (85%) or more, or
+the commit of the system is at 90% of its limit or more. Nea does these
+steps immediately:
+
+- It suspends each tab out of sight, with no wait and no park.
+- It keeps at most 8 live views out of sight (4 of the views that were out
+  of sight for 5 min). It discards the others.
 - It gives back its own working set (at most each 30 s).
 - It does not make a spare view.
+
+High: the commit of the system is at 97% of its limit or more, or Windows
+signals low memory (`CreateMemoryResourceNotification`). Nea also discards
+each tab out of sight that it can discard. A discard of a suspended tab
+gives back commit, not memory in use, so Nea does it only here.
 
 ## What Nea does not do, and why
 
@@ -309,6 +343,31 @@ working set after 5 min is also smaller (by approximately 120 MB, in the
 renderers), but it changes from run to run more than the commit. The
 "minimized" and "after churn" working sets change much from run to run
 (the engine trims when it wants to).
+
+### Pass 4
+
+2026-11-26, same engine and computer, offline, 30 tabs, one run of each
+build, memory pressure off (`memory_pressure_percent` 100). "Before" is
+release 0.1.9. The change: no discard by time or by number, the trim of
+the suspended renderers, and the trim of the engine when nobody uses the
+window. The computer was near its commit limit in the "after" run, so 4
+tabs were not made.
+
+| Phase | Before | After |
+|---|---:|---:|
+| idle (30 s) | 462 / 815 | 1017 / 1835 |
+| idle 5 min | 190 / 534 | 120 / 1605 |
+| minimized | 6 / 514 | 89 / 1589 |
+| Tabs that load again when they come back | 25 | 4 |
+
+After 5 min: browser process 21 MB (before 57), GPU process 13 MB (64),
+renderers 78 MB (26 of them; before 51 MB in 5). The first minute costs
+more, because all the views are live until their suspend. The commit is
+three times as much: it is space in the page file, not memory in use, and
+Nea gives it back when the system is near its limit (see "Low memory").
+
+The text below is about the cap of the passes before (the setting is now
+`live_tabs_limit`, off by default).
 
 A smaller cap is a choice, not a default. With `live_tabs_out_of_sight`
 set to 4 (2 after 5 min), the same run gave, with 10 tabs: idle

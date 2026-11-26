@@ -28,6 +28,9 @@ pub(super) struct MemoryUi {
     /// The views are hidden because the window is minimized.
     pages_hidden: bool,
     trimmed_at: Option<Instant>,
+    /// A view was suspended: the renderers of the suspended pages are
+    /// trimmed at this time (`memory::ENGINE_TRIM_AFTER`).
+    engine_trim_at: Option<Instant>,
 }
 
 impl MemoryUi {
@@ -118,12 +121,59 @@ impl App {
             self.memory.trimmed_at = Some(now);
             crate::diag::trace(|| "idle trim".to_string());
             memory::trim_working_set();
+            // The engine too, but not while a page plays sound: a person
+            // can watch a video with no input, and a trim of a process
+            // that runs can drop a frame.
+            let sound =
+                self.tabs.all().any(|tab| matches!(&tab.live, super::Live::Ready(web) if web.is_playing_audio()));
+            if !sound {
+                self.trim_engine(true);
+            }
+        }
+    }
+
+    /// A view was suspended now: its renderer is trimmed soon.
+    pub(super) fn suspended_a_view(&mut self, now: Instant) {
+        self.memory.engine_trim_at = Some(now + memory::ENGINE_TRIM_AFTER);
+    }
+
+    /// How long until the engine trim, if one waits.
+    pub(super) fn engine_trim_in(&self, now: Instant) -> Option<Duration> {
+        self.memory.engine_trim_at.map(|at| at.saturating_duration_since(now))
+    }
+
+    /// The renderers that serve only suspended pages give back their
+    /// working set, some time after the last suspend. Called by the sleep
+    /// timer.
+    pub(super) fn engine_trim(&mut self) {
+        let now = Instant::now();
+        if self.memory.engine_trim_at.is_none_or(|at| at > now) {
+            return;
+        }
+        self.memory.engine_trim_at = None;
+        self.trim_engine(false);
+    }
+
+    /// `rest`: also the engine processes that are not renderers.
+    fn trim_engine(&self, rest: bool) {
+        let suspended: std::collections::HashSet<u32> = self
+            .tabs
+            .all()
+            .filter_map(|tab| match &tab.live {
+                super::Live::Ready(web) if web.suspended => web.main_frame(),
+                _ => None,
+            })
+            .collect();
+        if let Some(env) = &self.env
+            && (rest || !suspended.is_empty())
+        {
+            crate::web::trim_suspended(env, suspended, rest);
         }
     }
 
     /// The low memory signal: every tab out of sight to its last stage now.
     pub(super) fn low_memory(&mut self) {
-        self.sleep_pass(true);
+        self.sleep_pass(memory::Pressure::High);
     }
 
     /// Under pressure: the app's working set back to the system, at most

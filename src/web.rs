@@ -227,6 +227,97 @@ pub struct WebTab {
     parked: Option<std::time::Instant>,
 }
 
+/// Empties the working set of each renderer process that serves only
+/// suspended pages (`suspended`: their main frames). The engine tells which
+/// frames each process has; the answer comes later, and the trim runs on
+/// its own thread. `rest`: nobody uses the window, so the other engine
+/// processes (browser, GPU, utility) give back their working set too.
+pub fn trim_suspended(env: &ICoreWebView2Environment, suspended: std::collections::HashSet<u32>, rest: bool) {
+    let Ok(env) = env.cast::<ICoreWebView2Environment13>() else { return };
+    let handler = GetProcessExtendedInfosCompletedHandler::create(Box::new(move |result, infos| {
+        let Some(infos) = infos.filter(|_| result.is_ok()) else { return Ok(()) };
+        let (renderers, others) = unsafe { engine_processes(&infos) };
+        let mut pids = crate::memory::renderers_to_trim(&renderers, &suspended);
+        crate::diag::trace(|| format!("engine trim: {} of {} renderers, rest {rest}", pids.len(), renderers.len()));
+        if rest {
+            pids.extend(others);
+        }
+        if !pids.is_empty() {
+            let _ = std::thread::Builder::new().name("engine trim".into()).spawn(move || {
+                for pid in pids {
+                    crate::memory::trim_process(pid);
+                }
+            });
+        }
+        Ok(())
+    }));
+    unsafe {
+        let _ = env.GetProcessExtendedInfos(&handler);
+    }
+}
+
+/// Each renderer process (its id, and the main frames in it; a frame in a
+/// frame is not counted), and the ids of the other engine processes.
+unsafe fn engine_processes(infos: &ICoreWebView2ProcessExtendedInfoCollection) -> (Vec<(u32, Vec<u32>)>, Vec<u32>) {
+    let mut renderers = Vec::new();
+    let mut others = Vec::new();
+    unsafe {
+        let mut count = 0u32;
+        let _ = infos.Count(&mut count);
+        for index in 0..count {
+            let Ok(info) = infos.GetValueAtIndex(index) else { continue };
+            let Ok(process) = info.ProcessInfo() else { continue };
+            let mut kind = COREWEBVIEW2_PROCESS_KIND_BROWSER;
+            let mut pid = 0i32;
+            if process.Kind(&mut kind).is_err() || process.ProcessId(&mut pid).is_err() {
+                continue;
+            }
+            if kind != COREWEBVIEW2_PROCESS_KIND_RENDERER {
+                others.push(pid as u32);
+                continue;
+            }
+            let mut pages = Vec::new();
+            // The collection stays until the end: its iterator does not keep it.
+            if let Ok(collection) = info.AssociatedFrameInfos()
+                && let Ok(frames) = collection.GetIterator()
+            {
+                let mut has = BOOL(0);
+                let _ = frames.HasCurrent(&mut has);
+                while has.as_bool() {
+                    if let Ok(frame) = frames.GetCurrent() {
+                        match main_frame_id(&frame) {
+                            Ok(Some(page)) => pages.push(page),
+                            Ok(None) => {}
+                            // A frame that tells nothing: the process is not only for suspended pages.
+                            Err(_) => pages.push(u32::MAX),
+                        }
+                    }
+                    if frames.MoveNext(&mut has).is_err() {
+                        break;
+                    }
+                }
+            }
+            renderers.push((pid as u32, pages));
+        }
+    }
+    (renderers, others)
+}
+
+/// The id of `frame` if it is the main frame of a page. None: a frame in a frame.
+unsafe fn main_frame_id(frame: &ICoreWebView2FrameInfo) -> Result<Option<u32>> {
+    unsafe {
+        let frame = frame.cast::<ICoreWebView2FrameInfo2>()?;
+        let mut kind = COREWEBVIEW2_FRAME_KIND_UNKNOWN;
+        frame.FrameKind(&mut kind)?;
+        if kind != COREWEBVIEW2_FRAME_KIND_MAIN_FRAME {
+            return Ok(None);
+        }
+        let mut id = 0u32;
+        frame.FrameId(&mut id)?;
+        Ok(Some(id))
+    }
+}
+
 /// The engine switches of Nea. FedCM (`navigator.credentials.get` with
 /// `identity`) is off: WebView2 shows no account chooser for it, so a
 /// request stayed open with no end (measured with a local identity
@@ -727,6 +818,16 @@ impl WebTab {
             }
         }
         self.suspended = true;
+    }
+
+    /// The id of the main frame of the page, as the engine names it in
+    /// the frames of its processes (`trim_suspended`).
+    pub fn main_frame(&self) -> Option<u32> {
+        let mut id = 0u32;
+        unsafe {
+            self.webview.cast::<ICoreWebView2_20>().ok()?.FrameId(&mut id).ok()?;
+        }
+        Some(id)
     }
 
     pub fn is_playing_audio(&self) -> bool {

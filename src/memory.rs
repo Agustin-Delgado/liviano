@@ -12,29 +12,36 @@
 //!    the engine trims the page's memory. Coming back is a resume. Just
 //!    before, the view is parked (`park_step`), so that the GPU process
 //!    lets go of the surfaces that drew it.
-//! 3. Discarded, after the "discard" setting: the view and its renderer are
-//!    closed and only the address, the title and the scroll position
-//!    (`ScrollMemo`) stay. Coming back loads the page again.
+//! 3. Discarded: the view and its renderer are closed and only the
+//!    address, the title and the scroll position (`ScrollMemo`) stay.
+//!    Coming back loads the page again, and the page loses its history,
+//!    its form fields and the state of its scripts.
 //!
-//! Stage 2 gives back the working set but not the commit: a suspended view
-//! still holds tens of megabytes. Thus the "live tabs out of sight" setting
-//! sets how many views out of sight stay live: the most recently seen
-//! ones. Nea discards the others at once, as at stage 3. Tabs that are
-//! never discarded (pinned, private, playing sound, kept awake) are not
-//! counted.
+//! Stage 2 gives back the working set (the memory of the computer that the
+//! page uses) but not the commit (space that the system keeps for it, in
+//! the page file if necessary). Thus a suspended tab is almost free while
+//! the system has commit to give, and stage 3 is not a stage in time by
+//! default. The "discard after" and "live tabs limit" settings bring back
+//! a discard by time and by number. Both are off by default. Tabs that
+//! are never discarded (pinned, private, playing sound, kept awake) are
+//! not counted.
 //!
 //! The tabs on screen stay as they are. While the window is minimized, they
 //! are hidden after `MINIMIZED_HIDE_AFTER` and then follow stages 1 and 2
 //! from the time the window was minimized, but are never discarded: they
 //! are the pages the person sees first when the window comes back.
 //!
-//! When the system is low on memory (the load setting, or the low memory
-//! signal of Windows), every tab out of sight goes to its last stage at
-//! once, the app gives back its own working set, and no spare view is
-//! made ahead of time.
+//! When the system is low on memory (`Pressure::Low`: the load setting, or
+//! a commit near its limit), every tab out of sight is suspended at once
+//! and only `PRESSURE_LIVE_TABS` views out of sight stay live. A discard
+//! of a suspended tab gives back commit, not memory in use, so the other
+//! tabs are discarded only when the system has almost nothing left
+//! (`Pressure::High`: the low memory signal of Windows, or the commit at
+//! its limit). In both cases the app gives back its own working set, and
+//! no spare view is made ahead of time.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     time::{Duration, Instant},
 };
 
@@ -45,7 +52,10 @@ use windows::Win32::{
             CreateMemoryResourceNotification, HeapOptimizeResources, HeapSetInformation, LowMemoryResourceNotification,
         },
         ProcessStatus::EmptyWorkingSet,
-        Threading::{GetCurrentProcess, INFINITE, WaitForSingleObject},
+        Threading::{
+            GetCurrentProcess, INFINITE, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SET_QUOTA,
+            WaitForSingleObject,
+        },
     },
     UI::WindowsAndMessaging::PostMessageW,
 };
@@ -72,22 +82,80 @@ pub fn idle_trim_due(quiet: Duration, since_trim: Option<Duration>) -> bool {
     quiet >= IDLE_TRIM_AFTER && since_trim.is_none_or(|t| t > quiet)
 }
 
+/// How low the system is on memory.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Pressure {
+    #[default]
+    None,
+    /// Tabs out of sight are suspended at once, and only
+    /// `PRESSURE_LIVE_TABS` of them stay live.
+    Low,
+    /// Each tab out of sight that may be discarded is discarded at once.
+    High,
+}
+
+/// The commit of the system (percent of its limit) from which it is low.
+/// Suspended tabs keep their commit, so many of them can fill a small page
+/// file.
+pub const COMMIT_LOW_PERCENT: u32 = 90;
+/// The commit from which the system has almost nothing left: at the limit,
+/// an allocation fails in any program.
+pub const COMMIT_HIGH_PERCENT: u32 = 97;
+/// The live views out of sight that stay while the system is low on
+/// memory (half of them after `LONG_OUT_OF_SIGHT`): the tabs that the
+/// person goes back and forth between.
+pub const PRESSURE_LIVE_TABS: usize = 8;
+
+/// How low the system is, from its memory load and its commit (percent)
+/// and the "memory pressure" setting.
+pub fn pressure(memory_load: u32, commit_load: u32, memory_pressure_percent: u32) -> Pressure {
+    if commit_load >= COMMIT_HIGH_PERCENT {
+        Pressure::High
+    } else if memory_load >= memory_pressure_percent || commit_load >= COMMIT_LOW_PERCENT {
+        Pressure::Low
+    } else {
+        Pressure::None
+    }
+}
+
+/// The live views out of sight that stay at most: the "live tabs limit"
+/// setting (0: no limit), and `PRESSURE_LIVE_TABS` while the system is low
+/// on memory. None: all of them stay.
+pub fn live_limit(setting: usize, pressure: Pressure) -> Option<usize> {
+    let set = (setting > 0).then_some(setting);
+    let low = (pressure != Pressure::None).then_some(PRESSURE_LIVE_TABS);
+    match (set, low) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (a, b) => a.or(b),
+    }
+}
+
+/// The commit in use as a percent of the commit limit.
+pub fn commit_percent(limit: u64, available: u64) -> u32 {
+    if limit == 0 {
+        return 0;
+    }
+    (limit.saturating_sub(available).saturating_mul(100) / limit) as u32
+}
+
 /// When a tab out of sight goes to its next stage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Policy {
     pub lower_after: Duration,
     pub suspend_after: Duration,
-    pub discard_after: Duration,
+    /// None: a tab is never discarded for its time out of sight.
+    pub discard_after: Option<Duration>,
 }
 
 impl Policy {
-    pub fn new(suspend_after_secs: u64, discard_after_secs: u64) -> Self {
+    /// `discard_after_mins` 0: no discard by time.
+    pub fn new(suspend_after_secs: u64, discard_after_mins: u64) -> Self {
         let suspend_after = Duration::from_secs(suspend_after_secs);
         Policy {
             // A suspend set sooner than the lower stage takes its place.
             lower_after: LOWER_AFTER.min(suspend_after),
             suspend_after,
-            discard_after: Duration::from_secs(discard_after_secs),
+            discard_after: (discard_after_mins > 0).then(|| Duration::from_secs(discard_after_mins * 60)),
         }
     }
 }
@@ -118,18 +186,18 @@ pub enum Step {
     Discard,
 }
 
-/// The next stage of a tab, now. `pressure`: the system is low on memory.
-pub fn step(facts: &Facts, policy: &Policy, pressure: bool) -> Step {
+/// The next stage of a tab, now.
+pub fn step(facts: &Facts, policy: &Policy, pressure: Pressure) -> Step {
     if facts.keep_awake {
         return Step::Keep;
     }
     // Pinned and private tabs may sleep but are never destroyed; a page that
     // plays sound is never cut off.
     let may_discard = !facts.pinned && !facts.private && !facts.playing_audio && !facts.minimized_on_screen;
-    if may_discard && (pressure || facts.idle >= policy.discard_after) {
+    if may_discard && (pressure == Pressure::High || policy.discard_after.is_some_and(|after| facts.idle >= after)) {
         return Step::Discard;
     }
-    if !facts.suspended && (pressure || facts.idle >= policy.suspend_after) {
+    if !facts.suspended && (pressure != Pressure::None || facts.idle >= policy.suspend_after) {
         return Step::Suspend;
     }
     if !facts.suspended && !facts.lowered && facts.idle >= policy.lower_after {
@@ -189,8 +257,9 @@ pub const LONG_OUT_OF_SIGHT: Duration = Duration::from_secs(5 * 60);
 
 /// Of the tabs out of sight that may be discarded (when each was last on
 /// screen, and its id), the ones beyond the `cap` seen most recently: the
-/// least recently seen first. A suspended view still holds most of its
-/// memory (its commit), so only a cap on their number bounds the total.
+/// least recently seen first. A suspended view still holds its commit, so
+/// only a cap on their number bounds that total. The app applies it only
+/// when there is a limit (`live_limit`).
 ///
 /// The views out of sight for `LONG_OUT_OF_SIGHT` or more keep only half of
 /// the cap (rounded up): eight tabs looked at one after the other stay
@@ -210,6 +279,40 @@ pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<
         .collect();
     over.reverse();
     over
+}
+
+/// The engine trims a suspended page, but its renderer keeps some
+/// megabytes in memory (4 MB for each tab in the test, 30 tabs). The
+/// renderer does not run, so the system can take all of it: this long
+/// after a suspend, Nea empties the working set of the renderers that
+/// serve only suspended pages. The suspend is not complete at once.
+pub const ENGINE_TRIM_AFTER: Duration = Duration::from_secs(2);
+
+/// Of the renderer processes (the id of each one, and the main frame of
+/// each page that has a frame in it), the ones that serve only suspended
+/// pages. `suspended`: the main frames of the suspended pages. A renderer
+/// with no frame (a spare one, a worker) and a renderer that a live page
+/// also uses stay as they are: a trim of a process that runs makes it
+/// slow.
+pub fn renderers_to_trim(renderers: &[(u32, Vec<u32>)], suspended: &HashSet<u32>) -> Vec<u32> {
+    renderers
+        .iter()
+        .filter(|(_, pages)| !pages.is_empty() && pages.iter().all(|page| suspended.contains(page)))
+        .map(|(pid, _)| *pid)
+        .collect()
+}
+
+/// Gives the working set of another process back to the system. The pages
+/// come back from the standby list or the page file when the process uses
+/// them again.
+pub fn trim_process(pid: u32) {
+    unsafe {
+        let Ok(process) = OpenProcess(PROCESS_SET_QUOTA | PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+            return;
+        };
+        let _ = EmptyWorkingSet(process);
+        let _ = windows::Win32::Foundation::CloseHandle(process);
+    }
 }
 
 /// Where each page was scrolled when it last left the screen. A tab that

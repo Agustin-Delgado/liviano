@@ -112,7 +112,7 @@ table marks the items that this method cannot test.
 | Pinned tabs | Verified. They stay across sessions. |
 | Deferred restore | Verified. At startup, Nea creates only the view of the active tab and of its split pair. |
 | Switch to tab by name | Verified (fuzzy search by title and address). |
-| Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s, suspends them after the time in Settings and discards them later. It keeps at most 8 live views out of sight, and 4 of the views that were out of sight for 5 min. When memory is low, it discards them immediately. Refer to [memory.md](memory.md). |
+| Sleep and discard of background tabs | Verified. Nea lowers their memory target after 20 s and suspends them after the time in Settings. A suspended tab comes back as it was, with no load. Nea then empties the working set of the renderers that have only suspended pages. It discards a tab only when the system has almost no commit left, or after the time in Settings (off by default). Refer to [memory.md](memory.md). |
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
 | Spaces | Verified: swipe (to the next space, back, too short, past the first space, past the last space and back), switch with the shortcuts and Ctrl+K, move a tab, persistence, deferred restore and old session files. The swipe was sent as wheel messages: a person checks it on a real touchpad. A person checks the menus of a space and of a tab. |

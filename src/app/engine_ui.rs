@@ -551,7 +551,7 @@ impl App {
             && !self.engine.making
             && !moving
             // A spare is a renderer nobody uses yet: not while memory is low.
-            && super::memory_load() < self.settings.memory_pressure_percent
+            && super::system_pressure(self.settings.memory_pressure_percent) == crate::memory::Pressure::None
         {
             match self.engine.hold_until.and_then(|until| until.checked_duration_since(Instant::now())) {
                 Some(wait) => next = wait.max(Duration::from_millis(50)),
