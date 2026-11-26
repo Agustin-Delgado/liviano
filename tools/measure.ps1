@@ -57,6 +57,8 @@ param(
     [string[]]$ManyUrls = @('https://example.com/', 'https://example.org/', 'https://example.net/', 'https://www.iana.org/', 'https://info.cern.ch/'),
     [int]$SettleSec = 10,
     [int]$IdleSec = 300,
+    # Settings for the two scenarios with nothing forced.
+    [System.Collections.IDictionary]$NaturalSettings = @{},
     [int]$Samples = 3,
     [int]$LoadTimeoutSec = 45,
     [string[]]$Only = @(),
@@ -410,7 +412,7 @@ Invoke-NeaScenario '20-tabs' @{} $null {
 Invoke-OthersScenario '20-tabs' $manyUrls
 
 foreach ($natural in @(@{ Name = '20-tabs-open'; Idle = 0 }, @{ Name = '20-tabs-idle'; Idle = $IdleSec })) {
-    Invoke-NeaScenario $natural.Name @{} $null {
+    Invoke-NeaScenario $natural.Name $NaturalSettings $null {
         $late = 0
         foreach ($url in $manyUrls) {
             $tab = (Invoke-Nea open @{ url = $url }).tab

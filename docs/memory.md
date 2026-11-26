@@ -53,6 +53,13 @@ also has a live page, or no main frame, stays as it is. When the tab comes
 back, the system gives the pages back from its standby list or from the
 page file.
 
+### One view awake
+
+Only one view out of sight stays awake: the tab that you saw last. Nea
+suspends the others at once, before the "suspend" time. A view that is
+awake costs 30 to 40 MB in its renderer, and a suspended tab comes back in
+tens of milliseconds.
+
 ### Commit, and the limit on live views
 
 A suspended view gives back its working set, but it keeps most of its
@@ -348,23 +355,43 @@ renderers), but it changes from run to run more than the commit. The
 
 2026-11-26, same engine and computer, offline, 30 tabs, one run of each
 build, memory pressure off (`memory_pressure_percent` 100). "Before" is
-release 0.1.9. The change: no discard by time or by number, the trim of
+release 0.1.9. The change: no discard by time or by number, only one view
+out of sight stays awake (the others are suspended at once), the trim of
 the suspended renderers, and the trim of the engine when nobody uses the
-window. The computer was near its commit limit in the "after" run, so 4
-tabs were not made.
+window.
 
 | Phase | Before | After |
 |---|---:|---:|
-| idle (30 s) | 462 / 815 | 1017 / 1835 |
-| idle 5 min | 190 / 534 | 120 / 1605 |
-| minimized | 6 / 514 | 89 / 1589 |
-| Tabs that load again when they come back | 25 | 4 |
+| 30 s after a look at each tab | 462 / 815 | 711 / 1867 |
+| 60 s after | 456 / 816 | 278 / 1854 |
+| idle 5 min | 190 / 534 | 121 / 1834 |
+| minimized | 6 / 514 | 14 / 1815 |
+| Tabs that load again when they come back | 25 | 0 |
 
-After 5 min: browser process 21 MB (before 57), GPU process 13 MB (64),
-renderers 78 MB (26 of them; before 51 MB in 5). The first minute costs
-more, because all the views are live until their suspend. The commit is
-three times as much: it is space in the page file, not memory in use, and
-Nea gives it back when the system is near its limit (see "Low memory").
+The first 30 s cost more: the engine continues to work in the renderer of
+a page for approximately 40 s after its suspend, and brings back the
+memory that a trim gave to the system. After that, the trims hold. The
+commit is more than two times as much: it is space in the page file, not
+memory in use, and Nea gives it back when the system is near its limit
+(see "Low memory").
+
+20 tabs of light pages, nothing forced (`tools/measure.ps1`, scenarios
+"20-tabs-open" and "20-tabs-idle"), total private working set in MB:
+
+| | Nea | Nea 0.1.9 | Edge | Chrome |
+|---|---:|---:|---:|---:|
+| Open | 208 | 291 | 411 | 469 |
+| 5 min with no input | 74 | 156 | 401 | 503 |
+
+The time to come back to a suspended tab did not change (`tools/return.ps1`,
+real pages, 2 runs of each build): approximately 40 ms more than a script
+call on the tab on screen, with and without the trims. The computer had
+free memory, so the system did not write the trimmed pages to the disk.
+
+Tried and not used: `--in-process-gpu` (one process less, but 207 MB after
+5 min: the trim does not hold). `--process-per-site` gave 190 MB open and
+54 MB after 5 min (11 processes, not 24); it is not on, because a page
+that hangs stops the other pages of its site.
 
 The text below is about the cap of the passes before (the setting is now
 `live_tabs_limit`, off by default).

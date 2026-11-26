@@ -286,7 +286,7 @@ pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<
 /// one comes back in tens of milliseconds, as it was. Thus the tabs that
 /// the person goes back and forth between stay awake, and the others are
 /// suspended at once, before the "suspend" time.
-pub const AWAKE_TABS: usize = 4;
+pub const AWAKE_TABS: usize = 1;
 
 /// Of the views out of sight that are awake (when each was last on screen,
 /// and its id), the ones beyond the `cap` seen most recently: the least
@@ -303,10 +303,12 @@ pub fn over_awake(awake: &[(Instant, u64)], cap: usize) -> Vec<u64> {
 /// after a suspend, Nea empties the working set of the renderers that
 /// serve only suspended pages. The suspend is not complete at once.
 pub const ENGINE_TRIM_AFTER: Duration = Duration::from_secs(2);
-/// The engine continues to work in a renderer for some seconds after the
-/// suspend, and that brings memory back (15 MB for each tab in the test).
-/// Thus a second trim comes this long after the first one.
-pub const ENGINE_TRIM_AGAIN: Duration = Duration::from_secs(15);
+/// The engine continues to work in a renderer for some time after the
+/// suspend, and that brings memory back (12 to 15 MB for each tab in the
+/// test, seconds after a trim). Thus more trims come: each one this long
+/// after the one before.
+pub const ENGINE_TRIM_AGAIN: [Duration; 3] =
+    [Duration::from_secs(13), Duration::from_secs(25), Duration::from_secs(40)];
 
 /// Of the renderer processes (the id of each one, and the main frame of
 /// each page that has a frame in it), the ones that serve only suspended

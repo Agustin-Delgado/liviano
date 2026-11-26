@@ -31,9 +31,13 @@ pub(super) struct MemoryUi {
     /// A view was suspended: the renderers of the suspended pages are
     /// trimmed at this time (`memory::ENGINE_TRIM_AFTER`).
     engine_trim_at: Option<Instant>,
-    /// The trim that waits is the first one after a suspend: a second one
-    /// comes `memory::ENGINE_TRIM_AGAIN` later.
-    engine_trim_again: bool,
+    /// How many of the trims after a suspend ran (`memory::ENGINE_TRIM_AGAIN`
+    /// tells when the next ones come).
+    engine_trims: usize,
+    /// The last trim of the engine at rest. It has its own time: under
+    /// memory pressure the app trims itself again and again, and that must
+    /// not stop the trim of the engine.
+    engine_rested_at: Option<Instant>,
 }
 
 impl MemoryUi {
@@ -125,6 +129,8 @@ impl App {
             self.memory.trimmed_at = Some(now);
             crate::diag::trace(|| "idle trim".to_string());
             memory::trim_working_set();
+        }
+        if memory::idle_trim_due(quiet, self.memory.engine_rested_at.map(|at| now.duration_since(at))) {
             self.trim_engine_at_rest();
         }
     }
@@ -132,7 +138,8 @@ impl App {
     /// Nobody uses the window: the engine gives back its working set too.
     /// Not while a page plays sound: a person can watch a video with no
     /// input, and a trim of a process that runs can drop a frame.
-    fn trim_engine_at_rest(&self) {
+    fn trim_engine_at_rest(&mut self) {
+        self.memory.engine_rested_at = Some(Instant::now());
         let sound = self.tabs.all().any(|tab| matches!(&tab.live, super::Live::Ready(web) if web.is_playing_audio()));
         if !sound {
             self.trim_engine(true);
@@ -142,7 +149,7 @@ impl App {
     /// A view was suspended now: its renderer is trimmed soon.
     pub(super) fn suspended_a_view(&mut self, now: Instant) {
         self.memory.engine_trim_at = Some(now + memory::ENGINE_TRIM_AFTER);
-        self.memory.engine_trim_again = true;
+        self.memory.engine_trims = 0;
     }
 
     /// How long until the engine trim, if one waits.
@@ -158,8 +165,8 @@ impl App {
         if self.memory.engine_trim_at.is_none_or(|at| at > now) {
             return;
         }
-        self.memory.engine_trim_at =
-            std::mem::take(&mut self.memory.engine_trim_again).then(|| now + memory::ENGINE_TRIM_AGAIN);
+        self.memory.engine_trim_at = memory::ENGINE_TRIM_AGAIN.get(self.memory.engine_trims).map(|wait| now + *wait);
+        self.memory.engine_trims += 1;
         self.trim_engine(false);
     }
 
