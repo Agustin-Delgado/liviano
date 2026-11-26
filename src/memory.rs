@@ -281,12 +281,34 @@ pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<
     over
 }
 
+/// The views out of sight that stay awake (not suspended) at most. A view
+/// that is awake costs 30 to 40 MB of memory in its renderer; a suspended
+/// one comes back in tens of milliseconds, as it was. Thus the tabs that
+/// the person goes back and forth between stay awake, and the others are
+/// suspended at once, before the "suspend" time.
+pub const AWAKE_TABS: usize = 1;
+
+/// Of the views out of sight that are awake (when each was last on screen,
+/// and its id), the ones beyond the `cap` seen most recently: the least
+/// recently seen first.
+pub fn over_awake(awake: &[(Instant, u64)], cap: usize) -> Vec<u64> {
+    let mut newest_first = awake.to_vec();
+    newest_first.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    newest_first.iter().skip(cap).rev().map(|(_, id)| *id).collect()
+}
+
 /// The engine trims a suspended page, but its renderer keeps some
 /// megabytes in memory (4 MB for each tab in the test, 30 tabs). The
 /// renderer does not run, so the system can take all of it: this long
 /// after a suspend, Nea empties the working set of the renderers that
 /// serve only suspended pages. The suspend is not complete at once.
 pub const ENGINE_TRIM_AFTER: Duration = Duration::from_secs(2);
+/// The engine continues to work in a renderer for some time after the
+/// suspend, and that brings memory back (12 to 15 MB for each tab in the
+/// test, seconds after a trim). Thus more trims come: each one this long
+/// after the one before.
+pub const ENGINE_TRIM_AGAIN: [Duration; 3] =
+    [Duration::from_secs(13), Duration::from_secs(25), Duration::from_secs(40)];
 
 /// Of the renderer processes (the id of each one, and the main frame of
 /// each page that has a frame in it), the ones that serve only suspended

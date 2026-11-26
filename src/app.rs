@@ -1651,6 +1651,8 @@ impl App {
         let mut stages = Vec::new();
         // Live views out of sight that may still be discarded: what the cap counts.
         let mut capped = Vec::new();
+        // Views out of sight that are not suspended and not due for it yet.
+        let mut awake_views = Vec::new();
         // A page that waits for its sign-in pop-up stays live too.
         let keep_awake: Vec<bool> =
             self.tabs.all().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
@@ -1687,6 +1689,18 @@ impl App {
             if step != crate::memory::Step::Discard && !tab.pinned && !tab.private && !awake && !shown {
                 capped.push((tab.last_active, tab.id));
             }
+            if matches!(step, crate::memory::Step::Keep | crate::memory::Step::Lower)
+                && !facts.suspended
+                && !awake
+                && !shown
+            {
+                awake_views.push((tab.last_active, tab.id));
+            }
+        }
+        for id in crate::memory::over_awake(&awake_views, crate::memory::AWAKE_TABS) {
+            stages.retain(|(_, stage, ..)| *stage != id);
+            let since = awake_views.iter().find(|(_, view)| *view == id).map_or(now, |(since, _)| *since);
+            stages.push((since, id, crate::memory::Step::Suspend, !low));
         }
         if let Some(limit) = crate::memory::live_limit(self.settings.live_tabs_limit, pressure) {
             to_discard

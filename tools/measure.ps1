@@ -28,6 +28,9 @@
                             -HeavyVariants (with and without blocking)
     5 20-tabs               20 loaded tabs, 19 of them asleep
     6 restore-50            startup with a session of 50 tabs
+    7 20-tabs-open          20 loaded tabs, and the script puts no tab to
+                            sleep: each browser does what it does alone
+    8 20-tabs-idle          the same, after -IdleSec with no input
 
   Gate: with -Baseline, the script compares the results with the file. It
   exits with code 1 if a scenario is more than its tolerance. -UpdateBaseline
@@ -53,6 +56,9 @@ param(
     [System.Collections.IDictionary]$HeavyVariants = $null,
     [string[]]$ManyUrls = @('https://example.com/', 'https://example.org/', 'https://example.net/', 'https://www.iana.org/', 'https://info.cern.ch/'),
     [int]$SettleSec = 10,
+    [int]$IdleSec = 300,
+    # Settings for the two scenarios with nothing forced.
+    [System.Collections.IDictionary]$NaturalSettings = @{},
     [int]$Samples = 3,
     [int]$LoadTimeoutSec = 45,
     [string[]]$Only = @(),
@@ -296,7 +302,7 @@ function Get-ForeignMemory([string]$processName, [string]$profileDir) {
     [pscustomobject]@{ total = [double]$m.total; app = 0; engine = [double]$m.total; processes = @($m.processes).Count }
 }
 
-function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls) {
+function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls, [int]$idleSec = 0) {
     $b = $script:Foreign[$browser]
     if (-not $b.Wanted -or -not (Test-Wanted $name)) { return }
     $exe = Find-Browser $browser
@@ -312,6 +318,7 @@ function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls
     try {
         # Neither can be asked when a page is done: they get the load timeout's share.
         Start-Sleep -Seconds ([Math]::Min($LoadTimeoutSec, 10 + 2 * $urls.Count))
+        if ($idleSec) { Start-Sleep -Seconds $idleSec }
         $m = Measure-Samples { Get-ForeignMemory $b.Process $profileDir }
         Add-Row $name $browser $m
     } finally {
@@ -323,8 +330,8 @@ function Invoke-ForeignScenario([string]$browser, [string]$name, [string[]]$urls
     }
 }
 
-function Invoke-OthersScenario([string]$name, [string[]]$urls) {
-    foreach ($browser in $script:Foreign.Keys) { Invoke-ForeignScenario $browser $name $urls }
+function Invoke-OthersScenario([string]$name, [string[]]$urls, [int]$idleSec = 0) {
+    foreach ($browser in $script:Foreign.Keys) { Invoke-ForeignScenario $browser $name $urls $idleSec }
 }
 
 # ---------- filter lists ----------
@@ -403,6 +410,21 @@ Invoke-NeaScenario '20-tabs' @{} $null {
     $note
 }
 Invoke-OthersScenario '20-tabs' $manyUrls
+
+foreach ($natural in @(@{ Name = '20-tabs-open'; Idle = 0 }, @{ Name = '20-tabs-idle'; Idle = $IdleSec })) {
+    Invoke-NeaScenario $natural.Name $NaturalSettings $null {
+        $late = 0
+        foreach ($url in $manyUrls) {
+            $tab = (Invoke-Nea open @{ url = $url }).tab
+            if (Wait-Tab $tab) { $late++ }
+        }
+        if ($natural.Idle) { Start-Sleep -Seconds $natural.Idle }
+        $note = if ($natural.Idle) { "$($natural.Idle) s with no input" } else { 'no tab put to sleep by the script' }
+        if ($late) { $note += ", $late not done loading" }
+        $note
+    }
+    Invoke-OthersScenario $natural.Name $manyUrls $natural.Idle
+}
 
 Invoke-NeaScenario 'restore-50' @{} $restoreSession {
     $state = Invoke-Nea state
