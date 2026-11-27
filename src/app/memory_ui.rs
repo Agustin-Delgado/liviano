@@ -22,11 +22,21 @@ const TIMER_MINIMIZED: usize = 0x4B;
 /// often: each time, the pages it uses next come back from the page file.
 const TRIM_EVERY: Duration = Duration::from_secs(30);
 
+/// A change in whether a person can see the window (`App::sight_changed`).
+pub(super) enum Sight {
+    Screen { on: bool },
+    Session { locked: bool },
+}
+
 #[derive(Default)]
 pub(super) struct MemoryUi {
     minimized_at: Option<Instant>,
     /// The views are hidden because the window is minimized.
     pages_hidden: bool,
+    /// The screen is off: nobody can see the pages.
+    screen_off: bool,
+    /// The session is locked: nobody can see the pages.
+    locked: bool,
     trimmed_at: Option<Instant>,
     /// A view was suspended: the renderers of the suspended pages are
     /// trimmed at this time (`memory::ENGINE_TRIM_AFTER`).
@@ -46,7 +56,12 @@ impl MemoryUi {
     }
 
     pub(super) fn pages_hidden(&self) -> bool {
-        self.pages_hidden
+        self.pages_hidden || self.unseen()
+    }
+
+    /// Nobody can see the window: the screen is off or the session is locked.
+    fn unseen(&self) -> bool {
+        self.screen_off || self.locked
     }
 
     /// Whether a trim is due now, and if so, notes it.
@@ -94,6 +109,37 @@ impl App {
             self.memory.pages_hidden = false;
         }
         true
+    }
+
+    /// The screen went off or came on, or the session was locked or
+    /// unlocked. While nobody can see the window, its views are hidden: the
+    /// engine then stops drawing them, as it does for a minimized window. A
+    /// page with an animation that never stops would use the processor for
+    /// all of that time. Sound continues.
+    pub(super) fn sight_changed(&mut self, sight: Sight) {
+        let before = self.memory.unseen();
+        match sight {
+            Sight::Screen { on } => self.memory.screen_off = !on,
+            Sight::Session { locked } => self.memory.locked = locked,
+        }
+        let unseen = self.memory.unseen();
+        if unseen == before {
+            return;
+        }
+        crate::diag::trace(|| format!("pages unseen: {unseen}"));
+        if unseen {
+            // The idle time of the pages on screen starts now (refer to `sleep_pass`).
+            let now = Instant::now();
+            for id in self.visible_tabs() {
+                if let Some(tab) = self.tabs.get_mut(id) {
+                    tab.last_active = now;
+                }
+            }
+        }
+        self.show_active();
+        if !unseen {
+            self.invalidate();
+        }
     }
 
     fn minimized_tick(&mut self) {
