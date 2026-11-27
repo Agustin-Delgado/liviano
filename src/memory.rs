@@ -303,12 +303,19 @@ pub fn over_awake(awake: &[(Instant, u64)], cap: usize) -> Vec<u64> {
 /// after a suspend, Nea empties the working set of the renderers that
 /// serve only suspended pages. The suspend is not complete at once.
 pub const ENGINE_TRIM_AFTER: Duration = Duration::from_secs(2);
-/// The engine continues to work in a renderer for some time after the
-/// suspend, and that brings memory back (12 to 15 MB for each tab in the
-/// test, seconds after a trim). Thus more trims come: each one this long
-/// after the one before.
-pub const ENGINE_TRIM_AGAIN: [Duration; 3] =
-    [Duration::from_secs(13), Duration::from_secs(25), Duration::from_secs(40)];
+/// The engine works again in the renderer of a page approximately 20 s
+/// after its suspend, and that brings back 12 to 15 MB for each tab, all
+/// that a trim gave to the system (30 tabs: 374 MB at 16 s, 717 MB at
+/// 26 s). Thus more trims come, close together in that time: each one this
+/// long after the one before.
+pub const ENGINE_TRIM_AGAIN: [Duration; 6] = [
+    Duration::from_secs(18),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+    Duration::from_secs(5),
+    Duration::from_secs(10),
+    Duration::from_secs(35),
+];
 
 /// Of the renderer processes (the id of each one, and the main frame of
 /// each page that has a frame in it), the ones that serve only suspended
