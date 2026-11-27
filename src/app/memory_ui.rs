@@ -24,8 +24,16 @@ const TRIM_EVERY: Duration = Duration::from_secs(30);
 
 /// A change in whether a person can see the window (`App::sight_changed`).
 pub(super) enum Sight {
-    Screen { on: bool },
-    Session { locked: bool },
+    Screen {
+        on: bool,
+    },
+    Session {
+        locked: bool,
+    },
+    /// A different window covers all of the window (refer to `cover_ui`).
+    Cover {
+        covered: bool,
+    },
 }
 
 #[derive(Default)]
@@ -37,6 +45,8 @@ pub(super) struct MemoryUi {
     screen_off: bool,
     /// The session is locked: nobody can see the pages.
     locked: bool,
+    /// A different window covers all of the window: nobody can see the pages.
+    covered: bool,
     trimmed_at: Option<Instant>,
     /// A view was suspended: the renderers of the suspended pages are
     /// trimmed at this time (`memory::ENGINE_TRIM_AFTER`).
@@ -48,6 +58,9 @@ pub(super) struct MemoryUi {
     /// memory pressure the app trims itself again and again, and that must
     /// not stop the trim of the engine.
     engine_rested_at: Option<Instant>,
+    /// Since when a window of a different program is in front, as the sleep
+    /// timer saw it.
+    background_since: Option<Instant>,
 }
 
 impl MemoryUi {
@@ -59,9 +72,10 @@ impl MemoryUi {
         self.pages_hidden || self.unseen()
     }
 
-    /// Nobody can see the window: the screen is off or the session is locked.
+    /// Nobody can see the window: the screen is off, the session is locked,
+    /// or a different window covers all of it.
     fn unseen(&self) -> bool {
-        self.screen_off || self.locked
+        self.screen_off || self.locked || self.covered
     }
 
     /// Whether a trim is due now, and if so, notes it.
@@ -121,6 +135,7 @@ impl App {
         match sight {
             Sight::Screen { on } => self.memory.screen_off = !on,
             Sight::Session { locked } => self.memory.locked = locked,
+            Sight::Cover { covered } => self.memory.covered = covered,
         }
         let unseen = self.memory.unseen();
         if unseen == before {
@@ -167,16 +182,24 @@ impl App {
     }
 
     /// A window that got no input for `IDLE_TRIM_AFTER` gives back the app's
-    /// memory, one time for each pause. Called by the sleep timer.
+    /// memory, one time for each pause. The engine gives back its memory
+    /// also when the window is in the background for that time, and again
+    /// each `REST_TRIM_EVERY`. Called by the sleep timer.
     pub(super) fn idle_trim(&mut self) {
-        let Some(quiet) = super::quiet_time() else { return };
         let now = Instant::now();
+        if !super::in_background() {
+            self.memory.background_since = None;
+        }
+        let background = super::in_background().then(|| *self.memory.background_since.get_or_insert(now));
+        let away = super::away_time(background.map(|since| now.duration_since(since)));
+        let Some(quiet) = super::quiet_time() else { return };
         if memory::idle_trim_due(quiet, self.memory.trimmed_at.map(|at| now.duration_since(at))) {
             self.memory.trimmed_at = Some(now);
             crate::diag::trace(|| "idle trim".to_string());
             memory::trim_working_set();
         }
-        if memory::idle_trim_due(quiet, self.memory.engine_rested_at.map(|at| now.duration_since(at))) {
+        let rested = self.memory.engine_rested_at.map(|at| now.duration_since(at));
+        if away.is_some_and(|away| memory::rest_trim_due(away, rested)) {
             self.trim_engine_at_rest();
         }
     }
@@ -218,7 +241,8 @@ impl App {
         self.memory.engine_trim_at = self.trim_engine(false).then(|| now + wait);
     }
 
-    /// `rest`: also the engine processes that are not renderers.
+    /// `rest`: all the engine processes, also the renderer of the page on
+    /// screen.
     /// Tells whether there are suspended pages.
     fn trim_engine(&self, rest: bool) -> bool {
         let suspended: std::collections::HashSet<u32> = self

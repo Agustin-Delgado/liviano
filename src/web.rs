@@ -235,14 +235,19 @@ pub struct WebTab {
 /// Empties the working set of each renderer process that serves only
 /// suspended pages (`suspended`: their main frames). The engine tells which
 /// frames each process has; the answer comes later, and the trim runs on
-/// its own thread. `rest`: nobody uses the window, so the other engine
-/// processes (browser, GPU, utility) give back their working set too.
+/// its own thread. `rest`: nobody uses the window, so all the engine
+/// processes give back their working set: each renderer, also that of the
+/// page on screen, and the browser, GPU and utility processes.
 pub fn trim_suspended(env: &ICoreWebView2Environment, suspended: std::collections::HashSet<u32>, rest: bool) {
     let Ok(env) = env.cast::<ICoreWebView2Environment13>() else { return };
     let handler = GetProcessExtendedInfosCompletedHandler::create(Box::new(move |result, infos| {
         let Some(infos) = infos.filter(|_| result.is_ok()) else { return Ok(()) };
         let (renderers, others) = unsafe { engine_processes(&infos) };
-        let mut pids = crate::memory::renderers_to_trim(&renderers, &suspended);
+        let mut pids = if rest {
+            renderers.iter().map(|(pid, _)| *pid).collect()
+        } else {
+            crate::memory::renderers_to_trim(&renderers, &suspended)
+        };
         crate::diag::trace(|| format!("engine trim: {} of {} renderers, rest {rest}", pids.len(), renderers.len()));
         if rest {
             pids.extend(others);

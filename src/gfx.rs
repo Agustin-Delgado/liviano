@@ -921,6 +921,51 @@ pub fn fill_gdi(hdc: HDC, rect: RECT, color: Rgb) {
     }
 }
 
+/// Draws a picture (BGRA with no transparent part, `width` x `height`)
+/// into `rect` with plain GDI: a large picture drawn one time, with no
+/// Direct2D target for all of its area.
+pub fn picture_gdi(hdc: HDC, rect: RECT, pixels: &[u8], width: u32, height: u32) {
+    use windows::Win32::Graphics::Gdi::{
+        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, HALFTONE, SRCCOPY, SetBrushOrgEx, SetStretchBltMode,
+        StretchDIBits,
+    };
+    if width == 0 || height == 0 || pixels.len() < (width * height * 4) as usize {
+        return;
+    }
+    let info = BITMAPINFO {
+        bmiHeader: BITMAPINFOHEADER {
+            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+            biWidth: width as i32,
+            // Negative: the first row is the top one.
+            biHeight: -(height as i32),
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: BI_RGB.0,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    unsafe {
+        SetStretchBltMode(hdc, HALFTONE);
+        let _ = SetBrushOrgEx(hdc, 0, 0, None);
+        StretchDIBits(
+            hdc,
+            rect.left,
+            rect.top,
+            rect.right - rect.left,
+            rect.bottom - rect.top,
+            0,
+            0,
+            width as i32,
+            height as i32,
+            Some(pixels.as_ptr() as *const _),
+            &info,
+            DIB_RGB_COLORS,
+            SRCCOPY,
+        );
+    }
+}
+
 #[cfg(all(test, nea_tests))]
 #[path = "../tests/unit/gfx.rs"]
 #[rustfmt::skip]
