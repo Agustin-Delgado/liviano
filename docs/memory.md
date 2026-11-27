@@ -48,10 +48,20 @@ After a suspend, the renderer of the page still keeps some megabytes in
 memory (4 to 9 MB for each tab in the test). The renderer does not run, so
 2 s after a suspend Nea empties the working set of each renderer process
 that has only suspended pages (`EmptyWorkingSet`). The engine tells which
-main frames each renderer has (`GetProcessExtendedInfos`). A renderer that
-also has a live page, or no main frame, stays as it is. When the tab comes
-back, the system gives the pages back from its standby list or from the
-page file.
+main frames each renderer has (`GetProcessExtendedInfos`). A frame of a
+different site is in its own renderer: Nea goes up through the parent
+frames to find the page that the frame is in. A renderer that also has a
+live page, or no frame of a page, stays as it is. When the tab comes back,
+the system gives the pages back from its standby list or from the page
+file.
+
+The engine works again in a suspended renderer from time to time and
+brings memory back, for minutes with a heavy page. Thus the trims come
+again: 2, 20, 25, 30, 35, 45 and 80 s after the last suspend, and then
+each 30 s while a suspended page exists.
+
+The engine can refuse a suspend. Then the view stays awake for Nea, and
+Nea tries again after 30 s.
 
 ### One view awake
 
@@ -390,10 +400,30 @@ is near its limit (see "Low memory").
 | Open | 208 | 291 | 411 | 469 |
 | 5 min with no input | 74 | 156 | 401 | 503 |
 
+20 tabs of heavy sites (10 sites, each two times: Wikipedia, GitHub, MDN,
+YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow, NYTimes),
+nothing forced, a new profile for each browser, median of 3 runs (4 for
+Nea 0.1.9):
+
+| | Nea | Nea 0.1.9 | Edge | Chrome |
+|---|---:|---:|---:|---:|
+| Open | 610 | 1633 | 2665 | 3138 |
+| 5 min with no input | 215 | 578 | 2832 | 3270 |
+
+The runs of Nea after 5 min: 224, 215, 190. The runs of 0.1.9: 470, 682,
+475, 684. Before the trim came again each 30 s, the runs of Nea were 203,
+438, 473: the renderers of heavy pages bring memory back for minutes.
+
 The time to come back to a suspended tab did not change (`tools/return.ps1`,
 real pages, 2 runs of each build): approximately 40 ms more than a script
 call on the tab on screen, with and without the trims. The computer had
 free memory, so the system did not write the trimmed pages to the disk.
+
+With low memory (`tools/pressure.ps1` held 6.6 GB: commit of the system
+93 to 95 %, memory load 83 %), the same test gave the same times for Nea
+(151 to 177 ms) and no tab was discarded. Release 0.1.9 discarded a tab in
+the first 90 s. The page file of the test computer has a fixed size, so
+the test did not go as far as a return from the disk.
 
 One tab costs 152 MB: renderer 56, GPU process 55, browser process 25,
 utility 9, app 6. No engine switch changed this by more than 3 MB (GPU
