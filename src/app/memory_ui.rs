@@ -142,7 +142,7 @@ impl App {
         self.memory.engine_rested_at = Some(Instant::now());
         let sound = self.tabs.all().any(|tab| matches!(&tab.live, super::Live::Ready(web) if web.is_playing_audio()));
         if !sound {
-            self.trim_engine(true);
+            let _ = self.trim_engine(true);
         }
     }
 
@@ -165,13 +165,16 @@ impl App {
         if self.memory.engine_trim_at.is_none_or(|at| at > now) {
             return;
         }
-        self.memory.engine_trim_at = memory::ENGINE_TRIM_AGAIN.get(self.memory.engine_trims).map(|wait| now + *wait);
+        let wait =
+            memory::ENGINE_TRIM_AGAIN.get(self.memory.engine_trims).copied().unwrap_or(memory::ENGINE_TRIM_EVERY);
         self.memory.engine_trims += 1;
-        self.trim_engine(false);
+        // With no suspended page there is nothing to trim: the next suspend starts the trims again.
+        self.memory.engine_trim_at = self.trim_engine(false).then(|| now + wait);
     }
 
     /// `rest`: also the engine processes that are not renderers.
-    fn trim_engine(&self, rest: bool) {
+    /// Tells whether there are suspended pages.
+    fn trim_engine(&self, rest: bool) -> bool {
         let suspended: std::collections::HashSet<u32> = self
             .tabs
             .all()
@@ -180,11 +183,13 @@ impl App {
                 _ => None,
             })
             .collect();
+        let any = !suspended.is_empty();
         if let Some(env) = &self.env
-            && (rest || !suspended.is_empty())
+            && (rest || any)
         {
             crate::web::trim_suspended(env, suspended, rest);
         }
+        any
     }
 
     /// The low memory signal: every tab out of sight to its last stage now.

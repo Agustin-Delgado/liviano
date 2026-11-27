@@ -1662,7 +1662,10 @@ impl App {
                 tab.last_active = now;
                 continue;
             }
-            let Live::Ready(web) = &tab.live else { continue };
+            let Live::Ready(web) = &mut tab.live else { continue };
+            if web.suspend_refused(now, crate::memory::SUSPEND_AGAIN_AFTER) {
+                continue;
+            }
             let facts = crate::memory::Facts {
                 idle: now.duration_since(tab.last_active),
                 minimized_on_screen: shown,

@@ -281,6 +281,16 @@ pub fn over_cap(candidates: &[(Instant, u64)], cap: usize, now: Instant) -> Vec<
     over
 }
 
+/// After the trims of `ENGINE_TRIM_AGAIN`, one more each this long while
+/// there are suspended pages. The renderer of a heavy page (frames of
+/// other sites, workers) continues to bring memory back for minutes after
+/// its suspend: 20 real pages went from 238 MB to 583 MB in 3 min.
+pub const ENGINE_TRIM_EVERY: Duration = Duration::from_secs(30);
+
+/// The engine can say no to a suspend (a page that plays media, for
+/// example). Nea asks again this long after.
+pub const SUSPEND_AGAIN_AFTER: Duration = Duration::from_secs(30);
+
 /// The views out of sight that stay awake (not suspended) at most. A view
 /// that is awake costs 30 to 40 MB of memory in its renderer; a suspended
 /// one comes back in tens of milliseconds, as it was. Thus the tabs that

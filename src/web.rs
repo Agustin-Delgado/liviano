@@ -211,6 +211,11 @@ pub struct WebTab {
     pub controller: ICoreWebView2Controller,
     pub webview: ICoreWebView2,
     pub suspended: bool,
+    /// The engine said no to the last suspend (a page that plays media or
+    /// holds a lock, for example). Set by the answer, read by `suspend_refused`.
+    refused: Rc<Cell<bool>>,
+    /// When the engine last said no: the next try comes later.
+    refused_at: Option<std::time::Instant>,
     /// The engine was told that the page may use less memory: the first
     /// stage of a tab out of sight (refer to `memory`).
     pub lowered: bool,
@@ -256,8 +261,8 @@ pub fn trim_suspended(env: &ICoreWebView2Environment, suspended: std::collection
     }
 }
 
-/// Each renderer process (its id, and the main frames in it; a frame in a
-/// frame is not counted), and the ids of the other engine processes.
+/// Each renderer process (its id, and the main frame of the page of each
+/// frame in it), and the ids of the other engine processes.
 unsafe fn engine_processes(infos: &ICoreWebView2ProcessExtendedInfoCollection) -> (Vec<(u32, Vec<u32>)>, Vec<u32>) {
     let mut renderers = Vec::new();
     let mut others = Vec::new();
@@ -303,14 +308,18 @@ unsafe fn engine_processes(infos: &ICoreWebView2ProcessExtendedInfoCollection) -
     (renderers, others)
 }
 
-/// The id of `frame` if it is the main frame of a page. None: a frame in a frame.
+/// The id of the main frame of the page that `frame` is in. A frame of
+/// another site (an ad, an embed) has its own renderer, and it belongs to
+/// the page above it.
 unsafe fn main_frame_id(frame: &ICoreWebView2FrameInfo) -> Result<Option<u32>> {
     unsafe {
-        let frame = frame.cast::<ICoreWebView2FrameInfo2>()?;
-        let mut kind = COREWEBVIEW2_FRAME_KIND_UNKNOWN;
-        frame.FrameKind(&mut kind)?;
-        if kind != COREWEBVIEW2_FRAME_KIND_MAIN_FRAME {
-            return Ok(None);
+        let mut frame = frame.cast::<ICoreWebView2FrameInfo2>()?;
+        // A page has few levels of frames; the limit stops a loop in bad data.
+        for _ in 0..64 {
+            match frame.ParentFrameInfo().ok().and_then(|parent| parent.cast::<ICoreWebView2FrameInfo2>().ok()) {
+                Some(parent) => frame = parent,
+                None => break,
+            }
         }
         let mut id = 0u32;
         frame.FrameId(&mut id)?;
@@ -484,6 +493,8 @@ impl WebTab {
                 controller,
                 webview,
                 suspended: false,
+                refused: Rc::new(Cell::new(false)),
+                refused_at: None,
                 lowered: false,
                 shown,
                 passwords: true,
@@ -814,10 +825,28 @@ impl WebTab {
         self.lower();
         unsafe {
             if let Ok(w3) = self.webview.cast::<ICoreWebView2_3>() {
-                let _ = w3.TrySuspend(&TrySuspendCompletedHandler::create(Box::new(|_, _| Ok(()))));
+                let refused = self.refused.clone();
+                let _ = w3.TrySuspend(&TrySuspendCompletedHandler::create(Box::new(move |result, done| {
+                    if result.is_err() || !done {
+                        crate::diag::trace(|| "suspend refused".to_string());
+                        refused.set(true);
+                    }
+                    Ok(())
+                })));
             }
         }
         self.suspended = true;
+    }
+
+    /// Whether the engine said no to a suspend less than `wait` ago: the
+    /// view is awake, and the next try waits. A call to the engine holds
+    /// the window, so Nea does not ask again and again.
+    pub fn suspend_refused(&mut self, now: std::time::Instant, wait: std::time::Duration) -> bool {
+        if self.refused.take() {
+            self.suspended = false;
+            self.refused_at = Some(now);
+        }
+        self.refused_at.is_some_and(|at| now.saturating_duration_since(at) < wait)
     }
 
     /// The id of the main frame of the page, as the engine names it in
