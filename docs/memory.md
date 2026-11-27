@@ -76,6 +76,33 @@ with it, 0.7 s. Edge and Chrome also stop then.
 A test run (`NEA_BENCH`) does not do this: it measures the pages as a
 person sees them, also at night.
 
+### Window covered by a different window
+
+The engine does not know that a window of a different program is on top
+of the view: it draws the page below a maximized editor as if a person
+looked at it. While the window of Nea is not the active one, it asks each
+second if one window covers all of it (`cover::out_of_sight`), or if it is
+on a different virtual desktop. Only one window that contains all of the
+window of Nea counts. A transparent window (a layered window, or one with
+a region) does not count, and the round corners of Windows 11 are part of
+the test.
+
+After two yes answers (a window that only moves across is not a cover),
+Nea takes a picture of each page on screen, hides the views and draws the
+pictures in their place. Thus the small pictures that Windows shows of
+the window (Alt+Tab, the taskbar) continue to show the page. A picture is
+at most 1920 pixels wide, and Nea drops it when the views come back. The
+views come back in 250 ms at most after the cover goes, and immediately
+when the window becomes the active one. Sound continues. The page is not
+suspended: its scripts run, as in a minimized window.
+
+Measured with a page that draws an animation that never stops, processor
+time of Nea and its engine in 20 s: 8.3 s in sight, 0.4 s covered, 5.2 s
+in sight again (a development build, 120 Hz screen). Edge and Chrome do
+the same thing for their own windows.
+
+A test run does not do this, unless `NEA_BENCH_SIGHT` is set.
+
 ### One view awake
 
 Only one view out of sight stays awake: the tab that you saw last. Nea
@@ -161,11 +188,29 @@ tab churn, this changed the app process from 25.2 MB working set and
 use the same step. The first paint after the pause takes the pages back
 from memory.
 
-At the same time, the engine processes that are not renderers (browser,
-GPU, utility) give back their working set too, and so do the renderers of
-suspended pages. Nea does not do this while a page plays sound: a person
-can watch a video with no input, and a trim of a process that runs can drop
-a frame.
+At the same time, all the engine processes give back their working set:
+the browser, GPU and utility processes, and each renderer, also that of
+the page on screen. This comes again each 60 s for as long as nobody uses
+the window (`memory::REST_TRIM_EVERY`). It also comes when the window is
+in the background for 2 min: a window of a different program is the active
+one, and the person works there. Before this, the engine trim came one
+time for each pause and left the page on screen as it was. That page, the
+browser process and the GPU process got back their memory in the next
+minutes, and they were most of what stayed: 20 heavy sites after 5 min
+with no input had approximately 296 MB, and have 42 to 65 MB now (3 runs).
+
+Nea does not do this while a page plays sound: a person can watch a video
+with no input, and a trim of a process that runs can drop a frame. A
+script request counts as use, so a test that drives Nea measures it as in
+use.
+
+The cost was measured (`tools/return.ps1`, 9 tabs of heavy sites, 300 s
+with no input, 2 runs before and 4 after). The processor time did not
+change: 71.5 and 74.1 s, against 76.4 s before. The time to come back to a
+suspended tab did not change: 160 to 190 ms. The first script call on the
+page on screen after the trims took 72 and 103 ms, less than the same call
+just after the load (189 and 328 ms): the pages that the trim took out
+come back from memory, not from the disk, while the system has free memory.
 
 ## Low memory
 
