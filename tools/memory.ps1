@@ -55,6 +55,9 @@ param(
     ),
     # Extra engine switches (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS), to try a flag before building it in.
     [string]$EngineArgs = '',
+    # With a value, the script measures each 5 s for this long after the look
+    # at each tab, and then stops: how the memory changes after the suspends.
+    [int]$SeriesSec = 0,
     # Settings merged into settings.json, to try a policy without a build.
     [hashtable]$Settings = @{},
     [string]$Out = ''
@@ -321,6 +324,14 @@ function Invoke-Scenario([int]$n, [string[]]$urls) {
         Select-Next ($n - 1) 400
         # Back on the first tab, as after a look through all of them.
         if ($n -gt 1) { Select-Next 1 400 }
+        if ($SeriesSec -gt 0) {
+            $watch = [Diagnostics.Stopwatch]::StartNew()
+            while ($watch.Elapsed.TotalSeconds -lt $SeriesSec) {
+                Start-Sleep -Seconds 5
+                Measure-Phase $run $n ('{0:N0}s' -f $watch.Elapsed.TotalSeconds)
+            }
+            return
+        }
         Start-Sleep -Seconds $SettleSec
         Measure-Phase $run $n 'idle'
         Start-Sleep -Seconds ([int]($IdleMin * 60))

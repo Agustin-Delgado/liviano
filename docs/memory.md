@@ -362,18 +362,25 @@ window.
 
 | Phase | Before | After |
 |---|---:|---:|
-| 30 s after a look at each tab | 462 / 815 | 711 / 1867 |
-| 60 s after | 456 / 816 | 278 / 1854 |
 | idle 5 min | 190 / 534 | 121 / 1834 |
 | minimized | 6 / 514 | 14 / 1815 |
 | Tabs that load again when they come back | 25 | 0 |
 
-The first 30 s cost more: the engine continues to work in the renderer of
-a page for approximately 40 s after its suspend, and brings back the
-memory that a trim gave to the system. After that, the trims hold. The
-commit is more than two times as much: it is space in the page file, not
-memory in use, and Nea gives it back when the system is near its limit
-(see "Low memory").
+The time after a look at each of the 30 tabs, private working set in MB,
+one sample each 10 s (`tools/memory.ps1 -SeriesSec 70`):
+
+| Seconds | 5 | 16 | 26 | 37 | 47 | 57 | 68 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Before | 645 | 634 | 458 | 459 | 458 | 456 | 465 |
+| After | 407 | 458 | 263 | 251 | 254 | 271 | 223 |
+
+The engine works again in the renderer of a page approximately 20 s after
+its suspend, and brings back the memory that a trim gave to the system
+(717 MB at 26 s when the next trim came only at 40 s). Thus the trims
+come close together in that time: 2, 20, 25, 30, 35, 45 and 80 s after
+the last suspend. The commit is more than two times as much: it is space
+in the page file, not memory in use, and Nea gives it back when the system
+is near its limit (see "Low memory").
 
 20 tabs of light pages, nothing forced (`tools/measure.ps1`, scenarios
 "20-tabs-open" and "20-tabs-idle"), total private working set in MB:
@@ -387,6 +394,12 @@ The time to come back to a suspended tab did not change (`tools/return.ps1`,
 real pages, 2 runs of each build): approximately 40 ms more than a script
 call on the tab on screen, with and without the trims. The computer had
 free memory, so the system did not write the trimmed pages to the disk.
+
+One tab costs 152 MB: renderer 56, GPU process 55, browser process 25,
+utility 9, app 6. No engine switch changed this by more than 3 MB (GPU
+rasterization off, shader cache off, one raster thread, background
+networking and component update off). `--disable-gpu` gave 108 MB, but
+then the engine draws in software.
 
 Tried and not used: `--in-process-gpu` (one process less, but 207 MB after
 5 min: the trim does not hold). `--process-per-site` gave 190 MB open and
