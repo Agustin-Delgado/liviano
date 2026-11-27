@@ -7,6 +7,7 @@ mod autofill;
 mod bench;
 mod bookmark_bar;
 mod bookmarks;
+mod cover;
 mod crx;
 mod curtain;
 mod design;

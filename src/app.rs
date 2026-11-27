@@ -33,6 +33,7 @@ use windows::{
 mod apply_settings;
 mod bench_ui;
 mod bookmarks_ui;
+mod cover_ui;
 mod engine_ui;
 mod extensions_ui;
 mod frame_ui;
@@ -213,6 +214,7 @@ struct App {
     painted_sheet: Option<tabbar::Sheet>,
     engine: engine_ui::EngineUi,
     memory: memory_ui::MemoryUi,
+    cover: cover_ui::CoverUi,
     /// Where the pages were scrolled when they left the screen (`memory::ScrollMemo`).
     scrolls: crate::memory::ScrollMemo,
     power: power_ui::PowerUi,
@@ -461,6 +463,7 @@ pub fn run() -> windows::core::Result<()> {
         painted_sheet: None,
         engine: Default::default(),
         memory: Default::default(),
+        cover: Default::default(),
         scrolls: Default::default(),
         power: Default::default(),
         fullscreen: Default::default(),
@@ -489,6 +492,7 @@ pub fn run() -> windows::core::Result<()> {
     }
     crate::memory::watch_low_memory(hwnd, memory_ui::WM_APP_LOW_MEMORY);
     power_ui::watch_sight(hwnd);
+    cover_ui::watch_cover(hwnd);
     with_app(|app| {
         app.relayout();
         // With no tabs the field opens at once: after the first paint,
@@ -804,6 +808,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             with_app(|app| app.thumbs_shrunk());
             LRESULT(0)
         }
+        cover_ui::WM_APP_COVER => {
+            with_app(|app| app.cover_pictures_ready());
+            LRESULT(0)
+        }
         bench_ui::WM_APP_DPI => {
             bench_ui::simulate_dpi(hwnd, wparam.0 as u32);
             LRESULT(0)
@@ -1003,12 +1011,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             default()
         }
         WM_ACTIVATE => {
-            if (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE {
+            let active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
+            if active {
                 with_app(|app| app.restore_focus());
             } else {
                 // Another program took the keyboard: the account list goes.
                 with_app(|app| app.autofill_close());
             }
+            with_app(|app| app.window_activated(active));
             default()
         }
         WM_CLOSE => {
@@ -1196,13 +1206,17 @@ impl App {
             let c = self.layout.content;
             RECT { left: c.left, top: c.top, right: c.right, bottom: c.bottom }
         });
+        // The pictures of the hidden pages are the ground (refer to `cover_ui`).
+        let pictured = self.cover_pictured();
         if dirty.right > dirty.left && dirty.bottom > dirty.top {
             for rect in gfx::visible_rects(hdc, self.hwnd, dirty) {
                 let (chrome, ground) = match flat {
                     Some(content) => split_off(rect, content),
                     None => (vec![rect], None),
                 };
-                if let Some(ground) = ground {
+                if let Some(ground) = ground
+                    && !pictured
+                {
                     gfx::fill_gdi(hdc, ground, self.palette.field);
                 }
                 for piece in chrome {
@@ -1216,6 +1230,7 @@ impl App {
                     }
                 }
             }
+            self.paint_cover(hdc);
         }
         self.surface = surface;
         // What is on screen now is known when this paint drew every change

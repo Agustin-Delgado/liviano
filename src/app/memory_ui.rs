@@ -24,8 +24,16 @@ const TRIM_EVERY: Duration = Duration::from_secs(30);
 
 /// A change in whether a person can see the window (`App::sight_changed`).
 pub(super) enum Sight {
-    Screen { on: bool },
-    Session { locked: bool },
+    Screen {
+        on: bool,
+    },
+    Session {
+        locked: bool,
+    },
+    /// A different window covers all of the window (refer to `cover_ui`).
+    Cover {
+        covered: bool,
+    },
 }
 
 #[derive(Default)]
@@ -37,6 +45,8 @@ pub(super) struct MemoryUi {
     screen_off: bool,
     /// The session is locked: nobody can see the pages.
     locked: bool,
+    /// A different window covers all of the window: nobody can see the pages.
+    covered: bool,
     trimmed_at: Option<Instant>,
     /// A view was suspended: the renderers of the suspended pages are
     /// trimmed at this time (`memory::ENGINE_TRIM_AFTER`).
@@ -62,9 +72,10 @@ impl MemoryUi {
         self.pages_hidden || self.unseen()
     }
 
-    /// Nobody can see the window: the screen is off or the session is locked.
+    /// Nobody can see the window: the screen is off, the session is locked,
+    /// or a different window covers all of it.
     fn unseen(&self) -> bool {
-        self.screen_off || self.locked
+        self.screen_off || self.locked || self.covered
     }
 
     /// Whether a trim is due now, and if so, notes it.
@@ -124,6 +135,7 @@ impl App {
         match sight {
             Sight::Screen { on } => self.memory.screen_off = !on,
             Sight::Session { locked } => self.memory.locked = locked,
+            Sight::Cover { covered } => self.memory.covered = covered,
         }
         let unseen = self.memory.unseen();
         if unseen == before {
