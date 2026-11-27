@@ -16,15 +16,51 @@
 
 use std::time::{Duration, Instant};
 
-use windows::Win32::{
-    Foundation::{HWND, LPARAM, LRESULT, WPARAM},
-    UI::WindowsAndMessaging::{
-        PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND, WM_ENDSESSION, WM_POWERBROADCAST,
-        WM_QUERYENDSESSION,
+use windows::{
+    Win32::{
+        Foundation::{HANDLE, HWND, LPARAM, LRESULT, WPARAM},
+        System::{
+            Power::{POWERBROADCAST_SETTING, RegisterPowerSettingNotification},
+            RemoteDesktop::{NOTIFY_FOR_THIS_SESSION, WTSRegisterSessionNotification},
+        },
+        UI::WindowsAndMessaging::{
+            DEVICE_NOTIFY_WINDOW_HANDLE, PBT_APMRESUMEAUTOMATIC, PBT_APMRESUMESUSPEND, PBT_APMSUSPEND,
+            PBT_POWERSETTINGCHANGE, WM_ENDSESSION, WM_POWERBROADCAST, WM_QUERYENDSESSION, WM_WTSSESSION_CHANGE,
+            WTS_SESSION_LOCK, WTS_SESSION_UNLOCK,
+        },
     },
+    core::GUID,
 };
 
-use super::{App, with_app};
+use super::{App, memory_ui::Sight, with_app};
+
+/// `GUID_CONSOLE_DISPLAY_STATE`: the screen is off (0), on (1) or dimmed (2).
+const CONSOLE_DISPLAY_STATE: GUID = GUID::from_u128(0x6fe69556_704a_47a0_8f24_c28d936fda47);
+
+/// Asks Windows to tell the window when the screen goes off or comes on,
+/// and when the session is locked or unlocked (refer to
+/// `App::sight_changed`). Windows sends the state of the screen one time
+/// immediately.
+///
+/// Not in a test run (`NEA_BENCH`): a test measures the pages as a person
+/// sees them, also when it runs at night with the screen off.
+pub(super) fn watch_sight(hwnd: HWND) {
+    if std::env::var_os("NEA_BENCH").is_some() {
+        return;
+    }
+    unsafe {
+        // The handles stay for the life of the window.
+        let _ = RegisterPowerSettingNotification(HANDLE(hwnd.0), &CONSOLE_DISPLAY_STATE, DEVICE_NOTIFY_WINDOW_HANDLE);
+        let _ = WTSRegisterSessionNotification(hwnd, NOTIFY_FOR_THIS_SESSION);
+    }
+}
+
+/// What a power setting message says about the screen; none for a
+/// different setting.
+unsafe fn screen_is_on(lparam: LPARAM) -> Option<bool> {
+    let setting = unsafe { (lparam.0 as *const POWERBROADCAST_SETTING).as_ref() }?;
+    (setting.PowerSetting == CONSOLE_DISPLAY_STATE && setting.DataLength >= 1).then(|| setting.Data[0] != 0)
+}
 
 /// How long the end of the session waits for the files to be written.
 /// Windows gives an app approximately 5 s before it asks the person.
@@ -46,7 +82,7 @@ pub(super) fn without_sleep(at: Instant, slept_at: Instant, woke_at: Instant) ->
 }
 
 /// The power and session messages; `None` lets the window proc go on.
-pub(super) fn window_message(_hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPARAM) -> Option<LRESULT> {
+pub(super) fn window_message(_hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
     match msg {
         WM_QUERYENDSESSION => {
             let _doing = crate::diag::doing(&"query end session", 0);
@@ -72,9 +108,27 @@ pub(super) fn window_message(_hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: LPA
                     let _doing = crate::diag::doing(&"resume", 0);
                     with_app(|app| app.woke_up(Instant::now()));
                 }
+                PBT_POWERSETTINGCHANGE => {
+                    if let Some(on) = unsafe { screen_is_on(lparam) } {
+                        let _doing = crate::diag::doing(&"screen", on as u64);
+                        with_app(|app| app.sight_changed(Sight::Screen { on }));
+                    }
+                }
                 _ => {}
             }
             Some(LRESULT(1))
+        }
+        WM_WTSSESSION_CHANGE => {
+            let locked = match wparam.0 as u32 {
+                WTS_SESSION_LOCK => Some(true),
+                WTS_SESSION_UNLOCK => Some(false),
+                _ => None,
+            };
+            if let Some(locked) = locked {
+                let _doing = crate::diag::doing(&"session lock", locked as u64);
+                with_app(|app| app.sight_changed(Sight::Session { locked }));
+            }
+            Some(LRESULT(0))
         }
         _ => None,
     }

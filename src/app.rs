@@ -468,6 +468,7 @@ pub fn run() -> windows::core::Result<()> {
         SetTimer(Some(hwnd), TIMER_IDLE, IDLE_WORK_AFTER_MS, None);
     }
     crate::memory::watch_low_memory(hwnd, memory_ui::WM_APP_LOW_MEMORY);
+    power_ui::watch_sight(hwnd);
     with_app(|app| {
         app.relayout();
         // With no tabs the field opens at once: after the first paint,

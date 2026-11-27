@@ -63,6 +63,19 @@ each 30 s while a suspended page exists.
 The engine can refuse a suspend. Then the view stays awake for Nea, and
 Nea tries again after 30 s.
 
+### Screen off, session locked
+
+While the screen is off or the session is locked, nobody can see the
+window. Nea hides its views then, as it does for a minimized window, and
+shows them again when the screen comes on or the session is unlocked. The
+engine does not draw a hidden view. Sound continues. Without this, a page
+with an animation that never stops (a small dot that pulses is sufficient)
+used 17 s of processor time each minute on a 120 Hz screen that was off;
+with it, 0.7 s. Edge and Chrome also stop then.
+
+A test run (`NEA_BENCH`) does not do this: it measures the pages as a
+person sees them, also at night.
+
 ### One view awake
 
 Only one view out of sight stays awake: the tab that you saw last. Nea
@@ -430,7 +443,8 @@ The trim each 30 s uses no processor time that the test can measure
 for Nea and 77.1 s for release 0.1.9, of which the app used 0.2 s. Almost
 all of that time is the page on screen: a Wikipedia article used 17 s of
 processor time each minute (GPU process 11, renderer 6), and example.com
-or an MDN page used 0.7 to 1.3 s.
+or an MDN page used 0.7 to 1.3 s. The article has an animation that
+never stops, and the screen was off: see "Screen off, session locked".
 
 One tab costs 152 MB: renderer 56, GPU process 55, browser process 25,
 utility 9, app 6. No engine switch changed this by more than 3 MB (GPU
