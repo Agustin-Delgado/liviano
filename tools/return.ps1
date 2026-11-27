@@ -20,6 +20,10 @@ param(
     [string[]]$Urls = @('https://en.wikipedia.org/wiki/Web_browser', 'https://developer.mozilla.org/en-US/docs/Web/JavaScript', 'https://github.com/rust-lang/rust'),
     [int]$RestSec = 90,
     [int]$IdleSec = 150,
+    # With -BenchExe: after -IdleSec, the private working set of Nea and
+    # its engine, one sample each 2 s for this time.
+    [int]$SeriesSec = 0,
+    [string]$BenchExe = '',
     [System.Collections.IDictionary]$Settings = @{}
 )
 $ErrorActionPreference = 'Stop'
@@ -98,6 +102,19 @@ try {
     $cpu = Get-TreeCpu
     Start-Sleep -Seconds $IdleSec
     Write-Host "  processor time in $IdleSec s with no input: $(Format-CpuUse $cpu (Get-TreeCpu))"
+    if ($SeriesSec -and $BenchExe) {
+        $series = for ($at = 0; $at -lt $SeriesSec; $at += 2) {
+            $ids = @((Get-TreeCpu).Keys)
+            [int]((((& $BenchExe memtree @ids) | ConvertFrom-Json).total) / 1MB)
+            Start-Sleep -Seconds 2
+        }
+        Write-Host "  private working set in MB, each 2 s: $($series -join ' ')"
+        $kinds = Get-TreeCpu
+        $parts = foreach ($p in @(((& $BenchExe memtree @($kinds.Keys)) | ConvertFrom-Json).processes | Sort-Object private_ws -Descending)) {
+            "$($kinds[[int]$p.pid].kind) $([int]($p.private_ws / 1MB))"
+        }
+        Write-Host "  each process in MB: $($parts -join ', ')"
+    }
     $second = foreach ($n in 5, 4, 3, 2) { Select-Tab $n; Start-Sleep -Milliseconds 800 }
     Write-Host "  back to a tab after $IdleSec s more with no input: $($second -join ', ') ms"
 } finally {

@@ -214,7 +214,10 @@ function Get-NeaMemory {
             if ($path) { $script:EngineVersion = (Get-Item $path).VersionInfo.ProductVersion }
         }
     }
-    [pscustomobject]@{ total = [double]$m.total; app = [double]$m.app; engine = [double]$m.engine; processes = @($m.processes).Count }
+    # The largest processes tell where the memory is: the page on screen,
+    # or the pages out of sight.
+    $top = @($m.processes | Sort-Object private_ws -Descending | Select-Object -First 5 | ForEach-Object { [int]($_.private_ws / 1MB) }) -join ' '
+    [pscustomobject]@{ total = [double]$m.total; app = [double]$m.app; engine = [double]$m.engine; processes = @($m.processes).Count; top = $top }
 }
 
 # The filter engine compiles on its own thread once the first view needs the
@@ -263,6 +266,7 @@ function Invoke-NeaScenario([string]$name, [hashtable]$settings, $session, [scri
     try {
         $note = [string](& $steps)
         $m = Measure-Samples { Get-NeaMemory }
+        if ($m.top) { $note = (@($note, "largest processes $($m.top) MB") | Where-Object { $_ }) -join ', ' }
         # Counted after the samples: ads keep arriving while the page settles.
         if ($script:ShieldStats) {
             $shieldNote = Get-ShieldNote

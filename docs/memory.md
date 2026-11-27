@@ -415,17 +415,25 @@ is near its limit (see "Low memory").
 
 20 tabs of heavy sites (10 sites, each two times: Wikipedia, GitHub, MDN,
 YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow, NYTimes),
-nothing forced, a new profile for each browser, median of 3 runs (4 for
-Nea 0.1.9):
+nothing forced, a new profile for each browser, median of 3 runs:
 
 | | Nea | Nea 0.1.9 | Edge | Chrome |
 |---|---:|---:|---:|---:|
 | Open | 610 | 1633 | 2665 | 3138 |
-| 5 min with no input | 215 | 578 | 2832 | 3270 |
+| 5 min with no input | 296 | 521 | 2832 | 3270 |
 
-The runs of Nea after 5 min: 224, 215, 190. The runs of 0.1.9: 470, 682,
-475, 684. Before the trim came again each 30 s, the runs of Nea were 203,
-438, 473: the renderers of heavy pages bring memory back for minutes.
+The figure after 5 min changes much from run to run. For the two builds
+of Nea it is the median of 31 samples in 60 s (`-Samples 31`), 6 runs of
+Nea (344, 513, 316, 276, 167, 111) and 4 of release 0.1.9 (466, 856, 524,
+519). The page on screen (NYTimes) and the browser and GPU processes make
+the difference: one run had 104 MB in the page on screen, a different one
+37 MB. Each suspended tab has 0 to 2 MB. With 9 heavy sites and a
+Wikipedia article on screen, 5 runs gave 125 to 135 MB: the page on screen
+84, the browser process 16 to 20, the GPU process 14 to 18.
+
+With the blocker off, the 20 tabs open at 735 MB (median of 3 runs).
+`--js-flags=--optimize-for-size` and `--disable-features=BackForwardCache`
+made no difference larger than the noise.
 
 The time to come back to a suspended tab did not change (`tools/return.ps1`,
 real pages, 2 runs of each build): approximately 40 ms more than a script
