@@ -425,6 +425,13 @@ With low memory (`tools/pressure.ps1` held 6.6 GB: commit of the system
 the first 90 s. The page file of the test computer has a fixed size, so
 the test did not go as far as a return from the disk.
 
+The trim each 30 s uses no processor time that the test can measure
+(`tools/return.ps1`, 9 tabs of heavy sites, 300 s with no input): 76.4 s
+for Nea and 77.1 s for release 0.1.9, of which the app used 0.2 s. Almost
+all of that time is the page on screen: a Wikipedia article used 17 s of
+processor time each minute (GPU process 11, renderer 6), and example.com
+or an MDN page used 0.7 to 1.3 s.
+
 One tab costs 152 MB: renderer 56, GPU process 55, browser process 25,
 utility 9, app 6. No engine switch changed this by more than 3 MB (GPU
 rasterization off, shader cache off, one raster thread, background

@@ -7,7 +7,8 @@
   looks at each tab one time and goes back to the first one. After
   -RestSec, it selects tabs 9 to 6, one after the other. After -IdleSec
   more with no request (the idle trim comes in this time), it selects tabs
-  5 to 2. For each tab, the result is the time from the select command to
+  5 to 2. The result also has the processor time that Nea and its engine
+  use in that -IdleSec. For each tab, the result is the time from the select command to
   the answer of a script in the page: the page is in use again. The time
   of the pipe is in the result, and it is the same for each build.
 
@@ -51,6 +52,32 @@ function Select-Tab([int]$n) {
     [Math]::Round($watch.Elapsed.TotalMilliseconds, 1)
 }
 
+# The processor time of Nea and of each engine process, in seconds, by
+# process id. The value has the type of the process and its time.
+function Get-TreeCpu {
+    $kinds = @{ $process.Id = 'app' }
+    foreach ($p in @(Get-CimInstance Win32_Process -Filter "Name='msedgewebview2.exe'" | Where-Object { $_.CommandLine -and $_.CommandLine.Contains($dir) })) {
+        $kinds[[int]$p.ProcessId] = if ($p.CommandLine -match '--type=([a-z-]+)') { $Matches[1] } else { 'browser' }
+    }
+    $times = @{}
+    foreach ($p in @(Get-Process -Id @($kinds.Keys) -ErrorAction SilentlyContinue)) {
+        $times[$p.Id] = @{ kind = $kinds[$p.Id]; seconds = $p.TotalProcessorTime.TotalSeconds }
+    }
+    $times
+}
+
+# The time that each type of process used between two results of
+# Get-TreeCpu. A process that is not in the two results does not count.
+function Format-CpuUse($before, $after) {
+    $use = @{}
+    foreach ($id in $after.Keys) {
+        if ($before.ContainsKey($id)) { $use[$after[$id].kind] += $after[$id].seconds - $before[$id].seconds }
+    }
+    $total = ($use.Values | Measure-Object -Sum).Sum
+    $parts = $use.GetEnumerator() | Sort-Object Value -Descending | ForEach-Object { "$($_.Key) $([Math]::Round($_.Value, 2))" }
+    "$([Math]::Round($total, 2)) s ($($parts -join ', '))"
+}
+
 try {
     Connect-Nea -TimeoutSec 20
     Invoke-Nea wait @{ timeout_ms = 45000 } -NoThrow | Out-Null
@@ -68,7 +95,9 @@ try {
     $first = foreach ($n in 9, 8, 7, 6) { Select-Tab $n; Start-Sleep -Milliseconds 800 }
     Write-Host "  back to a tab after $RestSec s: $($first -join ', ') ms"
     Invoke-Nea run @{ name = 'go_to_tab_1' } | Out-Null
+    $cpu = Get-TreeCpu
     Start-Sleep -Seconds $IdleSec
+    Write-Host "  processor time in $IdleSec s with no input: $(Format-CpuUse $cpu (Get-TreeCpu))"
     $second = foreach ($n in 5, 4, 3, 2) { Select-Tab $n; Start-Sleep -Milliseconds 800 }
     Write-Host "  back to a tab after $IdleSec s more with no input: $($second -join ', ') ms"
 } finally {
