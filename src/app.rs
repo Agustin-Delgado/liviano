@@ -242,6 +242,26 @@ fn quiet_for(quiet: Duration) -> bool {
     quiet_time().is_some_and(|q| q >= quiet)
 }
 
+/// How long nobody used the window (`memory::away_time`). `background`:
+/// for how long a window of a different program is in front.
+fn away_time(background: Option<Duration>) -> Option<Duration> {
+    let script = LAST_SCRIPT.with(|l| l.get()).map(|at| at.elapsed());
+    Some(crate::memory::away_time(system_idle()?, background, script))
+}
+
+/// Whether the window in front is a window of a different program.
+fn in_background() -> bool {
+    use windows::Win32::{
+        System::Threading::GetCurrentProcessId,
+        UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
+    };
+    let mut pid = 0u32;
+    unsafe {
+        GetWindowThreadProcessId(GetForegroundWindow(), Some(&mut pid));
+        pid != 0 && pid != GetCurrentProcessId()
+    }
+}
+
 /// How long no key, click, pointer move or script request came (refer to
 /// `quiet_for`).
 fn quiet_time() -> Option<Duration> {

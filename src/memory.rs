@@ -82,6 +82,27 @@ pub fn idle_trim_due(quiet: Duration, since_trim: Option<Duration>) -> bool {
     quiet >= IDLE_TRIM_AFTER && since_trim.is_none_or(|t| t > quiet)
 }
 
+/// While nobody uses the window, the engine gives back its working set
+/// again after this time. A page on screen that does work (a clock, a feed
+/// that loads) brings back only the memory that it uses.
+pub const REST_TRIM_EVERY: Duration = Duration::from_secs(60);
+
+/// How long nobody used the window. `idle`: no input in the session.
+/// `background`: a window of a different program is in front. A person who
+/// works in a different program is away from this window too. `script`:
+/// the time since the last script request, which is a use of the window.
+pub fn away_time(idle: Duration, background: Option<Duration>, script: Option<Duration>) -> Duration {
+    let away = background.map_or(idle, |b| b.max(idle));
+    script.map_or(away, |s| s.min(away))
+}
+
+/// Whether the engine gives back its memory now: nobody used the window for
+/// `away`, at least `IDLE_TRIM_AFTER`, and the last trim (`since_trim` ago)
+/// came before this pause started or `REST_TRIM_EVERY` ago.
+pub fn rest_trim_due(away: Duration, since_trim: Option<Duration>) -> bool {
+    away >= IDLE_TRIM_AFTER && since_trim.is_none_or(|t| t > away || t >= REST_TRIM_EVERY)
+}
+
 /// How low the system is on memory.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Pressure {

@@ -115,6 +115,9 @@ try {
         }
         Write-Host "  each process in MB: $($parts -join ', ')"
     }
+    # The rest trim also empties the page on screen. This is the cost of
+    # the first use of that page after the trim.
+    Write-Host "  tab on screen after $IdleSec s with no input (pipe and script only): $(Select-Tab 1) ms"
     $second = foreach ($n in 5, 4, 3, 2) { Select-Tab $n; Start-Sleep -Milliseconds 800 }
     Write-Host "  back to a tab after $IdleSec s more with no input: $($second -join ', ') ms"
 } finally {
