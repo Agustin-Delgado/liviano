@@ -465,7 +465,7 @@ release 0.1.9 224, 226, 225 and 164, 150, 151; Edge 439, 395, 401 and 415,
 
 20 tabs of heavy sites (10 sites, each two times: Wikipedia, GitHub, MDN,
 YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow, NYTimes),
-nothing forced, a new profile for each browser, median of 3 runs:
+nothing forced, a new profile for each browser:
 
 | | Nea | Nea 0.1.9 | Edge | Chrome |
 |---|---:|---:|---:|---:|
@@ -475,7 +475,7 @@ nothing forced, a new profile for each browser, median of 3 runs:
 These are medians of the runs on 2026-11-27, by day, each figure the
 median of 31 samples in 60 s. Nea, 7 runs: open 380, 404, 408, 416, 441,
 472, 484, and after 5 min 31, 40, 42, 47, 64, 65, 176. One run stayed at
-176 MB; the cause is not known (a page that plays sound stops the trim at
+176 MB; the cause is not known (possibly a page with sound, which stops the trim at
 rest). Release 0.1.9, 3 runs: 1025, 978, 1089 and 518, 442, 377. Edge, 3
 runs: 2632, 2586, 2440 and 2672, 2619, 2601. Chrome: 3158 and 2924 (2
 runs, the mean), and 3052, 3152, 3220. A run in which a browser did not
