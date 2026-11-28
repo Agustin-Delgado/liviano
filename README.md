@@ -34,24 +34,48 @@ their scripts stop and their memory goes back to the system. They
 are not closed, so a tab comes back as it was, with no load. At startup,
 Nea creates only the view of the active tab.
 
-The table shows the private memory of the full process tree, with 20 tabs
-open and nothing forced. Each browser opened the same pages with a new
-profile. "Heavy sites" are 10 real sites, each two times: Wikipedia,
-GitHub, MDN, YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow
-and NYTimes.
+## Comparison
 
-| 20 tabs | Nea 0.1.16 | Edge | Chrome |
-|---|---:|---:|---:|
-| Heavy sites, open | 416 MB | 2586 MB | 3041 MB |
-| Heavy sites, 5 min with no input | 47 MB | 2619 MB | 3152 MB |
-| Light pages, open | 192 MB | 401 MB | 466 MB |
-| Light pages, 5 min with no input | 20 MB | 408 MB | 506 MB |
+| | Nea 0.1.16 | Edge | Chrome | Brave |
+|---|---:|---:|---:|---:|
+| **Memory** | | | | |
+| One blank tab | 109 MB | 122 MB | 191 MB | 202 MB |
+| 20 heavy sites, open | 416 MB | 2586 MB | 3041 MB | 2651 MB |
+| 20 heavy sites, 5 min with no input | 47 MB | 2619 MB | 3152 MB | 2323 MB |
+| 20 light pages, open | 192 MB | 401 MB | 466 MB | 456 MB |
+| 20 light pages, 5 min with no input | 20 MB | 408 MB | 506 MB | 463 MB |
+| **Size** | | | | |
+| Installed size | 3 MB ¹ | 1177 MB | 525 MB | 1100 MB |
+| **Features** | | | | |
+| Engine | WebView2 (Chromium) | Chromium | Chromium | Chromium |
+| Blocks ads by default | Yes | No ² | No | Yes |
+| Extensions from the Chrome Web Store | Partly ³ | Yes | Yes | Yes |
+| Accounts and sync | No | Yes | Yes | Yes |
+| Telemetry on by default | No | Yes | Yes | Yes ⁴ |
+| Built-in AI assistant | No | Yes (Copilot) | Yes (Gemini) | Yes (Leo) |
+| Open source | Yes (MIT) | No | Partly ⁵ | Yes (MPL 2.0) |
 
-Each figure is the median of 3 to 7 runs on 2026-11-27 (Windows 11,
-WebView2 157). A tab that comes back from sleep shows again in
-approximately 170 ms, with no load. The runs, the method and the limits
-are in [docs/memory.md](docs/memory.md#results). The single-page scenarios
-are in [docs/benchmarks.md](docs/benchmarks.md).
+Memory is the private working set of the full process tree, with nothing
+forced. Each browser opened the same pages with a new profile. "Heavy
+sites" are 10 real sites, each two times: Wikipedia, GitHub, MDN, YouTube,
+Reddit, Infobae, La Nación, Amazon, Stack Overflow and NYTimes. Each figure
+is the median of 3 to 7 runs on Windows 11. The 20-tab runs of Nea, Edge
+and Chrome are from 2026-11-27. The Brave runs and the blank tab are from
+2026-11-28: on that day, Nea had 473 and 55 MB with the heavy sites. A tab
+that comes back from sleep shows again in approximately 170 ms, with no
+load.
+
+1. `nea.exe` only. Nea uses the WebView2 runtime that Windows includes
+   (1152 MB, shared with other apps).
+2. Edge blocks trackers, not ads.
+3. Some extension APIs are not available: see
+   [docs/extensions.md](docs/extensions.md).
+4. Brave sends private product analytics (P3A) by default.
+5. Chromium is open source. Chrome adds closed parts.
+
+The runs, the method and the limits are in
+[docs/memory.md](docs/memory.md#results). The single-page scenarios are in
+[docs/benchmarks.md](docs/benchmarks.md).
 
 ## Features
 

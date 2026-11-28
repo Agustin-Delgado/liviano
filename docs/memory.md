@@ -481,6 +481,30 @@ runs: 2632, 2586, 2440 and 2672, 2619, 2601. Chrome: 3158 and 2924 (2
 runs, the mean), and 3052, 3152, 3220. A run in which a browser did not
 load all the pages does not count.
 
+Brave 1.100.59 (Chromium 158), 2026-11-28, by day, 3 runs. Nea ran in the
+same runs, one after the other, so that the two have the same sites:
+
+| | Nea | Brave |
+|---|---:|---:|
+| Heavy sites, open | 473 | 2651 |
+| Heavy sites, 5 min with no input | 55 | 2323 |
+| Light pages, open | 191 | 456 |
+| Light pages, 5 min with no input | 20 | 463 |
+| One blank tab | 109 | 204 |
+
+The runs: heavy, open, Nea 632, 473, 423 and Brave 2897, 2651, 2487; after
+5 min, Nea 55, 34, 67 and Brave 2298, 2672, 2323. Light, open, Nea 191,
+191, 189 and Brave 456, 458, 456; after 5 min, Nea 20, 14, 40 and Brave
+469, 463, 453. One blank tab: Nea 110, 109, 107 and Brave 201, 206, 204.
+Brave blocks ads by default, as Nea does. With the heavy sites, Brave had
+33 to 51 processes and Nea 30 or 31.
+
+One blank tab in the four browsers, 2026-11-28, 3 more runs: Nea 109,
+111, 109 (median 109); Edge 122, 118, 123 (122); Chrome 192, 189, 191
+(191); Brave 161, 202, 204 (202). Edge is near Nea here: with one tab, the
+browser and GPU processes of the engine are most of the cost (see the 152
+MB of one tab below), and Nea cannot make them smaller.
+
 Before the repeated trim at rest, Nea had approximately 296 MB after
 5 min (6 runs: 344, 513, 316, 276, 167, 111), and release 0.1.9
 approximately 521 MB (466, 856, 524, 519). The sites change from day to

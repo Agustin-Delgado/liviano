@@ -8,7 +8,7 @@
   state of the scenario and waits until the memory is stable. Then it
   measures the private working set of nea.exe and of all the engine
   processes. The result is the median of some samples. With -Edge and
-  -Chrome, the script opens the same pages in Edge and in Chrome. Each
+  -Chrome (and -Brave), the script opens the same pages in those browsers. Each
   browser uses a separate temporary profile, and the script measures its
   process tree in the same way.
 
@@ -66,6 +66,8 @@ param(
     [string]$EdgeExe = '',
     [switch]$Chrome,
     [string]$ChromeExe = '',
+    [switch]$Brave,
+    [string]$BraveExe = '',
     # Extra engine switches for every Nea run (WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS),
     # to try a memory flag before building it in.
     [string]$EngineArgs = '',
@@ -284,6 +286,7 @@ function Invoke-NeaScenario([string]$name, [hashtable]$settings, $session, [scri
 $script:Foreign = [ordered]@{
     Edge   = @{ Wanted = [bool]$Edge; Exe = $EdgeExe; Process = 'msedge.exe'; Path = 'Microsoft\Edge\Application\msedge.exe'; Version = '' }
     Chrome = @{ Wanted = [bool]$Chrome; Exe = $ChromeExe; Process = 'chrome.exe'; Path = 'Google\Chrome\Application\chrome.exe'; Version = '' }
+    Brave  = @{ Wanted = [bool]$Brave; Exe = $BraveExe; Process = 'brave.exe'; Path = 'BraveSoftware\Brave-Browser\Application\brave.exe'; Version = '' }
 }
 
 function Find-Browser([string]$browser) {
