@@ -151,6 +151,9 @@ impl App {
 
     fn cover_act(&mut self, stage: Stage, act: Act) {
         let before = std::mem::replace(&mut self.cover.stage, stage);
+        if act != Act::Nothing {
+            crate::diag::trace(|| format!("cover: {before:?} -> {stage:?}, {act:?}"));
+        }
         match act {
             Act::Nothing => {}
             Act::TakePictures => self.take_cover_pictures(),
