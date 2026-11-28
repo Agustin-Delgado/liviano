@@ -493,6 +493,10 @@ pub fn run() -> windows::core::Result<()> {
     }
     // Before the window shows: a locked profile never draws its pages.
     with_app(|app| app.lock_at_start());
+    // The link this process started with, from another app.
+    if let Some(link) = crate::default_browser::take_startup_link() {
+        with_app(|app| app.open_tab(&link, None));
+    }
 
     unsafe {
         // A scripted run must not take the foreground (and the keyboard)
@@ -782,6 +786,15 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
     if msg == crate::profile_launch::activate_message() {
         crate::profile_launch::come_forward(hwnd);
         return LRESULT(0);
+    }
+    // Another Nea got a link from an app: it opens here, in a new tab.
+    if msg == windows::Win32::UI::WindowsAndMessaging::WM_COPYDATA {
+        let Some(link) = crate::default_browser::received_link(lparam) else {
+            return LRESULT(0);
+        };
+        with_app(|app| app.open_tab(&link, None));
+        crate::profile_launch::come_forward(hwnd);
+        return LRESULT(1);
     }
     if let Some(result) = lock_ui::window_message(hwnd, msg, wparam, lparam) {
         return result;

@@ -18,9 +18,11 @@ Download the files from the
 - **Installer:** `Nea-<version>-setup.exe`. It installs Nea for the current
   user in `%LOCALAPPDATA%\Programs\Nea`. It does not need administrator
   rights. It adds a shortcut to the Start menu and an entry to Settings →
-  Apps. Use that entry to uninstall Nea.
+  Apps. Use that entry to uninstall Nea. It also adds Nea to the list of
+  browsers in Settings → Apps → Default apps.
 - **Portable:** `Nea-<version>-portable.zip`. Extract it to any folder and
-  open `nea.exe`. It does not change the registry.
+  open `nea.exe`. It does not change the registry, until you select **Make
+  Nea the default…** in Settings → General.
 
 `nea.exe` also accepts `--install` and `--uninstall`. Add `--quiet` to skip
 all questions. Winget uses this mode.

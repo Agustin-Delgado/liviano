@@ -102,6 +102,7 @@ const ID_PROFILE_LOCK_LABEL: i32 = 153;
 const ID_PROFILE_LOCK_AFTER_LABEL: i32 = 154;
 const ID_PROFILE_LOCK_AFTER: i32 = 155;
 const ID_PROFILE_LOCK_NOTE: i32 = 156;
+const ID_DEFAULT_BROWSER: i32 = 157;
 /// The side list's entries: `ID_NAV + page`.
 const ID_NAV: i32 = 160;
 
@@ -942,6 +943,8 @@ fn controls() -> Vec<Spec> {
     s.check(ID_BOOKMARKS_BAR, ID_BOOKMARKS_BAR_LABEL, "Show bookmarks bar", x + 262, 246, 262);
     s.label("Default search engine (address with {q})", (x, 288, w, 22));
     s.edit(ID_SEARCH, (x, 312, w, 32));
+    s.note("Open links from other apps in Nea.", (x, 369, w - 188 - 12, 22), -1, 0);
+    s.button("Make Nea the default…", ID_DEFAULT_BROWSER, (x + w - 188, 364, 188, 30));
 
     // Memory: when tabs sleep, and the sites that never do.
     s.page = Some(1);
@@ -1991,6 +1994,10 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
             }
         }
         (ID_PASSWORDS_IMPORT, BN_CLICKED_CODE) => Outcome::ImportPasswords,
+        (ID_DEFAULT_BROWSER, BN_CLICKED_CODE) => {
+            status(st, crate::default_browser::open_windows_settings());
+            Outcome::Nothing
+        }
         (ID_PASSWORDS_LIST, BN_CLICKED_CODE) => {
             crate::web::push(crate::web::Event::Command(Command::Passwords));
             Outcome::Nothing

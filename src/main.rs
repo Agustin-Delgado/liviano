@@ -10,6 +10,7 @@ mod bookmarks;
 mod cover;
 mod crx;
 mod curtain;
+mod default_browser;
 mod design;
 mod diag;
 mod download_watch;
@@ -115,6 +116,13 @@ fn main() -> windows::core::Result<()> {
     if let Some(code) = installer::move_legacy_install() {
         std::process::exit(code);
     }
+    // A link from another app: to this profile's open window, if there is one.
+    if let Some(link) = default_browser::link_from_args(std::env::args_os().skip(1))
+        && default_browser::hand_over(link, profile_launch::current())
+    {
+        return Ok(());
+    }
+    installer::refresh_browser_entry();
     // A verified update was waiting: the new executable is already running.
     if updater::apply_pending() {
         return Ok(());

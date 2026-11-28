@@ -130,6 +130,7 @@ table marks the items that this method cannot test.
 | Passkeys | The engine sends WebAuthn to the Windows Hello dialog (`tests/probes/webauthn_probe.rs`, in the private test repository). Not verified in this pass. |
 | Light, dark or system theme | Light and dark verified. "System" follows the Windows theme when it changes. |
 | Bookmarks, history and downloads | Verified. |
+| Default browser | The installed copy adds Nea to the list of browsers in Windows Settings → Apps → Default apps, for http, https, .htm, .html, .shtml, .xhtml and .pdf. **Make Nea the default…** in Settings → General opens that page. Windows does not let a program select itself: you select Nea there. Verified: a link from another app opens in a new tab, and when the window of the profile is open, the new process gives the link to it and stops (95 ms). A person checks the Windows Settings page. |
 | Bookmarks bar | Verified: chips under a top strip, tiles in the column, the overflow, the setting and its shortcut, click, Ctrl+click, middle click, rename, remove and the drag that reorders. A test sent mouse messages to the Nea window. A person checks the menus. |
 | Private tabs | Verified. They have their own InPrivate profile. Nea writes nothing to the history, the session, Ctrl+Shift+T or settings.json. |
 | Chrome extensions | Verified: install with the "Add to Chrome" button of the Chrome Web Store (Nea asks first), load, remove, the button and pinned extensions. The limitations are in [docs/extensions.md](extensions.md). |

@@ -89,6 +89,9 @@ The runs, the method and the limits are in
 - **Passwords** in Windows Credential Manager. You can import them from
   Chrome, Edge, Brave, Vivaldi, Opera, Arc or a CSV file.
 - **Bookmarks, history and downloads** in panels that open from the field.
+- **Default browser.** Settings → General → **Make Nea the default…** opens
+  the page in Windows Settings where you select Nea. Links from other apps
+  then open in a new tab.
 - **Chrome extensions** from the Web Store, with
   [known limitations](docs/extensions.md).
 - **Light, dark or system theme.** The animations obey the Windows setting.

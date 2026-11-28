@@ -302,7 +302,30 @@ fn install_files(exe: &Path, places: &Places) -> Result<PathBuf, String> {
     create_shortcut(&places.shortcut, &target, &places.dir, "")
         .map_err(|e| format!("Cannot create the shortcut: {e}"))?;
     write_uninstall_entry(&places.key, &target, &places.dir)?;
+    if !test_install() {
+        crate::default_browser::register(&target);
+    }
     Ok(target)
+}
+
+/// A test moved the entry in Apps: it must not touch the person's browser
+/// entries either.
+fn test_install() -> bool {
+    std::env::var("NEA_UNINSTALL_KEY").is_ok_and(|k| under_software(&k))
+}
+
+/// At each start of the installed copy: the browser entries, for an install
+/// made before they existed (an update does not run the installer).
+pub fn refresh_browser_entry() {
+    if test_install() || std::env::var_os("NEA_DATA_DIR").is_some() {
+        return;
+    }
+    let (Ok(exe), Ok(places)) = (std::env::current_exe(), places()) else {
+        return;
+    };
+    if runs_from(&exe, &places.dir) {
+        crate::default_browser::register(&exe);
+    }
 }
 
 fn install(exe: &Path, quiet: bool) -> Result<(), String> {
@@ -363,6 +386,9 @@ fn uninstall(exe: &Path, quiet: bool) -> Result<(), String> {
     let _ = fs::remove_file(&places.shortcut);
     unsafe {
         let _ = RegDeleteTreeW(HKEY_CURRENT_USER, &HSTRING::from(places.key.as_str()));
+    }
+    if !test_install() {
+        crate::default_browser::unregister();
     }
     if places.dir.exists() {
         remove_install_dir(&places.dir, exe)?;
