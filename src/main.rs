@@ -43,6 +43,7 @@ mod profile_launch;
 mod profile_lock;
 mod profiles;
 mod reader;
+mod select;
 mod session;
 mod settings;
 mod settings_window;

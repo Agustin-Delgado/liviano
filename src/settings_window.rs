@@ -1,10 +1,13 @@
 //! Settings (Ctrl+,): one small native window with plain controls — no web
-//! view for the interface. The controls are the system's, framed in the
-//! app's look: the page's ground, edits and lists sitting in soft grey wells
-//! instead of a sunken edge, and buttons drawn by `widgets`. It edits a copy of the settings and hands every
-//! committed change to the app, which applies it at once and writes
-//! settings.json. Everything it holds (window, fonts, brushes) is freed when
-//! it closes.
+//! view for the interface. A side list of sections on the shell's ground
+//! shows one page at a time on the page's ground. The controls are the
+//! system's where they bring behaviour (edits, lists, check boxes), framed
+//! in the app's look: edits and lists sit in soft grey wells instead of a
+//! sunken edge, the lists' rows, the buttons, the check boxes and the
+//! selects (`select`, which open the app's own menu) are drawn by
+//! `widgets`. It edits a copy of the settings and hands every committed
+//! change to the app, which applies it at once and writes settings.json.
+//! Everything it holds (window, fonts, brushes) is freed when it closes.
 
 use std::cell::{Cell, RefCell};
 
@@ -19,7 +22,7 @@ use windows::{
         UI::{
             Controls::{
                 BST_CHECKED, BST_UNCHECKED, DRAWITEMSTRUCT, NM_CUSTOMDRAW, NMCUSTOMDRAW, NMHDR, ODS_SELECTED,
-                ODT_BUTTON, SetWindowTheme,
+                ODT_BUTTON, ODT_LISTBOX, SetWindowTheme,
             },
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
             Input::KeyboardAndMouse::{
@@ -34,8 +37,9 @@ use windows::{
 
 use crate::{
     design::{Palette, dwm, size},
-    gfx::{Align, Color, Font, RectF, Surface},
+    gfx::{Color, RectF, Surface},
     profile_lock::{self, LOCK_AFTER_CHOICES, LockOptions},
+    select,
     settings::{self, FieldPosition, Settings, Theme},
     shortcuts::{self, Command},
     updater,
@@ -98,13 +102,24 @@ const ID_PROFILE_LOCK_LABEL: i32 = 153;
 const ID_PROFILE_LOCK_AFTER_LABEL: i32 = 154;
 const ID_PROFILE_LOCK_AFTER: i32 = 155;
 const ID_PROFILE_LOCK_NOTE: i32 = 156;
+/// The side list's entries: `ID_NAV + page`.
+const ID_NAV: i32 = 160;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
 const SS_NOTIFY: u32 = 0x0100;
 const SS_ENDELLIPSIS: u32 = 0x4000;
-const CLIENT_WIDTH: i32 = 780;
-const CLIENT_HEIGHT: i32 = 1080;
+const CLIENT_WIDTH: i32 = 760;
+const CLIENT_HEIGHT: i32 = 512;
+/// The width of the side list of sections, on the shell's ground.
+const RAIL: i32 = 184;
+/// Where a page's content starts, and its width.
+const PAGE_X: i32 = 212;
+const PAGE_W: i32 = 524;
+/// The pages, in the order of the side list.
+const PAGES: [&str; 7] = ["General", "Memory", "Shortcuts", "Privacy", "Extensions", "Profiles", "About"];
+/// Hairlines between the groups of a page: (page, y).
+const DIVIDERS: [(usize, i32); 6] = [(0, 196), (0, 278), (1, 204), (3, 156), (5, 326), (6, 140)];
 /// Where the tabs go: the first thing in Settings, since the shortcut alone
 /// went unnoticed (and another program may hold it).
 const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "On top"), (true, "On the side")];
@@ -145,13 +160,26 @@ pub enum ProfileCommand {
     },
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Kind {
     Label,
     Edit,
-    Combo,
+    /// An owner-drawn button made a `select`.
+    Select,
     List,
     Button,
+}
+
+/// How a label reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Look {
+    Body,
+    /// A group's name inside a page.
+    Heading,
+    /// A page's name, at its top.
+    Title,
+    /// What only informs: the body's size, a quieter ink.
+    Note,
 }
 
 struct State {
@@ -195,9 +223,57 @@ struct State {
     profile_lock_after_label: HWND,
     profile_lock_after: HWND,
     profile_lock_note: HWND,
-    font: HFONT,
-    heading_font: HFONT,
+    /// The side list's entries, one for each page.
+    nav: Vec<HWND>,
+    /// The page of each control in `children` (none: on every page).
+    pages: Vec<Option<usize>>,
+    fonts: Fonts,
     scale: f32,
+}
+
+/// The window's fonts, made for one scale.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Fonts {
+    body: HFONT,
+    heading: HFONT,
+    title: HFONT,
+}
+
+impl Fonts {
+    fn new(scale: f32) -> Self {
+        Self {
+            body: make_font(size::TEXT, 400, scale),
+            heading: make_font(size::TEXT_FIELD, 500, scale),
+            title: make_font(20.0, 500, scale),
+        }
+    }
+
+    fn of(&self, look: Look) -> HFONT {
+        match look {
+            Look::Body | Look::Note => self.body,
+            Look::Heading => self.heading,
+            Look::Title => self.title,
+        }
+    }
+
+    /// The font of `self` that stands where `old` had `font`.
+    fn instead_of(&self, old: &Fonts, font: HFONT) -> HFONT {
+        if font == old.title {
+            self.title
+        } else if font == old.heading {
+            self.heading
+        } else {
+            self.body
+        }
+    }
+
+    fn delete(&self) {
+        unsafe {
+            for font in [self.body, self.heading, self.title] {
+                let _ = DeleteObject(font.into());
+            }
+        }
+    }
 }
 
 /// Brushes and colours the window proc paints with. Kept apart from `State`
@@ -210,11 +286,9 @@ struct Colors {
     background_color: u32,
     field_color: u32,
     ink: u32,
+    muted: u32,
 }
 
-/// Adds one child control: class, text, style, extended style, rect, id,
-/// kind and whether it takes the heading font.
-type AddChild<'a> = dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32, i32), i32, Kind, bool) + 'a;
 /// Who handles an extension command chosen in Settings.
 type ExtensionHandler = fn(ExtensionCommand, Option<usize>);
 /// Who applies the tab layout (vertical, collapsed).
@@ -244,8 +318,13 @@ thread_local! {
     /// The palette and scale, and the wells: read while painting, which can
     /// happen while the state is borrowed.
     static LOOK: Cell<Option<(Palette, f32)>> = const { Cell::new(None) };
-    static WELLS: RefCell<Vec<RECT>> = const { RefCell::new(Vec::new()) };
-    /// The window's ground, its buttons, and the shortcuts list's rows.
+    /// Each well and its page (none: on every page).
+    static WELLS: RefCell<Vec<(RECT, Option<usize>)>> = const { RefCell::new(Vec::new()) };
+    /// The labels that only inform (`Look::Note`), drawn in a quieter ink.
+    static NOTES: RefCell<Vec<isize>> = const { RefCell::new(Vec::new()) };
+    /// The page shown.
+    static PAGE: Cell<usize> = const { Cell::new(0) };
+    /// The window's ground, its buttons, and the lists' rows.
     static SURFACES: RefCell<(Surface, Surface, Surface)> = RefCell::new(Default::default());
 }
 
@@ -269,8 +348,8 @@ fn wide(text: &str) -> HSTRING {
     HSTRING::from(text)
 }
 
-fn make_font(scale: f32, weight: i32) -> HFONT {
-    crate::app::make_font_weighted(size::TEXT, weight, scale)
+fn make_font(px: f32, weight: i32, scale: f32) -> HFONT {
+    crate::app::make_font_weighted(px, weight, scale)
 }
 
 fn text_of(hwnd: HWND) -> String {
@@ -377,8 +456,31 @@ fn discard_prepared() {
     let Some(state) = STATE.with(|s| s.try_borrow_mut().ok().and_then(|mut g| g.take())) else { return };
     unsafe {
         let _ = DestroyWindow(state.hwnd);
-        let _ = DeleteObject(state.font.into());
-        let _ = DeleteObject(state.heading_font.into());
+    }
+    state.fonts.delete();
+}
+
+/// The control the keyboard starts on: the side list's entry of the page
+/// shown.
+fn first_focus(st: &State) -> HWND {
+    st.nav.get(PAGE.with(Cell::get)).copied().unwrap_or(st.hwnd)
+}
+
+/// Shows page `page` and hides the controls of the others.
+fn show_page(page: usize) {
+    let page = page.min(PAGES.len() - 1);
+    PAGE.with(|p| p.set(page));
+    let Some((hwnd, children, pages)) = STATE.with(|s| {
+        s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.pages.clone())))
+    }) else {
+        return;
+    };
+    unsafe {
+        for ((child, _), on) in children.iter().zip(&pages) {
+            let shown = on.is_none_or(|p| p == page);
+            let _ = ShowWindow(*child, if shown { SW_SHOWNA } else { SW_HIDE });
+        }
+        let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
     }
 }
 
@@ -399,7 +501,8 @@ fn place(owner: HWND, hwnd: HWND) {
 pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Settings)) {
     finish_build(current, palette);
     let prepared = PREPARED.with(|p| p.borrow_mut().take());
-    let existing = STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.theme, st.scale))));
+    let existing =
+        STATE.with(|s| s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, first_focus(st), st.scale))));
     if let Some((hwnd, first, scale)) = existing {
         let Some((settings_was, palette_was)) = prepared else {
             unsafe {
@@ -436,7 +539,7 @@ pub fn open(owner: HWND, current: &Settings, palette: &Palette, on_change: fn(Se
         build.step(current, palette, false);
     }
     PAINTED_WITH.with(|p| *p.borrow_mut() = palette_key(palette));
-    let Some((hwnd, first)) = STATE.with(|s| s.borrow().as_ref().map(|st| (st.hwnd, st.theme))) else { return };
+    let Some((hwnd, first)) = STATE.with(|s| s.borrow().as_ref().map(|st| (st.hwnd, first_focus(st)))) else { return };
     show(hwnd, first);
 }
 
@@ -547,6 +650,16 @@ pub fn pre_translate(msg: &MSG) -> bool {
     }
 }
 
+/// The height of a row of the lists, which `widgets::draw_row` draws.
+fn set_row_heights(st: &State, scale: f32) {
+    let row = (28.0 * scale).round() as isize;
+    for list in [st.keys_list, st.awake_list, st.ext_list, st.profiles_list] {
+        unsafe {
+            SendMessageW(list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(row)));
+        }
+    }
+}
+
 /// A size or a coordinate at the scale `from`, at the scale `to`.
 fn rescaled(v: i32, from: f32, to: f32) -> i32 {
     (v as f32 * to / from).round() as i32
@@ -559,15 +672,12 @@ fn rescaled(v: i32, from: f32, to: f32) -> i32 {
 /// typed stay.
 fn rescale(dpi: u32, suggested: Option<RECT>) {
     let to = crate::design::dpi_scale(dpi.max(96));
-    let Some((hwnd, children, from, old_font, old_heading)) = STATE.with(|s| {
-        s.try_borrow()
-            .ok()
-            .and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.scale, st.font, st.heading_font)))
+    let Some((hwnd, children, from, old_fonts)) = STATE.with(|s| {
+        s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, st.children.clone(), st.scale, st.fonts)))
     }) else {
         return;
     };
-    let font = make_font(to, 400);
-    let heading_font = make_font(to, 500);
+    let fonts = Fonts::new(to);
     let scale_rect = |r: RECT| RECT {
         left: rescaled(r.left, from, to),
         top: rescaled(r.top, from, to),
@@ -575,20 +685,15 @@ fn rescale(dpi: u32, suggested: Option<RECT>) {
         bottom: rescaled(r.bottom, from, to),
     };
     unsafe {
-        for (child, kind) in &children {
+        for (child, _) in &children {
             let mut rect = RECT::default();
             let _ = GetWindowRect(*child, &mut rect);
-            if matches!(kind, Kind::Combo) {
-                // Its height on screen is the closed field; the height it
-                // was given is that of the open list.
-                SendMessageW(*child, CB_GETDROPPEDCONTROLRECT, None, Some(LPARAM(&mut rect as *mut RECT as isize)));
-            }
             let mut corners = [POINT { x: rect.left, y: rect.top }, POINT { x: rect.right, y: rect.bottom }];
             MapWindowPoints(None, Some(hwnd), &mut corners);
             let at =
                 scale_rect(RECT { left: corners[0].x, top: corners[0].y, right: corners[1].x, bottom: corners[1].y });
-            let heading = SendMessageW(*child, WM_GETFONT, None, None).0 == old_heading.0 as isize;
-            let new = if heading { heading_font } else { font };
+            let had = HFONT(SendMessageW(*child, WM_GETFONT, None, None).0 as _);
+            let new = fonts.instead_of(&old_fonts, had);
             SendMessageW(*child, WM_SETFONT, Some(WPARAM(new.0 as usize)), Some(LPARAM(0)));
             let _ = SetWindowPos(
                 *child,
@@ -612,20 +717,15 @@ fn rescale(dpi: u32, suggested: Option<RECT>) {
             );
         }
     }
-    WELLS.with(|w| w.borrow_mut().iter_mut().for_each(|well| *well = scale_rect(*well)));
+    WELLS.with(|w| w.borrow_mut().iter_mut().for_each(|(well, _)| *well = scale_rect(*well)));
     with_state(|st| {
-        st.font = font;
-        st.heading_font = heading_font;
+        st.fonts = fonts;
         st.scale = to;
-        unsafe {
-            let row = (28.0 * to).round() as isize;
-            SendMessageW(st.keys_list, LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(row)));
-        }
+        set_row_heights(st, to);
     });
     LOOK.with(|l| l.set(l.get().map(|(palette, _)| (palette, to))));
+    old_fonts.delete();
     unsafe {
-        let _ = DeleteObject(old_font.into());
-        let _ = DeleteObject(old_heading.into());
         let _ = RedrawWindow(Some(hwnd), None, None, RDW_INVALIDATE | RDW_ERASE | RDW_FRAME | RDW_ALLCHILDREN);
     }
 }
@@ -667,6 +767,7 @@ fn set_colors(palette: &Palette) {
                 background_color: palette.field.colorref().0,
                 field_color: palette.selection.colorref().0,
                 ink: palette.ink.colorref().0,
+                muted: palette.ink_muted.colorref().0,
             })
         });
         LOOK.with(|l| l.set(Some((*palette, scale))));
@@ -684,9 +785,9 @@ fn theme_children(children: &[(HWND, Kind)], dark: bool) {
         for &(child, kind) in children {
             let _ = match (dark, kind) {
                 (_, Kind::Label) => Ok(()),
-                (true, Kind::Edit | Kind::Combo) => SetWindowTheme(child, w!("DarkMode_CFD"), PCWSTR::null()),
+                (true, Kind::Edit) => SetWindowTheme(child, w!("DarkMode_CFD"), PCWSTR::null()),
                 (true, _) => SetWindowTheme(child, w!("DarkMode_Explorer"), PCWSTR::null()),
-                (false, Kind::Edit | Kind::Combo) => SetWindowTheme(child, PCWSTR::null(), PCWSTR::null()),
+                (false, Kind::Edit) => SetWindowTheme(child, PCWSTR::null(), PCWSTR::null()),
                 (false, _) => SetWindowTheme(child, w!("Explorer"), PCWSTR::null()),
             };
         }
@@ -706,309 +807,244 @@ struct Spec {
     rect: (i32, i32, i32, i32),
     id: i32,
     kind: Kind,
-    heading: bool,
+    look: Look,
+    /// The page it is on; none: on every page (the side list, the status
+    /// line, Close).
+    page: Option<usize>,
+}
+
+/// Collects the controls of `controls`, each on the page being laid out.
+struct Specs {
+    list: Vec<Spec>,
+    page: Option<usize>,
+}
+
+/// A row's label and its control share a line: the label is set lower so
+/// its text sits on the control's middle.
+const ROW_LABEL_DY: i32 = 6;
+/// Where a control at the right end of a row starts, and its width.
+const ROW_CONTROL_W: i32 = 220;
+const ROW_CONTROL_X: i32 = PAGE_X + PAGE_W - ROW_CONTROL_W;
+
+impl Specs {
+    #[allow(clippy::too_many_arguments)]
+    fn add(
+        &mut self,
+        class: PCWSTR,
+        text: &str,
+        style: u32,
+        ex: WINDOW_EX_STYLE,
+        rect: (i32, i32, i32, i32),
+        id: i32,
+        kind: Kind,
+        look: Look,
+    ) {
+        let page = self.page;
+        self.list.push(Spec { class, text: text.to_string(), style, ex, rect, id, kind, look, page });
+    }
+
+    fn text(&mut self, text: &str, rect: (i32, i32, i32, i32), id: i32, style: u32, look: Look) {
+        self.add(w!("STATIC"), text, style, WINDOW_EX_STYLE::default(), rect, id, Kind::Label, look);
+    }
+
+    fn label(&mut self, text: &str, rect: (i32, i32, i32, i32)) {
+        self.text(text, rect, -1, 0, Look::Body);
+    }
+
+    /// The page's name at its top.
+    fn title(&mut self, text: &str) {
+        self.text(text, (PAGE_X, 22, PAGE_W, 30), -1, 0, Look::Title);
+    }
+
+    fn heading(&mut self, text: &str, y: i32) {
+        self.text(text, (PAGE_X, y, PAGE_W, 22), -1, 0, Look::Heading);
+    }
+
+    fn note(&mut self, text: &str, rect: (i32, i32, i32, i32), id: i32, style: u32) {
+        self.text(text, rect, id, style, Look::Note);
+    }
+
+    /// A check box and its label, which toggles it too. The box carries no
+    /// text of its own: a themed check box ignores the dark palette's ink.
+    fn check(&mut self, id: i32, label_id: i32, text: &str, x: i32, y: i32, w: i32) {
+        let style = WS_TABSTOP.0 | BS_AUTOCHECKBOX as u32;
+        let none = WINDOW_EX_STYLE::default();
+        self.add(w!("BUTTON"), "", style, none, (x, y + 2, 18, 18), id, Kind::Button, Look::Body);
+        self.text(text, (x + 26, y, w - 26, 22), label_id, SS_NOTIFY, Look::Body);
+    }
+
+    fn select(&mut self, id: i32, rect: (i32, i32, i32, i32)) {
+        let style = WS_TABSTOP.0 | BS_OWNERDRAW as u32;
+        self.add(w!("BUTTON"), "", style, WINDOW_EX_STYLE::default(), rect, id, Kind::Select, Look::Body);
+    }
+
+    /// A label at the left of a row and a select at its right end.
+    fn select_row(&mut self, text: &str, id: i32, y: i32) {
+        self.label(text, (PAGE_X, y + ROW_LABEL_DY, PAGE_W - ROW_CONTROL_W - 8, 22));
+        self.select(id, (ROW_CONTROL_X, y, ROW_CONTROL_W, 32));
+    }
+
+    /// A label at the left of a row and a short number field at its right end.
+    fn number_row(&mut self, text: &str, id: i32, y: i32) {
+        let style = WS_TABSTOP.0 | (ES_AUTOHSCROLL | ES_NUMBER) as u32;
+        self.label(text, (PAGE_X, y + ROW_LABEL_DY, PAGE_W - 96 - 8, 22));
+        self.add(
+            w!("EDIT"),
+            "",
+            style,
+            WS_EX_CLIENTEDGE,
+            (PAGE_X + PAGE_W - 96, y, 96, 32),
+            id,
+            Kind::Edit,
+            Look::Body,
+        );
+    }
+
+    fn edit(&mut self, id: i32, rect: (i32, i32, i32, i32)) {
+        let style = WS_TABSTOP.0 | ES_AUTOHSCROLL as u32;
+        self.add(w!("EDIT"), "", style, WS_EX_CLIENTEDGE, rect, id, Kind::Edit, Look::Body);
+    }
+
+    /// An owner-drawn list: `widgets::draw_row` draws its rows.
+    fn list(&mut self, id: i32, rect: (i32, i32, i32, i32)) {
+        let style = WS_TABSTOP.0
+            | WS_VSCROLL.0
+            | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT | LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32;
+        self.add(w!("LISTBOX"), "", style, WS_EX_CLIENTEDGE, rect, id, Kind::List, Look::Body);
+    }
+
+    fn button(&mut self, text: &str, id: i32, rect: (i32, i32, i32, i32)) {
+        let style = WS_TABSTOP.0 | BS_OWNERDRAW as u32;
+        self.add(w!("BUTTON"), text, style, WINDOW_EX_STYLE::default(), rect, id, Kind::Button, Look::Body);
+    }
 }
 
 /// The controls of the window, in DIPs, in the order they are made (the
-/// order of the Tab key).
+/// order of the Tab key): the side list, each page, then what every page
+/// shares.
 fn controls() -> Vec<Spec> {
-    let mut specs = Vec::new();
-    let mut add = |class: PCWSTR,
-                   text: &str,
-                   style: u32,
-                   ex: WINDOW_EX_STYLE,
-                   rect: (i32, i32, i32, i32),
-                   id: i32,
-                   kind: Kind,
-                   heading: bool| {
-        specs.push(Spec { class, text: text.to_string(), style, ex, rect, id, kind, heading });
-    };
-    let edge = WS_EX_CLIENTEDGE;
-    let none = WINDOW_EX_STYLE::default();
-    let tab = WS_TABSTOP.0;
-    let label = |add: &mut AddChild<'_>, text: &str, rect: (i32, i32, i32, i32)| {
-        add(w!("STATIC"), text, 0, none, rect, -1, Kind::Label, false)
-    };
-    let heading = |add: &mut AddChild<'_>, text: &str, rect: (i32, i32, i32, i32)| {
-        add(w!("STATIC"), text, 0, none, rect, -1, Kind::Label, true)
-    };
-    let edit_style = tab | ES_AUTOHSCROLL as u32;
-    let number_style = edit_style | ES_NUMBER as u32;
-    let button_style = tab | BS_OWNERDRAW as u32;
+    let mut s = Specs { list: Vec::new(), page: None };
+    let (x, w) = (PAGE_X, PAGE_W);
 
-    // Left column: Tabs first (where they go is the first thing
-    // asked for), then General.
-    let l = 24;
-    heading(&mut add, "Tabs", (l, 18, 340, 22));
-    label(&mut add, "Position", (l, 52, 140, 22));
-    add(
-        w!("COMBOBOX"),
-        "",
-        tab | CBS_DROPDOWNLIST as u32,
-        none,
-        (l + 150, 48, 190, 200),
-        ID_TAB_LAYOUT,
-        Kind::Combo,
-        false,
-    );
-    // The checkboxes have no text of their own: a themed checkbox ignores
-    // the dark palette's ink, a label doesn't.
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 86, 18, 18), ID_COLLAPSED, Kind::Button, false);
-    add(w!("STATIC"), "Hide tabs", SS_NOTIFY, none, (l + 22, 84, 150, 22), ID_COLLAPSED_LABEL, Kind::Label, false);
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l + 180, 86, 18, 18), ID_SPLIT, Kind::Button, false);
-    add(w!("STATIC"), "Split view", SS_NOTIFY, none, (l + 202, 84, 138, 22), ID_SPLIT_LABEL, Kind::Label, false);
+    for (i, name) in PAGES.iter().enumerate() {
+        s.button(name, ID_NAV + i as i32, (12, 16 + 36 * i as i32, RAIL - 24, 32));
+    }
 
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 112, 18, 18), ID_PREVIEW, Kind::Button, false);
-    add(
-        w!("STATIC"),
-        "Page preview on hover",
-        SS_NOTIFY,
-        none,
-        (l + 22, 110, 150, 22),
-        ID_PREVIEW_LABEL,
-        Kind::Label,
-        false,
-    );
-    add(
-        w!("BUTTON"),
-        "",
-        tab | BS_AUTOCHECKBOX as u32,
-        none,
-        (l + 180, 112, 18, 18),
-        ID_BOOKMARKS_BAR,
-        Kind::Button,
-        false,
-    );
-    add(
-        w!("STATIC"),
-        "Show bookmarks bar",
-        SS_NOTIFY,
-        none,
-        (l + 202, 110, 138, 22),
-        ID_BOOKMARKS_BAR_LABEL,
-        Kind::Label,
-        false,
-    );
+    // General: how it looks, where the tabs and the field go.
+    s.page = Some(0);
+    s.title("General");
+    s.select_row("Theme", ID_THEME, 72);
+    s.select_row("Tabs", ID_TAB_LAYOUT, 112);
+    s.select_row("Field position", ID_FIELD_POSITION, 152);
+    s.check(ID_COLLAPSED, ID_COLLAPSED_LABEL, "Hide tabs", x, 210, 250);
+    s.check(ID_SPLIT, ID_SPLIT_LABEL, "Split view", x + 262, 210, 262);
+    s.check(ID_PREVIEW, ID_PREVIEW_LABEL, "Page preview on hover", x, 246, 250);
+    s.check(ID_BOOKMARKS_BAR, ID_BOOKMARKS_BAR_LABEL, "Show bookmarks bar", x + 262, 246, 262);
+    s.label("Default search engine (address with {q})", (x, 288, w, 22));
+    s.edit(ID_SEARCH, (x, 312, w, 32));
 
-    heading(&mut add, "General", (l, 146, 340, 22));
-    label(&mut add, "Theme", (l, 180, 140, 22));
-    add(
-        w!("COMBOBOX"),
-        "",
-        tab | CBS_DROPDOWNLIST as u32,
-        none,
-        (l + 150, 176, 190, 200),
-        ID_THEME,
-        Kind::Combo,
-        false,
-    );
-    label(&mut add, "Default search engine (address with {q})", (l, 216, 340, 22));
-    add(w!("EDIT"), "", edit_style, edge, (l, 238, 340, 26), ID_SEARCH, Kind::Edit, false);
+    // Memory: when tabs sleep, and the sites that never do.
+    s.page = Some(1);
+    s.title("Memory");
+    s.number_row("Put tabs to sleep after (seconds)", ID_SUSPEND, 72);
+    s.number_row("Discard them after (minutes, 0 = never)", ID_DISCARD, 112);
+    s.number_row("Save memory at memory use (%)", ID_PRESSURE, 152);
+    s.label("Sites that never sleep (they use more memory)", (x, 220, w, 22));
+    s.list(ID_AWAKE_LIST, (x, 248, w, 136));
+    s.edit(ID_AWAKE_EDIT, (x, 396, w - 8 - 96 - 6 - 96, 32));
+    s.button("Add", ID_AWAKE_ADD, (x + w - 96 - 6 - 96, 397, 96, 30));
+    s.button("Remove", ID_AWAKE_REMOVE, (x + w - 96, 397, 96, 30));
 
-    label(&mut add, "Put tabs to sleep after (seconds)", (l, 278, 260, 22));
-    add(w!("EDIT"), "", number_style, edge, (l + 264, 274, 76, 26), ID_SUSPEND, Kind::Edit, false);
-    label(&mut add, "Discard them after (minutes, 0 = never)", (l, 312, 260, 22));
-    add(w!("EDIT"), "", number_style, edge, (l + 264, 308, 76, 26), ID_DISCARD, Kind::Edit, false);
-    label(&mut add, "Save memory at memory use (%)", (l, 346, 260, 22));
-    add(w!("EDIT"), "", number_style, edge, (l + 264, 342, 76, 26), ID_PRESSURE, Kind::Edit, false);
-    label(&mut add, "Sites that never sleep (use more memory)", (l, 384, 340, 22));
-    let list_style = tab | WS_VSCROLL.0 | (LBS_NOTIFY | LBS_NOINTEGRALHEIGHT) as u32;
-    add(w!("LISTBOX"), "", list_style, edge, (l, 406, 340, 104), ID_AWAKE_LIST, Kind::List, false);
-    add(w!("EDIT"), "", edit_style, edge, (l, 518, 196, 26), ID_AWAKE_EDIT, Kind::Edit, false);
-    add(w!("BUTTON"), "Add", button_style, none, (l + 204, 518, 66, 26), ID_AWAKE_ADD, Kind::Button, false);
-    add(w!("BUTTON"), "Remove", button_style, none, (l + 276, 518, 64, 26), ID_AWAKE_REMOVE, Kind::Button, false);
+    // Shortcuts.
+    s.page = Some(2);
+    s.title("Shortcuts");
+    s.list(ID_KEYS_LIST, (x, 68, w, 304));
+    s.edit(ID_KEY_EDIT, (x, 384, w - 8 - 96 - 6 - 96, 32));
+    s.button("Assign", ID_KEY_ASSIGN, (x + w - 96 - 6 - 96, 385, 96, 30));
+    s.button("Reset", ID_KEY_RESET, (x + w - 96, 385, 96, 30));
+    s.note("Example: Ctrl+Shift+O or F6, F7. Empty: none.", (x, 424, w, 22), -1, 0);
 
-    heading(&mut add, "Passwords", (l, 566, 340, 22));
-    label(&mut add, "Offer to save", (l, 600, 140, 22));
-    add(
-        w!("COMBOBOX"),
-        "",
-        tab | CBS_DROPDOWNLIST as u32,
-        none,
-        (l + 150, 596, 190, 200),
-        ID_PASSWORDS_OFFER,
-        Kind::Combo,
-        false,
-    );
-    add(w!("BUTTON"), "Import…", button_style, none, (l, 632, 110, 26), ID_PASSWORDS_IMPORT, Kind::Button, false);
-    add(
-        w!("BUTTON"),
-        "Show saved…",
-        button_style,
-        none,
-        (l + 118, 632, 150, 26),
-        ID_PASSWORDS_LIST,
-        Kind::Button,
-        false,
-    );
-    heading(&mut add, "Extensions", (l, 688, 140, 22));
-    add(w!("STATIC"), "", 0, none, (l + 150, 688, 582, 22), ID_EXT_NOTE, Kind::Label, false);
-    add(w!("LISTBOX"), "", list_style, edge, (l, 714, 732, 88), ID_EXT_LIST, Kind::List, false);
-    add(w!("BUTTON"), "Enable / disable", button_style, none, (l, 810, 170, 26), ID_EXT_TOGGLE, Kind::Button, false);
-    add(w!("BUTTON"), "Pin / unpin", button_style, none, (l + 176, 810, 120, 26), ID_EXT_PIN, Kind::Button, false);
-    add(w!("BUTTON"), "Reload", button_style, none, (l + 302, 810, 84, 26), ID_EXT_RELOAD, Kind::Button, false);
-    add(w!("BUTTON"), "Remove…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
-    add(w!("BUTTON"), "Load unpacked…", button_style, none, (l + 478, 810, 170, 26), ID_EXT_LOAD, Kind::Button, false);
-
-    // Profiles, under Extensions and as wide: the list at the left, what
-    // acts on it at the right. A name typed in the field makes a new
-    // profile or renames the one picked.
-    heading(&mut add, "Profiles", (l, 852, 140, 22));
-    label(
-        &mut add,
-        "A profile keeps its own tabs, spaces, bookmarks, history, passwords and site sign-ins, in its own window.",
-        (l, 878, 732, 22),
-    );
-    add(w!("LISTBOX"), "", list_style, edge, (l, 906, 340, 58), ID_PROFILES_LIST, Kind::List, false);
-    add(w!("EDIT"), "", edit_style, edge, (l + 350, 906, 176, 26), ID_PROFILE_NAME, Kind::Edit, false);
-    add(w!("BUTTON"), "New profile", button_style, none, (l + 532, 906, 110, 26), ID_PROFILE_NEW, Kind::Button, false);
-    add(w!("BUTTON"), "Rename", button_style, none, (l + 648, 906, 84, 26), ID_PROFILE_RENAME, Kind::Button, false);
-    add(
-        w!("BUTTON"),
-        "",
-        tab | BS_AUTOCHECKBOX as u32,
-        none,
-        (l + 350, 942, 18, 18),
-        ID_PROFILE_SHORTCUT,
-        Kind::Button,
-        false,
-    );
-    add(
-        w!("STATIC"),
-        "Add a desktop shortcut",
-        SS_NOTIFY,
-        none,
-        (l + 372, 940, 200, 22),
-        ID_PROFILE_SHORTCUT_LABEL,
-        Kind::Label,
-        false,
-    );
-    add(w!("BUTTON"), "Open", button_style, none, (l + 648, 938, 84, 26), ID_PROFILE_OPEN, Kind::Button, false);
-    // The lock of the profile picked in the list (`profile_lock`).
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 976, 18, 18), ID_PROFILE_LOCK, Kind::Button, false);
-    add(
-        w!("STATIC"),
-        "Ask for Windows Hello to open it",
-        SS_NOTIFY,
-        none,
-        (l + 22, 974, 300, 22),
-        ID_PROFILE_LOCK_LABEL,
-        Kind::Label,
-        false,
-    );
-    add(w!("STATIC"), "Lock after", 0, none, (l + 350, 974, 80, 22), ID_PROFILE_LOCK_AFTER_LABEL, Kind::Label, false);
-    add(
-        w!("COMBOBOX"),
-        "",
-        tab | CBS_DROPDOWNLIST as u32,
-        none,
-        (l + 432, 970, 200, 200),
-        ID_PROFILE_LOCK_AFTER,
-        Kind::Combo,
-        false,
-    );
-    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (l, 1004, 620, 22), ID_PROFILE_LOCK_NOTE, Kind::Label, false);
-
-    // Right column: Shortcuts.
-    let r = 400;
-    heading(&mut add, "Shortcuts", (r, 18, 356, 22));
-    let keys_style = list_style | (LBS_OWNERDRAWFIXED | LBS_HASSTRINGS) as u32;
-    add(w!("LISTBOX"), "", keys_style, edge, (r, 48, 356, 298), ID_KEYS_LIST, Kind::List, false);
-    add(w!("EDIT"), "", edit_style, edge, (r, 356, 176, 26), ID_KEY_EDIT, Kind::Edit, false);
-    add(w!("BUTTON"), "Assign", button_style, none, (r + 184, 356, 80, 26), ID_KEY_ASSIGN, Kind::Button, false);
-    add(w!("BUTTON"), "Reset", button_style, none, (r + 270, 356, 86, 26), ID_KEY_RESET, Kind::Button, false);
-    label(&mut add, "Example: Ctrl+Shift+O or F6, F7. Empty: none.", (r, 388, 356, 22));
-    add(
-        w!("STATIC"),
-        "Nea applies and saves changes immediately.",
-        0,
-        none,
-        (r, 418, 356, 22),
-        ID_STATUS,
-        Kind::Label,
-        false,
-    );
-
-    // The field: where it floats, laid out as the Position of Tabs.
-    heading(&mut add, "Field", (r, 452, 140, 22));
-    label(&mut add, "Position", (r, 486, 140, 22));
-    add(
-        w!("COMBOBOX"),
-        "",
-        tab | CBS_DROPDOWNLIST as u32,
-        none,
-        (r + 150, 482, 190, 200),
-        ID_FIELD_POSITION,
-        Kind::Combo,
-        false,
-    );
-
-    // The box carries no text of its own: a themed checkbox ignores the
-    // text colour, so in dark mode its label would vanish. The label
-    // beside it toggles it too.
-    heading(&mut add, "Updates", (r, 520, 140, 22));
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 521, 20, 20), ID_UPDATES, Kind::Button, false);
-    add(
-        w!("STATIC"),
-        "Check once a day",
-        SS_NOTIFY,
-        none,
-        (r + 174, 520, 182, 22),
-        ID_UPDATES_LABEL,
-        Kind::Label,
-        false,
-    );
-    heading(&mut add, "Privacy", (r, 552, 140, 22));
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r, 579, 20, 20), ID_TRACKERS, Kind::Button, false);
-    add(
-        w!("STATIC"),
-        "Block third-party cookies and trackers",
-        SS_NOTIFY,
-        none,
-        (r + 24, 578, 332, 22),
-        ID_TRACKERS_LABEL,
-        Kind::Label,
-        false,
-    );
+    // Privacy: trackers, notifications, passwords.
+    s.page = Some(3);
+    s.title("Privacy");
+    s.check(ID_TRACKERS, ID_TRACKERS_LABEL, "Block third-party cookies and trackers", x, 74, w);
     // The sites that asked to notify: Nea asks each one once.
-    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 608, 262, 22), ID_NOTIFY_NOTE, Kind::Label, false);
-    add(w!("BUTTON"), "Forget", button_style, none, (r + 270, 604, 86, 26), ID_NOTIFY_FORGET, Kind::Button, false);
-    heading(&mut add, "Testing", (r, 640, 140, 22));
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 641, 20, 20), ID_BENCH, Kind::Button, false);
-    add(
-        w!("STATIC"),
-        "Script control (local pipe)",
-        SS_NOTIFY,
-        none,
-        (r + 174, 640, 182, 22),
-        ID_BENCH_LABEL,
-        Kind::Label,
-        false,
-    );
-    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 664, 356, 22), ID_VERSION, Kind::Label, false);
-    add(
-        w!("BUTTON"),
-        "Close",
-        button_style,
-        none,
-        (CLIENT_WIDTH - 24 - 96, CLIENT_HEIGHT - 24 - 28, 96, 28),
-        ID_CLOSE,
-        Kind::Button,
-        false,
-    );
+    s.note("", (x, 117, w - 96 - 12, 22), ID_NOTIFY_NOTE, SS_ENDELLIPSIS);
+    s.button("Forget", ID_NOTIFY_FORGET, (x + w - 96, 112, 96, 30));
+    s.heading("Passwords", 172);
+    s.select_row("Offer to save", ID_PASSWORDS_OFFER, 204);
+    s.button("Import…", ID_PASSWORDS_IMPORT, (x, 252, 120, 30));
+    s.button("Show saved…", ID_PASSWORDS_LIST, (x + 128, 252, 140, 30));
 
-    specs
+    // Extensions.
+    s.page = Some(4);
+    s.title("Extensions");
+    s.note("", (x, 62, w, 40), ID_EXT_NOTE, 0);
+    s.list(ID_EXT_LIST, (x, 108, w, 224));
+    s.button("Enable / disable", ID_EXT_TOGGLE, (x, 344, 124, 30));
+    s.button("Pin / unpin", ID_EXT_PIN, (x + 130, 344, 96, 30));
+    s.button("Reload", ID_EXT_RELOAD, (x + 232, 344, 76, 30));
+    s.button("Remove…", ID_EXT_REMOVE, (x + 314, 344, 84, 30));
+    s.button("Load unpacked…", ID_EXT_LOAD, (x + 404, 344, 120, 30));
+
+    // Profiles: the list, what acts on it, and the lock of the one picked.
+    // A name typed in the field makes a new profile or renames the one
+    // picked.
+    s.page = Some(5);
+    s.title("Profiles");
+    s.note(
+        "A profile keeps its own tabs, spaces, bookmarks, history, passwords and site sign-ins, in its own window.",
+        (x, 62, w, 40),
+        -1,
+        0,
+    );
+    s.list(ID_PROFILES_LIST, (x, 108, w, 116));
+    s.edit(ID_PROFILE_NAME, (x, 236, 232, 32));
+    s.button("New profile", ID_PROFILE_NEW, (x + 240, 237, 112, 30));
+    s.button("Rename", ID_PROFILE_RENAME, (x + 358, 237, 80, 30));
+    s.button("Open", ID_PROFILE_OPEN, (x + 444, 237, 80, 30));
+    s.check(ID_PROFILE_SHORTCUT, ID_PROFILE_SHORTCUT_LABEL, "Add a desktop shortcut", x, 284, 300);
+    // The lock of the profile picked in the list (`profile_lock`).
+    s.check(ID_PROFILE_LOCK, ID_PROFILE_LOCK_LABEL, "Ask for Windows Hello to open it", x, 344, w);
+    s.text(
+        "Lock after",
+        (x, 378 + ROW_LABEL_DY, w - ROW_CONTROL_W - 8, 22),
+        ID_PROFILE_LOCK_AFTER_LABEL,
+        0,
+        Look::Body,
+    );
+    s.select(ID_PROFILE_LOCK_AFTER, (ROW_CONTROL_X, 378, ROW_CONTROL_W, 32));
+    s.note("", (x, 422, w, 22), ID_PROFILE_LOCK_NOTE, SS_ENDELLIPSIS);
+
+    // About: the version, updates, and what tests use.
+    s.page = Some(6);
+    s.title("About");
+    s.text("", (x, 64, w, 22), ID_VERSION, SS_ENDELLIPSIS, Look::Body);
+    s.check(ID_UPDATES, ID_UPDATES_LABEL, "Check for a new version once a day", x, 100, w);
+    s.heading("Testing", 156);
+    s.check(ID_BENCH, ID_BENCH_LABEL, "Script control (local pipe)", x, 190, w);
+
+    // On every page: what Nea did last, and Close.
+    s.page = None;
+    s.note(
+        "Nea applies and saves changes immediately.",
+        (x, CLIENT_HEIGHT - 42, w - 96 - 12, 22),
+        ID_STATUS,
+        SS_ENDELLIPSIS,
+    );
+    s.button("Close", ID_CLOSE, (x + w - 96, CLIENT_HEIGHT - 46, 96, 30));
+
+    s.list
 }
 
 /// How long one step of the window made ahead may hold the UI thread.
 const STEP_BUDGET_MS: f64 = 6.0;
-/// What one more piece of work costs at most (measured: a combo box 4-12
-/// ms, an edit or a list 1-6 ms, a label or a button about 1 ms).
+/// What one more piece of work costs at most (measured: an edit or a list
+/// 1-6 ms, a label or a button about 1 ms).
 fn unit_cost_ms(kind: Kind) -> f64 {
     match kind {
-        Kind::Combo => 6.0,
         Kind::Edit | Kind::List => 3.0,
-        Kind::Label | Kind::Button => 1.0,
+        Kind::Label | Kind::Button | Kind::Select => 1.0,
     }
 }
 
@@ -1022,9 +1058,9 @@ fn fits_in_step(first: bool, spent_ms: f64, next_ms: f64) -> bool {
 /// The pieces of work after the controls, in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Finish {
-    /// The texts of the combo box with this index among the combo boxes.
-    ComboTexts(usize),
-    /// The row height of the shortcuts list, the wells and the hovers.
+    /// The values of the select with this index among the selects.
+    SelectTexts(usize),
+    /// The row height of the lists, the wells and the hovers.
     Details,
     /// The chords other programs hold, and the state.
     State,
@@ -1040,14 +1076,14 @@ enum Finish {
 
 const THEME_CHUNK: usize = 16;
 const KEYS_CHUNK: usize = 16;
-const COMBO_COUNT: usize = 5;
+const SELECT_COUNT: usize = 5;
 
 /// The piece that follows `step`, for `children` controls and `keys` rows
 /// of the shortcuts list; none after the last one.
 fn next_finish(step: Finish, children: usize, keys: usize) -> Option<Finish> {
     Some(match step {
-        Finish::ComboTexts(i) if i + 1 < COMBO_COUNT => Finish::ComboTexts(i + 1),
-        Finish::ComboTexts(_) => Finish::Details,
+        Finish::SelectTexts(i) if i + 1 < SELECT_COUNT => Finish::SelectTexts(i + 1),
+        Finish::SelectTexts(_) => Finish::Details,
         Finish::Details => Finish::State,
         Finish::State => Finish::Colors,
         Finish::Colors => Finish::Themes(0),
@@ -1065,11 +1101,10 @@ struct Build {
     hwnd: HWND,
     instance: windows::Win32::Foundation::HINSTANCE,
     scale: f32,
-    font: HFONT,
-    heading_font: HFONT,
+    fonts: Fonts,
     specs: Vec<Spec>,
     children: Vec<(HWND, Kind)>,
-    wells: Vec<RECT>,
+    wells: Vec<(RECT, Option<usize>)>,
     /// The next piece of the controls (two for each: made, then its font);
     /// past the last one, `finish` runs.
     next: usize,
@@ -1097,6 +1132,7 @@ fn warm_themes() {
 /// Makes the window itself (hidden) and its fonts: the first step.
 fn begin(owner: HWND) -> windows::core::Result<Build> {
     warm_themes();
+    NOTES.with(|n| n.borrow_mut().clear());
     unsafe {
         let instance = GetModuleHandleW(None)?.into();
         let class = WNDCLASSW {
@@ -1139,8 +1175,7 @@ fn begin(owner: HWND) -> windows::core::Result<Build> {
             hwnd,
             instance,
             scale,
-            font: make_font(scale, 400),
-            heading_font: make_font(scale, 500),
+            fonts: Fonts::new(scale),
             specs: controls(),
             children: Vec::new(),
             wells: Vec::new(),
@@ -1163,18 +1198,22 @@ impl Build {
         if ex == WS_EX_CLIENTEDGE {
             // No sunken edge: the control sits inside a grey well the
             // window draws, a little smaller than the place it was given.
-            self.wells.push(RECT { left: self.px(x), top: self.px(y), right: self.px(x + w), bottom: self.px(y + h) });
-            let (dx, dy) = if matches!(spec.kind, Kind::Edit) { (8, 4) } else { (4, 4) };
+            let well = RECT { left: self.px(x), top: self.px(y), right: self.px(x + w), bottom: self.px(y + h) };
+            self.wells.push((well, spec.page));
+            // An edit's one line sits in the middle of its well.
+            let (dx, dy) = if matches!(spec.kind, Kind::Edit) { (10, 7) } else { (4, 4) };
             (x, y, w, h) = (x + dx, y + dy, w - 2 * dx, h - 2 * dy);
             ex = WINDOW_EX_STYLE::default();
         }
         let spec = &self.specs[index];
+        let shown = spec.page.is_none_or(|p| p == PAGE.with(Cell::get));
+        let visible = if shown { WS_VISIBLE } else { WINDOW_STYLE::default() };
         unsafe {
             let child = CreateWindowExW(
                 ex,
                 spec.class,
                 &wide(&spec.text),
-                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(spec.style),
+                WS_CHILD | visible | WINDOW_STYLE(spec.style),
                 self.px(x),
                 self.px(y),
                 self.px(w),
@@ -1185,14 +1224,19 @@ impl Build {
                 None,
             )
             .unwrap_or_default();
+            if spec.kind == Kind::Select {
+                select::attach(child);
+            }
+            if spec.look == Look::Note {
+                NOTES.with(|n| n.borrow_mut().push(child.0 as isize));
+            }
             self.children.push((child, spec.kind));
         }
     }
 
-    /// Gives control `index` its font: for a combo box, a few milliseconds
-    /// of its own (it measures its rows again).
+    /// Gives control `index` its font.
     fn give_font(&self, index: usize) {
-        let font = if self.specs[index].heading { self.heading_font } else { self.font };
+        let font = self.fonts.of(self.specs[index].look);
         unsafe {
             SendMessageW(self.children[index].0, WM_SETFONT, Some(WPARAM(font.0 as usize)), Some(LPARAM(0)));
         }
@@ -1206,7 +1250,7 @@ impl Build {
     fn run_finish(&mut self, step: Finish, current: &Settings, palette: &Palette) {
         unsafe {
             match step {
-                Finish::ComboTexts(i) => {
+                Finish::SelectTexts(i) => {
                     let (id, names): (i32, Vec<&str>) = match i {
                         0 => (ID_THEME, THEMES.iter().map(|(_, n)| *n).collect()),
                         1 => (ID_TAB_LAYOUT, TAB_LAYOUTS.iter().map(|(_, n)| *n).collect()),
@@ -1214,15 +1258,17 @@ impl Build {
                         3 => (ID_PASSWORDS_OFFER, OFFER_CHOICES.iter().map(|(_, n)| *n).collect()),
                         _ => (ID_PROFILE_LOCK_AFTER, LOCK_AFTER_CHOICES.iter().map(|(_, n)| *n).collect()),
                     };
-                    let combo = self.item(id);
+                    let select = self.item(id);
                     for name in names {
                         let text = wide(name);
-                        SendMessageW(combo, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
+                        SendMessageW(select, CB_ADDSTRING, None, Some(LPARAM(text.as_ptr() as isize)));
                     }
                 }
                 Finish::Details => {
                     let row = self.px(28) as isize;
-                    SendMessageW(self.item(ID_KEYS_LIST), LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(row)));
+                    for id in [ID_KEYS_LIST, ID_AWAKE_LIST, ID_EXT_LIST, ID_PROFILES_LIST] {
+                        SendMessageW(self.item(id), LB_SETITEMHEIGHT, Some(WPARAM(0)), Some(LPARAM(row)));
+                    }
                     WELLS.with(|w| *w.borrow_mut() = std::mem::take(&mut self.wells));
                     for (child, kind) in &self.children {
                         if matches!(kind, Kind::Button)
@@ -1276,8 +1322,9 @@ impl Build {
                         profile_lock_after_label: self.item(ID_PROFILE_LOCK_AFTER_LABEL),
                         profile_lock_after: self.item(ID_PROFILE_LOCK_AFTER),
                         profile_lock_note: self.item(ID_PROFILE_LOCK_NOTE),
-                        font: self.font,
-                        heading_font: self.heading_font,
+                        nav: (0..PAGES.len()).map(|i| self.item(ID_NAV + i as i32)).collect(),
+                        pages: self.specs.iter().map(|spec| spec.page).collect(),
+                        fonts: self.fonts,
                         scale: self.scale,
                     };
                     STATE.with(|s| *s.borrow_mut() = Some(state));
@@ -1322,7 +1369,7 @@ impl Build {
                 }
                 self.next += 1;
                 if self.next == 2 * self.specs.len() {
-                    self.finish = Some(Finish::ComboTexts(0));
+                    self.finish = Some(Finish::SelectTexts(0));
                 }
                 continue;
             }
@@ -1372,9 +1419,8 @@ fn drop_build() {
     }
     unsafe {
         let _ = DestroyWindow(build.hwnd);
-        let _ = DeleteObject(build.font.into());
-        let _ = DeleteObject(build.heading_font.into());
     }
+    build.fonts.delete();
 }
 
 fn fill_all(st: &mut State) {
@@ -1495,7 +1541,8 @@ pub fn dismiss() {
 
 /// One row of the Profiles list.
 fn profile_row(name: &str, this: bool) -> String {
-    if this { format!("{name}  ·  This profile") } else { name.to_string() }
+    // After the tab: the quieter text at the row's right end.
+    if this { format!("{name}\tThis profile") } else { name.to_string() }
 }
 
 /// The app gives the profiles (id, name, lock options) and this window's.
@@ -2102,9 +2149,9 @@ pub fn set_closed_handler(handler: fn()) {
     CLOSED.with(|c| c.set(Some(handler)));
 }
 
-/// Owner-drawn row of the shortcuts list: the action on the left, its chords
-/// on the right, the picked row on a soft rounded ground.
-fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
+/// Owner-drawn row of a list (`widgets::draw_row`). A row of the shortcuts
+/// list carries a third field when another program holds its chord.
+fn draw_list_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
     if item.itemID == u32::MAX {
         return;
     }
@@ -2122,37 +2169,47 @@ fn draw_key_row(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
         );
         String::from_utf16_lossy(&buffer[..len as usize])
     };
-    let (label, chords) = text.split_once('\t').unwrap_or((&text, ""));
-    let (chords, taken) = match chords.split_once('\t') {
-        Some((chords, _)) => (chords, true),
-        None => (chords, false),
+    let mut fields = text.splitn(3, '\t');
+    let label = fields.next().unwrap_or_default();
+    let meta = fields.next();
+    // The chord never reaches us: said in the row, in the private violet
+    // (the one non-grey ink the interface has).
+    let alert = fields.next().map(|_| "Used by another program");
+    let shown = match meta {
+        Some(meta) => format!("{label}\t{meta}"),
+        None => label.to_string(),
     };
-    let selected = item.itemState.0 & ODS_SELECTED.0 != 0;
+    let picked = item.itemState.0 & ODS_SELECTED.0 != 0;
     SURFACES.with(|s| {
         s.borrow_mut().2.paint(item.hDC, item.rcItem, |g| {
-            let rect: RectF = item.rcItem.into();
-            g.fill(rect, palette.selection);
-            if selected {
-                g.round(rect.inset(0.0, 1.0), size::RADIUS * scale * 0.75, palette.tab_active);
-            }
-            let inner = rect.inset(10.0 * scale, 0.0);
-            let small = Font::new(size::TEXT_SMALL * scale, size::REGULAR, Align::Leading);
-            let mut chords_rect = RectF::new(inner.right, inner.top, inner.right, inner.bottom);
-            if taken {
-                // The chord never reaches us: said in the row, in the
-                // private violet (the one non-grey ink the interface has).
-                let note = "Used by another program";
-                let note_w = g.measure(note, small);
-                let note_rect = RectF::new(inner.right - note_w - 1.0, inner.top, inner.right, inner.bottom);
-                g.text(note, note_rect, small, palette.private_mark);
-                chords_rect.right = note_rect.left - 6.0 * scale;
-            }
-            let chords_w = g.measure(chords, small).min(inner.width() * 0.5);
-            chords_rect.left = chords_rect.right - chords_w - 1.0;
-            g.text(chords, chords_rect, small, palette.ink_muted);
-            let label_rect = RectF::new(inner.left, inner.top, chords_rect.left - 8.0 * scale, inner.bottom);
-            g.text(label, label_rect, Font::new(size::TEXT * scale, size::REGULAR, Align::Leading), palette.ink);
+            widgets::draw_row(g, item.rcItem.into(), &shown, alert, picked, palette, scale);
         })
+    });
+}
+
+/// Draws an owner-drawn button of the window: an entry of the side list, a
+/// select, or a button (Close is the primary one).
+fn draw_button(item: &DRAWITEMSTRUCT, palette: &Palette, scale: f32) {
+    let id = item.CtlID as i32;
+    let state = widgets::item_state(item);
+    let text = widgets::window_text(item.hwndItem);
+    SURFACES.with(|s| {
+        let surfaces = &mut *s.borrow_mut();
+        if (ID_NAV..ID_NAV + PAGES.len() as i32).contains(&id) {
+            let picked = (id - ID_NAV) as usize == PAGE.with(Cell::get);
+            surfaces.1.paint(item.hDC, item.rcItem, |g| {
+                g.fill(item.rcItem.into(), palette.chrome);
+                widgets::draw_nav(g, item.rcItem.into(), &text, picked, state, palette, scale);
+            });
+        } else if select::is_select(item.hwndItem) {
+            surfaces.1.paint(item.hDC, item.rcItem, |g| {
+                g.fill(item.rcItem.into(), palette.field);
+                widgets::draw_select(g, item.rcItem.into(), &text, state, palette, scale);
+            });
+        } else {
+            let kind = if id == ID_CLOSE { ButtonKind::Primary } else { ButtonKind::Secondary };
+            widgets::draw_button_item(&mut surfaces.1, item, kind, Color::from(palette.field), palette, scale);
+        }
     });
 }
 
@@ -2162,6 +2219,17 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_COMMAND => {
             let id = (wparam.0 & 0xFFFF) as u16 as i32;
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
+            if code == BN_CLICKED_CODE && (ID_NAV..ID_NAV + PAGES.len() as i32).contains(&id) {
+                show_page((id - ID_NAV) as usize);
+                return LRESULT(0);
+            }
+            let from = HWND(lparam.0 as _);
+            if code == BN_CLICKED_CODE && crate::msg_param::from_child(hwnd, from) && select::is_select(from) {
+                // Opened with no state borrowed: a pick comes back here
+                // as CBN_SELCHANGE.
+                select::pick(from);
+                return LRESULT(0);
+            }
             let mut extension = None;
             let mut layout = None;
             let mut profile = None;
@@ -2249,20 +2317,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 return LRESULT(0);
             };
             let Some((palette, scale)) = LOOK.with(|l| l.get()) else { return LRESULT(1) };
-            if item.CtlType == ODT_BUTTON {
-                let kind = if item.CtlID == ID_CLOSE as u32 { ButtonKind::Primary } else { ButtonKind::Secondary };
-                SURFACES.with(|s| {
-                    widgets::draw_button_item(
-                        &mut s.borrow_mut().1,
-                        item,
-                        kind,
-                        Color::from(palette.field),
-                        &palette,
-                        scale,
-                    )
-                });
-            } else {
-                draw_key_row(item, &palette, scale);
+            match item.CtlType {
+                ODT_BUTTON => draw_button(item, &palette, scale),
+                ODT_LISTBOX => draw_list_row(item, &palette, scale),
+                _ => {}
             }
             LRESULT(1)
         }
@@ -2273,8 +2331,13 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             let hdc = HDC(wparam.0 as _);
             let on_field = msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX;
+            // A note, or a label whose control is off, in the quieter ink.
+            let control = HWND(lparam.0 as _);
+            let quiet = msg == WM_CTLCOLORSTATIC
+                && (NOTES.with(|n| n.borrow().contains(&(control.0 as isize)))
+                    || unsafe { !IsWindowEnabled(control).as_bool() });
             unsafe {
-                SetTextColor(hdc, COLORREF(colors.ink));
+                SetTextColor(hdc, COLORREF(if quiet { colors.muted } else { colors.ink }));
                 SetBkColor(hdc, COLORREF(if on_field { colors.field_color } else { colors.background_color }));
             }
             LRESULT(if on_field { colors.field } else { colors.background })
@@ -2287,12 +2350,24 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 let mut rect = RECT::default();
                 let _ = GetClientRect(hwnd, &mut rect);
                 let wells = WELLS.with(|w| w.borrow().clone());
+                let page = PAGE.with(Cell::get);
                 if let Some((palette, scale)) = LOOK.with(|l| l.get()) {
+                    let px = |v: i32| v as f32 * scale;
                     SURFACES.with(|s| {
                         s.borrow_mut().0.paint(hdc, rect, |g| {
                             g.fill(rect.into(), palette.field);
-                            for well in &wells {
-                                widgets::draw_well(g, (*well).into(), &palette, scale);
+                            // The side list on the shell, a hairline at its edge.
+                            let rail = RectF::new(0.0, 0.0, px(RAIL), rect.bottom as f32);
+                            g.fill(rail, palette.chrome);
+                            g.fill(RectF::new(rail.right - 1.0, 0.0, rail.right, rail.bottom), palette.line);
+                            for y in DIVIDERS.iter().filter(|(p, _)| *p == page).map(|(_, y)| *y) {
+                                let top = px(y).round();
+                                g.fill(RectF::new(px(PAGE_X), top, px(PAGE_X + PAGE_W), top + 1.0), palette.line);
+                            }
+                            for (well, on) in &wells {
+                                if on.is_none_or(|p| p == page) {
+                                    widgets::draw_well(g, (*well).into(), &palette, scale);
+                                }
                             }
                         })
                     });

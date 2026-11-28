@@ -23,7 +23,8 @@ use windows::Win32::{
     UI::{
         Controls::{
             BST_CHECKED, CDDS_PREPAINT, CDIS_DISABLED, CDIS_FOCUS, CDIS_HOT, CDIS_SELECTED, CDRF_DODEFAULT,
-            CDRF_SKIPDEFAULT, DRAWITEMSTRUCT, NMCUSTOMDRAW, ODS_DISABLED, ODS_FOCUS, ODS_SELECTED, WM_MOUSELEAVE,
+            CDRF_SKIPDEFAULT, DRAWITEMSTRUCT, NMCUSTOMDRAW, ODS_DISABLED, ODS_FOCUS, ODS_NOFOCUSRECT, ODS_SELECTED,
+            WM_MOUSELEAVE,
         },
         Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
         Shell::{DefSubclassProc, SetWindowSubclass},
@@ -195,6 +196,89 @@ pub fn draw_button(
     }
     let font = Font::new(size::TEXT_SMALL * scale, size::MEDIUM, Align::Center);
     g.text(text, rect.inset(8.0 * scale, 0.0), font, Color::from(ink).with_alpha(alpha));
+}
+
+/// The hover, press, focus and disabled state of an owner-drawn control
+/// from its WM_DRAWITEM (hover and press fading as a button's do).
+pub fn item_state(item: &DRAWITEMSTRUCT) -> ButtonState {
+    let hot = HOT.with(|h| h.get()) == item.hwndItem.0 as isize;
+    let (hot, pressed) = follow(item.hwndItem, hot, item.itemState.0 & ODS_SELECTED.0 != 0);
+    ButtonState {
+        pressed,
+        hot,
+        // The ring only after the keyboard was used, as Windows draws it.
+        focused: item.itemState.0 & ODS_FOCUS.0 != 0 && item.itemState.0 & ODS_NOFOCUSRECT.0 == 0,
+        disabled: item.itemState.0 & ODS_DISABLED.0 != 0,
+    }
+}
+
+/// A select (the design system's filled select): the value in a soft well,
+/// a chevron at the right end. A press opens the app's own menu.
+pub fn draw_select(g: &Painter, rect: RectF, text: &str, state: ButtonState, pal: &Palette, scale: f32) {
+    let radius = size::RADIUS_FIELD * scale;
+    let alpha = if state.disabled { 0.45 } else { 1.0 };
+    let fill = pal.selection.mix(pal.pin_live, (state.hot * 0.6).max(state.pressed));
+    g.round(rect, radius, Color::from(fill).with_alpha(alpha));
+    if state.focused {
+        focus_ring(g, rect, radius, pal, scale);
+    }
+    let chevron_w = 8.0 * scale;
+    let right = rect.right - 12.0 * scale;
+    let (_, cy) = rect.center();
+    let chevron = [
+        (right - chevron_w, cy - chevron_w / 4.0),
+        (right - chevron_w / 2.0, cy + chevron_w / 4.0),
+        (right, cy - chevron_w / 4.0),
+    ];
+    g.polyline(&chevron, 1.4 * scale, Color::from(pal.ink_muted).with_alpha(alpha));
+    let text_rect = RectF::new(rect.left + 10.0 * scale, rect.top, right - chevron_w - 6.0 * scale, rect.bottom);
+    let font = Font::new(size::TEXT * scale, size::REGULAR, Align::Leading);
+    g.text(text, text_rect, font, Color::from(pal.ink).with_alpha(alpha));
+}
+
+/// One entry of a window's side list of sections: the picked one on the
+/// card ground, the rest on the shell with a hover.
+pub fn draw_nav(g: &Painter, rect: RectF, text: &str, picked: bool, state: ButtonState, pal: &Palette, scale: f32) {
+    let radius = size::RADIUS_CONTROL * scale;
+    if picked {
+        g.round(rect, radius, pal.field);
+        g.outline(rect, radius, 1.0, pal.line);
+    } else if state.hot > 0.0 || state.pressed > 0.0 {
+        let fill = pal.chrome.mix(pal.tab_hover, state.hot.max(state.pressed));
+        g.round(rect, radius, fill);
+    }
+    if state.focused {
+        focus_ring(g, rect, radius, pal, scale);
+    }
+    let weight = if picked { size::MEDIUM } else { size::REGULAR };
+    let ink = if picked { pal.ink } else { pal.ink_muted.mix(pal.ink, state.hot) };
+    let font = Font::new(size::TEXT * scale, weight, Align::Leading);
+    g.text(text, rect.inset(12.0 * scale, 0.0), font, ink);
+}
+
+/// One row of an owner-drawn list: the text at the left and, after a tab
+/// character, a quieter text at the right; the picked row on a soft
+/// rounded ground. `alert` is a third text, in the one non-grey ink.
+pub fn draw_row(g: &Painter, rect: RectF, text: &str, alert: Option<&str>, picked: bool, pal: &Palette, scale: f32) {
+    g.fill(rect, pal.selection);
+    if picked {
+        g.round(rect.inset(0.0, 1.0), size::RADIUS * scale * 0.75, pal.tab_active);
+    }
+    let (label, meta) = text.split_once('\t').unwrap_or((text, ""));
+    let inner = rect.inset(10.0 * scale, 0.0);
+    let small = Font::new(size::TEXT_SMALL * scale, size::REGULAR, Align::Leading);
+    let mut meta_rect = RectF::new(inner.right, inner.top, inner.right, inner.bottom);
+    if let Some(alert) = alert {
+        let alert_w = g.measure(alert, small);
+        let alert_rect = RectF::new(inner.right - alert_w - 1.0, inner.top, inner.right, inner.bottom);
+        g.text(alert, alert_rect, small, pal.private_mark);
+        meta_rect.right = alert_rect.left - 6.0 * scale;
+    }
+    let meta_w = g.measure(meta, small).min(inner.width() * 0.5);
+    meta_rect.left = meta_rect.right - meta_w - 1.0;
+    g.text(meta, meta_rect, small, pal.ink_muted);
+    let label_rect = RectF::new(inner.left, inner.top, meta_rect.left - 8.0 * scale, inner.bottom);
+    g.text(label, label_rect, Font::new(size::TEXT * scale, size::REGULAR, Align::Leading), pal.ink);
 }
 
 /// shadow-focus: 1 px of brand and a soft halo around it.
