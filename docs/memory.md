@@ -455,8 +455,13 @@ is near its limit (see "Low memory").
 
 | | Nea | Nea 0.1.9 | Edge | Chrome |
 |---|---:|---:|---:|---:|
-| Open | 208 | 291 | 411 | 469 |
-| 5 min with no input | 74 | 156 | 401 | 503 |
+| Open | 192 | 225 | 401 | 466 |
+| 5 min with no input | 20 | 151 | 408 | 506 |
+
+These are the medians of 3 runs on 2026-11-27, by day, each figure the
+median of 31 samples in 60 s. The runs: Nea 188, 192, 197 and 20, 22, 13;
+release 0.1.9 224, 226, 225 and 164, 150, 151; Edge 439, 395, 401 and 415,
+397, 408; Chrome 480, 466, 465 and 499, 512, 506.
 
 20 tabs of heavy sites (10 sites, each two times: Wikipedia, GitHub, MDN,
 YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow, NYTimes),
@@ -464,13 +469,25 @@ nothing forced, a new profile for each browser, median of 3 runs:
 
 | | Nea | Nea 0.1.9 | Edge | Chrome |
 |---|---:|---:|---:|---:|
-| Open | 610 | 1633 | 2665 | 3138 |
-| 5 min with no input | 296 | 521 | 2832 | 3270 |
+| Open | 416 | 1025 | 2586 | 3041 |
+| 5 min with no input | 47 | 442 | 2619 | 3152 |
 
-The figure after 5 min changes much from run to run. For the two builds
-of Nea it is the median of 31 samples in 60 s (`-Samples 31`), 6 runs of
-Nea (344, 513, 316, 276, 167, 111) and 4 of release 0.1.9 (466, 856, 524,
-519). The page on screen (NYTimes) and the browser and GPU processes make
+These are medians of the runs on 2026-11-27, by day, each figure the
+median of 31 samples in 60 s. Nea, 7 runs: open 380, 404, 408, 416, 441,
+472, 484, and after 5 min 31, 40, 42, 47, 64, 65, 176. One run stayed at
+176 MB; the cause is not known (a page that plays sound stops the trim at
+rest). Release 0.1.9, 3 runs: 1025, 978, 1089 and 518, 442, 377. Edge, 3
+runs: 2632, 2586, 2440 and 2672, 2619, 2601. Chrome: 3158 and 2924 (2
+runs, the mean), and 3052, 3152, 3220. A run in which a browser did not
+load all the pages does not count.
+
+Before the repeated trim at rest, Nea had approximately 296 MB after
+5 min (6 runs: 344, 513, 316, 276, 167, 111), and release 0.1.9
+approximately 521 MB (466, 856, 524, 519). The sites change from day to
+day: one day earlier, Nea opened at 610 MB and release 0.1.9 at 1633 MB.
+
+Before that trim, the figure after 5 min changed much from run to run.
+The page on screen (NYTimes) and the browser and GPU processes make
 the difference: one run had 104 MB in the page on screen, a different one
 37 MB. Each suspended tab has 0 to 2 MB. With 9 heavy sites and a
 Wikipedia article on screen, 5 runs gave 125 to 135 MB: the page on screen
@@ -498,6 +515,14 @@ all of that time is the page on screen: a Wikipedia article used 17 s of
 processor time each minute (GPU process 11, renderer 6), and example.com
 or an MDN page used 0.7 to 1.3 s. The article has an animation that
 never stops, and the screen was off: see "Screen off, session locked".
+
+That animation costs the same in each browser while a person can see the
+window. A page with only a dot of 10 pixels that pulses, each window on
+top of the others and its frames counted through the DevTools protocol
+(120 each second), processor time in 40 s: Nea 18.0 s, Edge 17.2 s,
+Chrome 20.3 s. A measurement that gives 1 s for Edge or Chrome is a
+measurement of a covered window: they do not draw then, and Nea does not
+draw then either (see "Window covered by a different window").
 
 One tab costs 152 MB: renderer 56, GPU process 55, browser process 25,
 utility 9, app 6. No engine switch changed this by more than 3 MB (GPU
