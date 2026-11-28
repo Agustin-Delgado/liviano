@@ -34,18 +34,24 @@ their scripts stop and their memory goes back to the system. They
 are not closed, so a tab comes back as it was, with no load. At startup,
 Nea creates only the view of the active tab.
 
-The table shows the private memory of the full process tree. Each browser
-opened the same pages with a clean profile.
+The table shows the private memory of the full process tree, with 20 tabs
+open and nothing forced. Each browser opened the same pages with a new
+profile. "Heavy sites" are 10 real sites, each two times: Wikipedia,
+GitHub, MDN, YouTube, Reddit, Infobae, La Nación, Amazon, Stack Overflow
+and NYTimes.
 
-| Scenario | Nea | Edge | Chrome |
+| 20 tabs | Nea 0.1.16 | Edge | Chrome |
 |---|---:|---:|---:|
-| Blank tab | 87 MB | 184 MB | 240 MB |
-| Light page (example.com) | 110 MB | 201 MB | 247 MB |
-| Heavy page, with ad blocking | 395 MB | 641 MB | 784 MB |
-| 20 tabs (19 asleep in Nea) | 183 MB | 451 MB | 491 MB |
+| Heavy sites, open | 416 MB | 2586 MB | 3041 MB |
+| Heavy sites, 5 min with no input | 47 MB | 2619 MB | 3152 MB |
+| Light pages, open | 192 MB | 401 MB | 466 MB |
+| Light pages, 5 min with no input | 20 MB | 408 MB | 506 MB |
 
-The method, the versions and the other scenarios are in
-[docs/benchmarks.md](docs/benchmarks.md).
+Each figure is the median of 3 to 7 runs on 2026-11-27 (Windows 11,
+WebView2 157). A tab that comes back from sleep shows again in
+approximately 170 ms, with no load. The runs, the method and the limits
+are in [docs/memory.md](docs/memory.md#results). The single-page scenarios
+are in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Features
 
