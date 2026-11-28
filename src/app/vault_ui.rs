@@ -855,6 +855,7 @@ impl App {
             self.font,
             self.scale,
             [&question, save, "Never for this site", "Not now"],
+            crate::vault_bar::PASSWORD_WIDTHS,
             on_bar_choice,
         );
         self.vault.offer = Some(Offer {
@@ -880,10 +881,22 @@ impl App {
         self.autofill_draw();
     }
 
-    /// Keeps the offer at the page's top right corner, shown only over its tab.
+    /// Keeps the questions over the page in place: the password offer,
+    /// then the notifications question under it.
     pub(super) fn place_vault_bar(&self) {
+        self.place_password_bar();
+        self.place_notify_bar();
+    }
+
+    /// The password offer stands over the page on screen.
+    pub(super) fn password_bar_shown(&self) -> bool {
+        self.vault.bar.is_some() && self.vault.offer.as_ref().is_some_and(|o| self.tabs.active == Some(o.tab))
+    }
+
+    /// Keeps the offer at the page's top right corner, shown only over its tab.
+    fn place_password_bar(&self) {
         let (Some(offer), Some(bar)) = (&self.vault.offer, &self.vault.bar) else { return };
-        if self.tabs.active != Some(offer.tab) {
+        if self.tabs.active != Some(offer.tab) || self.locked() {
             bar.hide();
             return;
         }

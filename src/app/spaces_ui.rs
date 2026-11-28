@@ -1,6 +1,6 @@
 //! Spaces on screen: the swipe that slides the tab list from one space to
-//! the next, the switch itself, the space's tint, its mark and its name,
-//! the menus of a space and of a tab, renaming in the single field and the
+//! the next, the switch itself, the space's mark, the card with
+//! its name at the foot of the page (`space_card`), the menus of a space and of a tab, renaming in the single field and the
 //! commands. The rules (what a switch moves, what a delete keeps, how far
 //! a swipe goes) live in `spaces`.
 //!
@@ -22,6 +22,7 @@ use crate::{
     gfx::{self, Align, Color, Font, Painter, RectF},
     menu::Menu,
     shortcuts::Command,
+    space_card::SpaceCard,
     spaces::{MARK_DOT, MARK_GAP, MARK_PAD, MAX_SPACES, SWIPE_TRAVEL, Swipe, swipe_commits, swipe_offset},
     tab_groups::GroupColor,
     tabbar::{self, HoverKey, Metrics, Rect},
@@ -38,20 +39,22 @@ const MENU_COLOR: usize = 310;
 pub(super) const MENU_MOVE_NEW: usize = 320;
 /// "Move to space ▸": the nth space.
 const MENU_MOVE_TO: usize = 330;
+/// In a space's menu: the nth space, to go to it.
+const MENU_GO_TO: usize = 340;
 
 /// The wheel is still this long: the fingers left the touchpad, and the
 /// swipe settles.
 const SWIPE_REST_MS: u32 = 120;
 const TIMER_SWIPE: usize = 0x4C;
 
-/// The active space's name stays over the list this long after a switch,
-/// then fades out in `NAME_FADE_MS`.
-const NAME_HOLD_MS: u32 = 800;
-const NAME_FADE_MS: u32 = 250;
+/// The card with the space's name stays this long once it is up, then
+/// sinks out.
+const CARD_HOLD_MS: u32 = 1000;
+const TIMER_CARD: usize = 0x4D;
 
-/// How much of the space's colour the strip's ground takes.
-const TINT_LIGHT: f32 = 0.06;
-const TINT_DARK: f32 = 0.09;
+/// The list landed after switches whose pages were held: the page of the
+/// space it landed on shows.
+const TIMER_PAGE: usize = 0x4E;
 
 /// What is drawn beside the sliding list.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -83,17 +86,21 @@ pub(super) struct SpacesUi {
     /// A space a swipe past the last one made, until it holds a tab: going
     /// away from it while it is still empty removes it.
     fresh: Option<u64>,
-    /// Since when the active space's name rests over the list after a
-    /// switch (it fades out); None when it is not shown.
-    named: Option<Instant>,
+    /// The card with the space's name at the foot of the page, made on
+    /// the first switch.
+    card: Option<SpaceCard>,
     /// Shift+wheel: this burst of notches already switched.
     notched: bool,
     /// A list at rest, to draw the other space's tabs with: no hover, no
     /// motion.
     still: tabbar::Motion,
-    /// The slide and the name's opacity in the last paint: a frame draws
-    /// the strip again only when one changed.
-    painted: (f32, f32),
+    /// The slide in the last paint: a frame draws the strip again only
+    /// when it changed.
+    painted: f32,
+    /// A switch came while the list still slid: the engine's show and hide
+    /// wait until the list lands, so the spaces passed on the way show no
+    /// page. Each show or hide holds the thread 5-70 ms, many frames.
+    page_held: bool,
 }
 
 unsafe extern "system" fn on_swipe_rest(hwnd: HWND, _: u32, id: usize, _: u32) {
@@ -101,6 +108,20 @@ unsafe extern "system" fn on_swipe_rest(hwnd: HWND, _: u32, id: usize, _: u32) {
         let _ = KillTimer(Some(hwnd), id);
     }
     with_app(|app| app.swipe_rest());
+}
+
+unsafe extern "system" fn on_page_lands(hwnd: HWND, _: u32, id: usize, _: u32) {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), id);
+    }
+    with_app(|app| app.space_page_lands());
+}
+
+unsafe extern "system" fn on_card_hold(hwnd: HWND, _: u32, id: usize, _: u32) {
+    unsafe {
+        let _ = KillTimer(Some(hwnd), id);
+    }
+    with_app(|app| app.hide_space_name());
 }
 
 impl App {
@@ -111,18 +132,6 @@ impl App {
             return None;
         }
         Some(gfx::measure(&self.tabs.active_space().name, mark_font(self.scale)).ceil() as i32)
-    }
-
-    /// The palette the chrome is drawn with: with two spaces or more, the
-    /// ground of the strip takes a little of the active space's colour.
-    pub(super) fn space_palette(&self) -> Palette {
-        let mut pal = self.palette;
-        if self.tabs.spaces.len() < 2 {
-            return pal;
-        }
-        let tone = group_tone(self.tabs.active_space().color, pal.dark).fill;
-        pal.chrome = pal.chrome.mix(tone, if pal.dark { TINT_DARK } else { TINT_LIGHT });
-        pal
     }
 
     // ---------- switching ----------
@@ -156,23 +165,29 @@ impl App {
             beside: Beside::Space(leaving),
             side: -side,
         });
-        self.spaces.named = None;
+        self.show_space_name();
         self.invalidate_strip();
     }
 
     /// The switch in the model and on the page: the tabs change lists, the
     /// new space's live page shows (an empty space opens the field). The
     /// list lands at once; the caller slides it. A space a swipe made and
-    /// left empty goes away.
+    /// left empty goes away. A switch while the list still slides from the
+    /// last one holds the page until the list lands (`page_held`).
     fn swap_space(&mut self, id: u64) -> bool {
         if id == self.tabs.space || self.tabs.space_by_id(id).is_none() {
             return false;
         }
+        let held = self.spaces.slide.as_ref().is_some_and(|s| s.settle.is_some());
         if self.mode.is_some() {
             self.close_omnibar();
         }
         if let Some(leaving) = self.tabs.active {
-            self.capture_thumb(leaving);
+            // A page held off screen keeps the picture it had.
+            if matches!(self.tabs.get(leaving).map(|t| &t.live), Some(crate::tabs::Live::Ready(web)) if web.is_shown())
+            {
+                self.capture_thumb(leaving);
+            }
             if let Some(crate::tabs::Live::Ready(web)) = self.tabs.get(leaving).map(|t| &t.live) {
                 web.read_scroll(leaving);
             }
@@ -189,9 +204,20 @@ impl App {
             }
         }
         self.motion.swap_tabs();
-        self.relayout();
+        self.spaces.page_held = held;
+        if held {
+            // `relayout` without `show_active`: the page on screen stays.
+            self.tidy_pairs();
+            self.lay_out();
+            self.place_omnibar();
+            self.update_title();
+            self.invalidate();
+        } else {
+            self.relayout();
+        }
         self.session_dirty = true;
         match self.tabs.active {
+            Some(_) if held => {}
             Some(tab) => self.focus_when_settled(tab),
             None => self.open_omnibar(Mode::NewTab),
         }
@@ -384,10 +410,13 @@ impl App {
                 swipe.sample(now, offset);
             }
         }
-        self.spaces.named = None;
         // The frame clock draws the move on its next frame; a paint per
-        // wheel message would draw more often than the screen shows.
-        if !self.motion_was_running {
+        // wheel message would draw more often than the screen shows. A
+        // slower motion that runs already (the loading ring) has its frame
+        // brought forward to the next one.
+        if self.motion_was_running {
+            crate::anim::repaint_area(self.hwnd, super::strip_frame_area, crate::anim::FRAME_MS);
+        } else {
             self.invalidate_strip();
         }
     }
@@ -419,6 +448,7 @@ impl App {
                     beside: Beside::Space(leaving),
                     side: -side,
                 });
+                self.show_space_name();
             }
             _ => {
                 if let Some(slide) = &mut self.spaces.slide {
@@ -438,27 +468,8 @@ impl App {
         }
     }
 
-    /// How opaque the active space's name is over the list at `now`.
-    fn name_opacity(&self, now: Instant) -> f32 {
-        if self.spaces.slide.is_some() {
-            return 1.0;
-        }
-        let Some(at) = self.spaces.named else { return 0.0 };
-        let ms = now.saturating_duration_since(at).as_millis() as f32;
-        let (hold, fade) = (NAME_HOLD_MS as f32, NAME_FADE_MS as f32);
-        if ms < hold {
-            1.0
-        } else if ms >= hold + fade {
-            0.0
-        } else if crate::anim::reduced() {
-            1.0
-        } else {
-            1.0 - (ms - hold) / fade
-        }
-    }
-
-    /// Brings the slide and the name up to `now`; Some(the next frame's
-    /// interval, ms) while something will change.
+    /// Brings the slide up to `now`; Some(the next frame's interval, ms)
+    /// while it moves.
     pub(super) fn spaces_advance(&mut self, now: Instant) -> Option<u32> {
         if let Some(slide) = &mut self.spaces.slide
             && let Some(settle) = &slide.settle
@@ -466,21 +477,25 @@ impl App {
             slide.offset = settle.value(now);
             if !settle.moving(now) {
                 self.spaces.slide = None;
-                self.spaces.named = (self.tabs.spaces.len() > 1).then_some(now);
+                if self.spaces.page_held {
+                    // Not from inside the paint that calls this.
+                    unsafe {
+                        SetTimer(Some(self.hwnd), TIMER_PAGE, 1, Some(on_page_lands));
+                    }
+                }
             }
         }
-        if self.spaces.slide.is_some() {
-            return Some(crate::anim::FRAME_MS);
+        self.spaces.slide.is_some().then_some(crate::anim::FRAME_MS)
+    }
+
+    /// The list landed: the page of its space shows and takes the keyboard.
+    fn space_page_lands(&mut self) {
+        if !std::mem::take(&mut self.spaces.page_held) {
+            return;
         }
-        let at = self.spaces.named?;
-        let ms = now.saturating_duration_since(at).as_millis() as u32;
-        if ms < NAME_HOLD_MS {
-            Some((NAME_HOLD_MS - ms).max(crate::anim::FRAME_MS))
-        } else if ms < NAME_HOLD_MS + NAME_FADE_MS {
-            Some(crate::anim::FRAME_MS)
-        } else {
-            self.spaces.named = None;
-            None
+        self.show_active();
+        if let Some(tab) = self.tabs.active {
+            self.focus_when_settled(tab);
         }
     }
 
@@ -489,28 +504,27 @@ impl App {
         self.spaces.slide.is_some()
     }
 
-    /// The slide or the name changed since the last paint: the frame draws
-    /// the whole strip.
-    pub(super) fn spaces_moving(&self, now: Instant) -> bool {
-        (self.list_dx(), self.name_opacity(now)) != self.spaces.painted
+    /// The slide changed since the last paint: the frame draws the whole
+    /// strip.
+    pub(super) fn spaces_moving(&self) -> bool {
+        self.list_dx() != self.spaces.painted
     }
 
     // ---------- drawing ----------
 
     /// The tabs' slide, for `tabbar::Paint`; the paint is noted for
     /// `spaces_moving`.
-    pub(super) fn paint_slide(&mut self, now: Instant) -> f32 {
-        self.spaces.painted = (self.list_dx(), self.name_opacity(now));
-        self.spaces.painted.0
+    pub(super) fn paint_slide(&mut self) -> f32 {
+        self.spaces.painted = self.list_dx();
+        self.spaces.painted
     }
 
     /// Draws, over the strip that `tabbar::paint` drew: the other list of a
-    /// slide, the spaces' names, the line in the space's colour under a top
-    /// strip and the mark at the foot of the column.
-    pub(super) fn paint_spaces(&self, g: &Painter, now: Instant, pal: &Palette, base: &tabbar::Paint) {
+    /// slide, the line in the space's colour under a top strip and the mark
+    /// at the foot of the column.
+    pub(super) fn paint_spaces(&self, g: &Painter, pal: &Palette, base: &tabbar::Paint) {
         let dx = base.tabs_dx;
         let width = self.slide_width();
-        let name = self.name_opacity(now);
         if let Some(slide) = &self.spaces.slide
             && !crate::anim::reduced()
         {
@@ -521,19 +535,8 @@ impl App {
             {
                 self.paint_beside(g, id, beside_dx, pal, base);
             }
-            let beside_name = match slide.beside {
-                Beside::Space(id) => self.tabs.space_by_id(id).map(|s| (s.name.clone(), s.color)),
-                Beside::New => Some((self.tabs.next_space_name(), self.tabs.next_space_color())),
-                Beside::Nothing => None,
-            };
-            if let Some((text, color)) = beside_name {
-                self.paint_name(g, &text, color, beside_dx, 1.0, pal);
-            }
         }
         let space = self.tabs.active_space();
-        if name > 0.0 {
-            self.paint_name(g, &space.name, space.color, dx, name, pal);
-        }
         if self.tabs.spaces.len() < 2 {
             return;
         }
@@ -551,16 +554,31 @@ impl App {
         }
     }
 
-    /// The other space's list during a slide, from the model: the same
-    /// layout as the active list's, with no hover and no motion.
-    fn paint_beside(&self, g: &Painter, id: u64, dx: f32, pal: &Palette, base: &tabbar::Paint) {
-        let tabs: Vec<&Tab<WebTab>> = self.tabs.parked.iter().filter(|t| t.space == id).collect();
+    /// The rows of the column a frame of the slide draws: those of the
+    /// two lists, which are all that moves. None: the whole strip.
+    pub(super) fn slide_rows(&self) -> Option<(i32, i32)> {
+        let slide = self.spaces.slide.as_ref().filter(|_| !crate::anim::reduced())?;
+        let rows = tabbar::list_rows(&self.layout)?;
+        let Beside::Space(id) = slide.beside else { return Some(rows) };
+        let tabs = self.beside_tabs(id);
         let infos: Vec<tabbar::TabInfo> = tabs.iter().map(|t| super::tab_info(t)).collect();
         let groups = self.group_infos_of(&tabs);
+        match tabbar::list_rows(&self.beside_layout(&infos, &groups)) {
+            Some((top, bottom)) => Some((rows.0.min(top), rows.1.max(bottom))),
+            None => Some(rows),
+        }
+    }
+
+    fn beside_tabs(&self, id: u64) -> Vec<&Tab<WebTab>> {
+        self.tabs.parked.iter().filter(|t| t.space == id).collect()
+    }
+
+    /// The layout of another space's list: the active list's, with its tabs.
+    fn beside_layout(&self, infos: &[tabbar::TabInfo], groups: &[tabbar::GroupInfo]) -> tabbar::Layout {
         let (width, height) = self.client_size();
         let mut layout = tabbar::layout_chrome(
-            &infos,
-            &groups,
+            infos,
+            groups,
             width,
             height,
             self.vertical,
@@ -570,8 +588,19 @@ impl App {
             self.zoom_shown(),
             self.update.is_some(),
             self.space_mark_width(),
+            self.profiles_shown(),
         );
         self.place_bookmarks_in(&mut layout);
+        layout
+    }
+
+    /// The other space's list during a slide, from the model: the same
+    /// layout as the active list's, with no hover and no motion.
+    fn paint_beside(&self, g: &Painter, id: u64, dx: f32, pal: &Palette, base: &tabbar::Paint) {
+        let tabs = self.beside_tabs(id);
+        let infos: Vec<tabbar::TabInfo> = tabs.iter().map(|t| super::tab_info(t)).collect();
+        let groups = self.group_infos_of(&tabs);
+        let layout = self.beside_layout(&infos, &groups);
         let active = self.tabs.space_by_id(id).and_then(|s| s.last_active);
         let paint = tabbar::Paint {
             layout: &layout,
@@ -594,52 +623,14 @@ impl App {
         tabbar::paint_tab_list(g, &paint);
     }
 
-    /// A space's name on a small card in the middle of its list, slid by
-    /// `dx`: during a slide, and for a moment after a switch.
-    fn paint_name(&self, g: &Painter, text: &str, color: GroupColor, dx: f32, opacity: f32, pal: &Palette) {
-        let area = tabbar::tabs_area(&self.layout, self.scale);
-        if area.width() <= 0.0 {
-            return;
-        }
-        let px = |v: f32| v * self.scale;
-        let font = Font::new(px(size::TEXT), size::MEDIUM, Align::Leading);
-        let text_w = gfx::measure(text, font).ceil().min(px(160.0));
-        let (pad, dot, gap, h) = (px(12.0), px(MARK_DOT), px(8.0), px(28.0));
-        let w = pad + dot + gap + text_w + pad;
-        let cx = area.left + area.width() / 2.0 + dx;
-        // On a top strip, on the tabs' row; in the column, in its middle.
-        let cy = if self.layout.vertical {
-            area.top + area.height() / 2.0
-        } else {
-            RectF::from(self.layout.nav[0]).center().1
-        };
-        let card = RectF::new(cx - w / 2.0, cy - h / 2.0, cx + w / 2.0, cy + h / 2.0);
-        g.clip(area, |g| {
-            g.ring_card(card, h / 2.0, Color::from(pal.tab_active).with_alpha(opacity), pal.dark, opacity, self.scale);
-            let tone = group_tone(color, pal.dark).fill;
-            let dot_x = card.left + pad;
-            g.round(
-                RectF::new(dot_x, cy - dot / 2.0, dot_x + dot, cy + dot / 2.0),
-                dot / 2.0,
-                Color::from(tone).with_alpha(opacity),
-            );
-            let left = dot_x + dot + gap;
-            g.text(text, RectF::new(left, card.top, card.right - pad + px(1.0), card.bottom), font, {
-                Color::from(pal.ink).with_alpha(opacity)
-            });
-        });
-    }
-
-    /// The mark at the foot of the column: the active space's dot and name.
+    /// The mark at the foot of the column: the active space's dot and name,
+    /// on the same ghost ground as the gear beside it.
     fn paint_mark(&self, g: &Painter, mark: Rect, name: &str, tone: crate::design::Rgb, pal: &Palette) {
         let px = |v: f32| v * self.scale;
         let rect = RectF::from(mark);
         let over = self.motion.hover(HoverKey::SpaceMark);
         let pressed = self.motion.pressed(HoverKey::SpaceMark);
-        if over + pressed > 0.0 {
-            let ground = pal.tab_hover.mix(pal.pin_live, pressed);
-            g.round(rect, px(size::RADIUS_CONTROL), Color::from(ground).with_alpha(over.max(pressed)));
-        }
+        tabbar::ghost_ground(g, rect, px(size::RADIUS), over, pressed, pal);
         let dot = px(MARK_DOT);
         let (_, cy) = rect.center();
         let dot_x = rect.left + px(MARK_PAD as f32);
@@ -649,19 +640,71 @@ impl App {
         g.text(name, text, mark_font(self.scale), pal.ink_muted.mix(pal.ink, over));
     }
 
+    // ---------- the name card ----------
+
+    /// The page area on screen: the card stands at its foot.
+    fn page_on_screen(&self) -> Rect {
+        self.screen_rect(self.layout.content)
+    }
+
+    /// The card cannot show: the window is minimized or locked, or a page
+    /// holds the whole screen (a video).
+    fn space_name_hidden(&self) -> bool {
+        let minimized = unsafe { IsIconic(self.hwnd).as_bool() };
+        minimized || self.locked() || self.fullscreen.by_page().is_some()
+    }
+
+    /// A switch committed: the new space's name rises in at the foot of the
+    /// page, stays `CARD_HOLD_MS`, then sinks out.
+    fn show_space_name(&mut self) {
+        if self.tabs.spaces.len() < 2 || self.space_name_hidden() {
+            return;
+        }
+        if self.spaces.card.is_none() {
+            self.spaces.card = SpaceCard::create(self.hwnd).ok();
+        }
+        let space = self.tabs.active_space();
+        let dot = Color::from(group_tone(space.color, self.palette.dark).fill);
+        let page = self.page_on_screen();
+        let Some(card) = &self.spaces.card else { return };
+        card.show(&space.name, dot, page, &self.palette, self.scale);
+        unsafe {
+            SetTimer(Some(self.hwnd), TIMER_CARD, specs::TOAST_IN.ms + CARD_HOLD_MS, Some(on_card_hold));
+        }
+    }
+
+    pub(super) fn hide_space_name(&self) {
+        if let Some(card) = &self.spaces.card {
+            card.hide();
+        }
+    }
+
+    /// The window moved or changed size or state: the card stays at the
+    /// foot of the page, or goes at once when the page cannot be seen.
+    pub(super) fn space_name_follow(&self) {
+        let Some(card) = self.spaces.card.as_ref().filter(|c| c.up()) else { return };
+        if self.space_name_hidden() {
+            card.hide_now();
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), TIMER_CARD);
+            }
+            return;
+        }
+        card.follow(self.page_on_screen(), self.scale);
+    }
+
     // ---------- the mark ----------
 
-    /// The tooltip over the mark: the space, and how to go to another.
+    /// The tooltip over the mark: what a click does (the name is on it).
     pub(super) fn space_tip(&self) -> Option<String> {
-        let name = &self.tabs.active_space().name;
-        Some(format!("{name}. Swipe sideways on the tabs to go to a different space"))
+        Some("Change space".to_owned())
     }
 
     pub(super) fn space_tip_anchor(&self) -> Option<Rect> {
         self.layout.space_mark
     }
 
-    /// A press on the mark opens the active space's menu.
+    /// A press on the mark opens the spaces' menu.
     pub(super) fn space_mouse_down(&mut self, x: i32, y: i32) {
         self.motion.press(HoverKey::SpaceMark);
         self.invalidate_strip();
@@ -729,6 +772,11 @@ impl App {
 
     fn space_menu_chosen(&mut self, space: u64, chosen: usize) -> bool {
         match chosen {
+            n if (MENU_GO_TO..MENU_GO_TO + MAX_SPACES).contains(&n) => {
+                if let Some(id) = self.tabs.spaces.get(n - MENU_GO_TO).map(|s| s.id) {
+                    self.switch_space(id);
+                }
+            }
             MENU_RENAME => self.open_omnibar(Mode::RenameSpace(space)),
             MENU_NEW => self.new_space(),
             MENU_DELETE => self.delete_space(space),
@@ -742,9 +790,15 @@ impl App {
         true
     }
 
-    /// The menu of a space: a click on the mark, or a right click on it.
+    /// The menu of the mark (a click or a right click on it): every space,
+    /// the active one checked, to go to another; then `space`'s own items
+    /// and "New space".
     pub(super) fn space_menu(&mut self, x: i32, y: i32, space: u64) {
         let mut menu = Menu::new();
+        for (i, s) in self.tabs.spaces.iter().enumerate() {
+            menu.check(MENU_GO_TO + i, &s.name, s.id == self.tabs.space);
+        }
+        menu.separator();
         self.append_space_menu_items(&mut menu, space);
         menu.separator();
         let room = self.tabs.spaces.len() < MAX_SPACES;
@@ -783,8 +837,16 @@ impl App {
                 },
             })),
             "fresh": self.spaces.fresh,
+            "page_held": self.spaces.page_held,
+            "card": card_state(),
         })
     }
+}
+
+/// The `card` key of the spaces state: up, how far in, where.
+fn card_state() -> serde_json::Value {
+    let (up, level, at) = crate::space_card::state();
+    serde_json::json!({ "up": up, "level": level, "at": at })
 }
 
 /// The mark's type: the small size, as the group labels.

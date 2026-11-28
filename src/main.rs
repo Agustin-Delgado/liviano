@@ -20,6 +20,7 @@ mod fade;
 mod favicon;
 mod frame;
 mod gfx;
+mod hello;
 mod history;
 mod hovercard;
 mod http;
@@ -27,20 +28,27 @@ mod image;
 mod inject;
 mod installer;
 mod legacy;
+mod lock_screen;
 mod memory;
 mod menu;
 mod msg_param;
+mod notifications;
+mod notify_watch;
 mod omnibar;
 mod omnibox;
 mod pacer;
 mod panels;
 mod pip;
+mod profile_launch;
+mod profile_lock;
+mod profiles;
 mod reader;
 mod session;
 mod settings;
 mod settings_window;
 mod shield;
 mod shortcuts;
+mod space_card;
 mod spaces;
 mod split;
 mod sqlite;
@@ -49,6 +57,7 @@ mod system_dll;
 mod tab_groups;
 mod tabbar;
 mod tabs;
+mod text_focus;
 mod tooltip;
 mod unzip;
 mod update_sign;
@@ -99,6 +108,9 @@ fn main() -> windows::core::Result<()> {
     }
     // Before any file is read: what the former name left behind moves over.
     legacy::migrate();
+    // Then the profile: its folders and passwords, before anything is read.
+    // The move above only ever looks at profile 0's.
+    profile_launch::apply(profiles::from_args(std::env::args_os().skip(1)));
     if let Some(code) = installer::move_legacy_install() {
         std::process::exit(code);
     }
@@ -108,10 +120,10 @@ fn main() -> windows::core::Result<()> {
     }
     diag::install(&storage::data_dir());
     app::run()?;
-    // The window closed and saved the session: the new instance applies
-    // the update before its window exists.
+    // The window closed and saved the session: the update goes in, and the
+    // new version starts.
     if updater::restart_requested() {
-        updater::relaunch();
+        updater::restart_into_update();
     }
     Ok(())
 }

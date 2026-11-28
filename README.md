@@ -168,9 +168,10 @@ data file.
 
 ## Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io),
-certificate by [SignPath Foundation](https://signpath.org) (the application
-is in review).
+Nea is not signed with a code signing certificate yet. The SignPath
+Foundation declined the application in November 2026 until the project is
+better known, and invited a new application later. When a certificate
+comes, these rules apply to it.
 
 - Committers and reviewers: [Agustin-Delgado](https://github.com/Agustin-Delgado)
 - Approvers: [Agustin-Delgado](https://github.com/Agustin-Delgado)
@@ -202,8 +203,8 @@ update check are the only network traffic. [Privacy](#privacy) and
 ## Status
 
 - **Code signing certificate.** Nea has none yet. Thus SmartScreen shows a
-  warning when you open the installer or the program. The application to the
-  SignPath Foundation is in review (see [Code signing policy](#code-signing-policy)).
+  warning when you open the installer or the program, and Microsoft Defender
+  can quarantine it by mistake (see [Code signing policy](#code-signing-policy)).
 - **winget.** The package `Nea.Browser` is in review in
   [microsoft/winget-pkgs#486029](https://github.com/microsoft/winget-pkgs/pull/486029).
   `packaging/winget/` holds the submitted manifest.

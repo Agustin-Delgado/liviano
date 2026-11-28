@@ -116,6 +116,7 @@ table marks the items that this method cannot test.
 | Keep site awake | Verified. |
 | Split view | Verified (pairs, persistence, private tabs). A person checks the drag of tabs and of the divider. |
 | Spaces | Verified: swipe (to the next space, back, too short, past the first space, past the last space and back), switch with the shortcuts and Ctrl+K, move a tab, persistence, deferred restore and old session files. The swipe was sent as wheel messages: a person checks it on a real touchpad. A person checks the menus of a space and of a tab. |
+| Profiles | Verified: separate folders and passwords for a second profile, its own process, the button and the title with two profiles, and nothing with one. The lock by script: no page shows while locked, the title, and the page back after the unlock. A person checks the menu, the Settings group, the desktop shortcut, the window that comes to the front, the Windows Hello and password prompts and the look of the lock screen. Read [Profiles](#profiles). |
 | Tab groups | Verified: create, name, color, collapse, expand, persistence and split pairs in a group. Nea does not save private tabs. A test sent mouse messages to the Nea window to check the tab drag. A person checks the drag of the group label. |
 | Reader mode | Verified (Readability). |
 | Hide element for each site | Verified. You select the element with a click. Nea hides it before the page appears. A person checks the list of hidden elements (Ctrl+Shift+U), because it is a menu. |
@@ -135,7 +136,8 @@ table marks the items that this method cannot test.
 | Find in page | Verified. |
 | Signed updates | Verified. Nea checks soon after it starts and then every 4 hours. When a verified update is ready, the **Update** chip next to the gear (and **Restart to update** in the menu of the tab strip) restarts Nea into the new version and opens the tabs again. A development build never downloads or installs an update. The updater uses the releases of this repository. |
 | Script control | Verified. Read [building.md](building.md#script-control). |
-| Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. |
+| Settings | Verified: general, tabs, passwords, extensions, shortcuts, updates, privacy and testing. Nea saves each change immediately. A person checks the Profiles group. |
+| Web notifications | Unit tests cover the site keys, the toast text and a real toast in the notification center (an ignored test, without the pop-up). Not verified with a page in this pass. A person checks the question, the toast and its click. Read [Notifications](#notifications). |
 
 [docs/benchmarks.md](benchmarks.md) compares the memory of Nea with Edge. [docs/memory.md](memory.md) tells how Nea keeps its memory low.
 
@@ -160,19 +162,24 @@ the background. A new window has one space, "Personal".
   also right-click an empty area of the tab strip and select "New space":
   the field then opens to name it. New spaces are "Space 2", "Space 3"…
   until you rename them. Nea keeps at most nine spaces.
-- **Shortcuts:** Ctrl+Shift+1 … Ctrl+Shift+9 go to space 1 to 9.
-  Ctrl+Shift+PgDn and Ctrl+Shift+PgUp go to the next and the previous space.
-  The tabs slide in from the side of the space, as with a swipe.
+- **Shortcuts:** Ctrl+N makes a new space. Alt+1 … Alt+9 go to space 1
+  to 9. Ctrl+Right and Ctrl+Left go to the next and the previous space,
+  except in a text field, where they move the cursor by word. The tabs
+  slide in from the side of the space, as with a swipe.
 - **Ctrl+K** finds the tabs of all spaces. A tab of a different space shows
   the name of its space. Select it to go to its space and its tab.
-- **Which space:** with two spaces or more, the ground of the tab strip has
-  a light tint of the color of the active space. A top strip has a 2 px
-  line in that color at its bottom. The column shows the color dot and the
-  name of the active space at its bottom, next to the gear. During a switch
-  and for one second after it, the name of the space shows on a small card
-  in the middle of the tabs.
-- **Rename, color, delete:** click or right-click the name at the bottom of
-  the column. On a top strip, right-click an empty area of the strip and
+- **Which space:** with two spaces or more, a top strip has a 2 px line
+  in the color of the active space at its bottom. The column shows the color dot and the
+  name of the active space at its bottom, next to the gear. When a switch
+  is done (with a key, a swipe or a menu), the color dot and the name of
+  the new space show on a small card at the bottom center of the page for
+  about one second. The card does not take clicks or the keyboard. It moves
+  with the window, and it does not show when the window is minimized or
+  when a video fills the screen.
+- **Go to a space:** click the name at the bottom of the column. The menu
+  lists every space, with a check on the active one; select one to go to it.
+- **Rename, color, delete:** the same menu, under the list of spaces (a
+  right click opens it too). On a top strip, right-click an empty area of the strip and
   select "This space". The commands are "Rename space…", the color, "New
   space" and "Delete space (keep its tabs)". A deleted space never closes a
   tab: its tabs go to the space before it (the first space gives its tabs
@@ -199,6 +206,83 @@ tabs. At startup, Nea creates only the view of the active tab of the active
 space (and of its split pair). A session file of an older version opens in
 one space. A private tab stays in the space where you opened it, and Nea
 never saves it.
+
+## Profiles
+
+A profile is a separate browser for one person or one role, for example
+"Personal" and "Work". A profile keeps its own tabs, spaces, bookmarks,
+history, passwords and site sign-ins, in its own window. Two profiles never
+see the cookies, the history or the passwords of each other.
+
+With one profile, nothing about profiles shows, except the **Profiles**
+group in Settings. The data that Nea had before profiles is the first
+profile, "Personal". It keeps its folders: nothing moves.
+
+- **New profile:** in Settings → Profiles, type a name and click **New
+  profile**. Nea gives it the next free color and opens its window. With
+  **Add a desktop shortcut** (on by default), a shortcut "Nea (name)" on the
+  desktop opens that profile.
+- **Rename:** select a profile in the list, type the new name and click
+  **Rename**.
+- **Open:** select a profile and click **Open** (or double-click it). If its
+  window is open, it comes to the front. If not, Nea starts it.
+- **With two profiles or more:** a round button with the color and the
+  initial of the profile shows in the tab strip. In the column it is at the
+  bottom, left of the space mark. On a top strip it is left of the controls
+  at the right. Click it to see the profiles: the current one has a check,
+  select another one to open it. The menu also has "New profile…" and
+  "Profile settings", which open Settings. The window title ends with the
+  name of the profile, for example "Nea — Work".
+- Deleting a profile is not available yet.
+
+### Locking a profile
+
+A profile can ask for Windows Hello before it shows its pages. It is off
+for every profile, and nothing changes for a person who never turns it on.
+It works with one profile too. In Settings → Profiles, select the profile
+in the list:
+
+- **Ask for Windows Hello to open it:** the profile opens locked.
+- **Lock after:** when an open window of the profile locks again. *Never*
+  (the default), *5 minutes away*, *15 minutes away*, *1 hour away* or *When
+  the window closes*. "Away" is no keyboard or mouse input on the whole
+  computer for that long (Nea looks every 15 seconds). With any choice but
+  *Never*, the window also locks when Windows locks (Windows+L). *When the
+  window closes* means it opens locked the next time, as the box does.
+
+To turn a lock on, Nea first asks for Windows Hello once: a person who
+cannot pass it cannot lock themselves out by mistake. Turning a lock off in
+the window of that profile does not ask. Any change to the lock of another
+profile asks too. When Windows Hello is not set up, the two controls are off
+and Settings says "Set up Windows Hello in Windows Settings first" (Accounts
+→ Sign-in options). A lock that is already on can still be turned off.
+
+A locked window hides every page. The pages keep running: downloads and
+audio continue. The tabs, the bookmarks bar, the field, the previews, the
+menus and Settings do not show. The window title is "Nea — *name*
+(locked)", so the taskbar shows no page title, and its thumbnail shows the
+lock screen. The lock screen shows the profile's mark and name, why it is
+locked ("Locked after 15 minutes away.") and **Unlock with Windows Hello**.
+Enter or Space does the same; no other shortcut of Nea works. With two
+profiles or more, **Use another profile** opens the profiles' menu. After
+the unlock, the window is as it was: the active page shows and has the
+keyboard.
+
+If Windows Hello is not available when the window unlocks, Nea asks for the
+Windows password of the account instead, so nobody is locked out of a
+profile. Only the password of the account that runs Nea opens it.
+
+The lock hides the pages from a person at the computer. It does not encrypt
+the files of the profile. The options are in `profiles.json` (`lock`,
+`lock_after`); a file from before the lock reads as "off".
+
+Each profile runs in its own process (`nea.exe --profile <id>`; without the
+argument, the first profile opens). Its files are in
+`%APPDATA%\Nea\Profiles\<id>` and `%LOCALAPPDATA%\Nea\Profiles\<id>` (the
+engine data is there too). Its passwords are in Credential Manager under
+`Nea:p<id>:`. The list of profiles is `%APPDATA%\Nea\profiles.json`. The
+profiles share the update (its state and the downloaded package) and the
+cache of the filter lists. Profile numbers are never used again.
 
 ## Tab groups
 
@@ -243,7 +327,7 @@ default shortcut. You can assign a shortcut in Settings.
 ## Bookmarks bar
 
 The bookmarks bar shows your bookmarks above the tabs, as Safari and Arc do.
-It shows only when you have one or more bookmarks. Ctrl+Shift+B bookmarks
+It shows only when you have one or more bookmarks. Ctrl+D bookmarks
 the current page.
 
 - **Tab strip on top:** a slim bar (28 px) under the strip. Each bookmark is
@@ -265,11 +349,34 @@ the current page.
 - **Drag** a bookmark along the bar to change its place. The bookmarks panel
   (Ctrl+Shift+O) uses the same order. A new bookmark goes first.
 - To hide or show the bar, use Settings → Tabs → "Show bookmarks bar", or
-  Alt+Shift+B.
+  Ctrl+Shift+B.
 
 Nea keeps the bar in memory. A paint reads no file, and Nea measures the
-titles one time for each change. A change in the bookmarks panel, Ctrl+Shift+B
+titles one time for each change. A change in the bookmarks panel, Ctrl+D
 and the commands of the bar update it immediately.
+
+## Notifications
+
+A site such as Slack can show notifications in Windows, as in Chrome.
+
+- The first time a site asks, a question shows at the top right corner of
+  its page: **Allow**, **Block** or **Not now**. Nea asks each site once.
+  "Not now" lets the site ask again later.
+- A notification shows as a Windows notification with the title, the text
+  and the site. A click on it brings Nea to the front, on the space and the
+  tab of the site. A silent notification makes no sound. Windows keeps the
+  notifications that you did not close in the notification center until Nea
+  closes.
+- A tab of a site that may show notifications does not sleep: a sleeping
+  page sends nothing.
+- Settings → Privacy shows how many sites you allowed or blocked.
+  **Forget** clears all the decisions, and each site asks again.
+- A private tab asks too, and its decision lasts until Nea closes.
+- Only secure pages can ask: https, and http on the computer itself.
+
+Nea registers its notification name and icon for the current user in
+`HKCU\Software\Classes\AppUserModelId\Nea.Browser`. The uninstall removes
+it. The taskbar pins and the shortcuts do not change.
 
 ## Manual checks
 
@@ -281,3 +388,5 @@ A person checks these items manually:
 - The floating video.
 - The password import.
 - The passkeys.
+- The lock of a profile: the Windows Hello prompt over the window, the password prompt without Hello, the lock after Windows+L and the look of the lock screen in both themes.
+- The notifications question, a toast from a real site, and a click on it from the pop-up and from the notification center.

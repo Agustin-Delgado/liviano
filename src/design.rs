@@ -4,12 +4,12 @@
 //!
 //! The language is a web design system's (its brand tokens and component
 //! recipes; `docs/design.md` has the table):
-//! neutral greys on a shell, the page's ground a step lighter, one indigo
-//! for what is live or chosen, seven type steps and nothing heavier than
+//! neutral greys on a shell, the page's ground a step lighter, the ink (black
+//! or white, no hue) for what is live or chosen, seven type steps and nothing heavier than
 //! medium. Where Search's layout ideas don't clash with it (tabs as soft
 //! grounds on the strip, the private tab's violet) they stay. The design system
 //! has no dark theme; the dark palette keeps the same steps and roles,
-//! mirrored, with the indigo lifted to read on a dark ground.
+//! mirrored.
 
 use windows::{
     Win32::{
@@ -91,25 +91,25 @@ pub struct Palette {
 
 const LIGHT: Palette = Palette {
     dark: false,
-    chrome: Rgb::grey(0xF5),             // shell oklch(0.97 0 0)
-    tab_active: Rgb::grey(0xFA),         // canvas oklch(0.985 0 0)
-    tab_hover: Rgb::grey(0xF0),          // hover oklch(0.955 0 0)
-    tab_tile: Rgb::grey(0xEF),           // shell-hover oklch(0.952 0 0)
-    pin_live: Rgb::grey(0xE8),           // line oklch(0.93 0 0)
-    ink: Rgb::grey(0x17),                // ink oklch(0.205 0 0)
-    ink_muted: Rgb::grey(0x69),          // ink-muted oklch(0.52 0 0)
-    ink_quiet: Rgb::grey(0x52),          // ink-quiet oklch(0.439 0 0)
-    ink_asleep: Rgb::grey(0x92),         // ink-subtle oklch(0.66 0 0)
-    accent: Rgb(0x64, 0x68, 0xF0),       // brand oklch(0.59 0.2 277)
-    accent_hover: Rgb(0x57, 0x56, 0xE4), // brand-hover oklch(0.54 0.21 277)
-    on_accent: Rgb::grey(0xFC),          // on-brand oklch(0.99 0 0)
-    field: Rgb::grey(0xFA),              // canvas
-    selection: Rgb::grey(0xF0),          // hover
-    row_hover: Rgb::grey(0xF3),          // row-hover oklch(0.965 0 0)
-    line: Rgb::grey(0xE8),               // line
-    line_strong: Rgb::grey(0xD7),        // line-strong oklch(0.88 0 0)
-    tooltip: Rgb::grey(0x17),            // ink
-    tooltip_ink: Rgb::grey(0xFA),        // canvas
+    chrome: Rgb::grey(0xF5),     // shell oklch(0.97 0 0)
+    tab_active: Rgb::grey(0xFA), // canvas oklch(0.985 0 0)
+    tab_hover: Rgb::grey(0xF0),  // hover oklch(0.955 0 0)
+    tab_tile: Rgb::grey(0xEF),   // shell-hover oklch(0.952 0 0)
+    pin_live: Rgb::grey(0xE8),   // line oklch(0.93 0 0)
+    ink: Rgb::grey(0x17),        // ink oklch(0.205 0 0)
+    ink_muted: Rgb::grey(0x69),  // ink-muted oklch(0.52 0 0)
+    ink_quiet: Rgb::grey(0x52),  // ink-quiet oklch(0.439 0 0)
+    ink_asleep: Rgb::grey(0x92), // ink-subtle oklch(0.66 0 0)
+    accent: Rgb::grey(0x17),     // ink: the primary is black on the light shell
+    accent_hover: Rgb::grey(0x40),
+    on_accent: Rgb::grey(0xFC),   // on-brand oklch(0.99 0 0)
+    field: Rgb::grey(0xFA),       // canvas
+    selection: Rgb::grey(0xF0),   // hover
+    row_hover: Rgb::grey(0xF3),   // row-hover oklch(0.965 0 0)
+    line: Rgb::grey(0xE8),        // line
+    line_strong: Rgb::grey(0xD7), // line-strong oklch(0.88 0 0)
+    tooltip: Rgb::grey(0x17),     // ink
+    tooltip_ink: Rgb::grey(0xFA), // canvas
     private_tab: Rgb(0xEF, 0xEB, 0xFF),
     private_mark: Rgb(0x7E, 0x4E, 0xD7),
 };
@@ -125,8 +125,8 @@ const DARK: Palette = Palette {
     ink_muted: Rgb::grey(0x9A),
     ink_quiet: Rgb::grey(0xB4),
     ink_asleep: Rgb::grey(0x6E),
-    accent: Rgb(0x81, 0x8C, 0xF9),       // brand lifted: oklch(0.68 0.16 277)
-    accent_hover: Rgb(0x91, 0x9D, 0xFF), // oklch(0.73 0.15 277)
+    accent: Rgb::grey(0xED), // ink: the primary is white on the dark shell
+    accent_hover: Rgb::grey(0xFF),
     on_accent: Rgb::grey(0x14),
     field: Rgb::grey(0x1C),
     selection: Rgb::grey(0x2A),

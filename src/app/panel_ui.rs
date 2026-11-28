@@ -365,7 +365,7 @@ impl App {
         }
     }
 
-    /// Ctrl+Shift+B: marks the page, or unmarks it, and says so in the
+    /// Ctrl+D: marks the page, or unmarks it, and says so in the
     /// bookmarks panel (Esc closes it).
     pub(super) fn toggle_bookmark(&mut self) {
         let Some(tab) = self.tabs.active_tab() else { return };

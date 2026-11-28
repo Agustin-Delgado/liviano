@@ -3,9 +3,9 @@
 //! on it (or the menu item) starts.
 //!
 //! The restart is a normal close: `WM_CLOSE` saves the session and closes
-//! the pages, and `main` then starts the executable again
-//! (`updater::relaunch`). The new instance waits until this one is gone,
-//! applies the update before its window exists, and restores the tabs.
+//! the pages, and `main` then swaps the executable and starts the new one
+//! (`updater::restart_into_update`). The new instance waits until this one
+//! is gone, and restores the tabs.
 
 use windows::Win32::{
     Foundation::{LPARAM, WPARAM},

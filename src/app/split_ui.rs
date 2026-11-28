@@ -403,6 +403,9 @@ impl App {
 
     /// The resize cursor over the divider (WM_SETCURSOR).
     pub(super) fn cursor_on_divider(&self) -> bool {
+        if self.locked() {
+            return false;
+        }
         let Some(rect) = self.divider_rect() else { return false };
         let mut point = POINT::default();
         unsafe {
@@ -438,6 +441,10 @@ impl App {
     }
 
     pub(super) fn mouse_up(&mut self, x: i32, y: i32) {
+        if self.locked() {
+            self.lock_mouse_up(x, y);
+            return;
+        }
         if self.nav_mouse_up(x, y) || self.group_mouse_up() || self.bookmark_mouse_up(x, y) {
             return;
         }

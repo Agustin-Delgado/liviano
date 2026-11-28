@@ -39,6 +39,8 @@ pub enum Hit {
     /// The active space's mark at the foot of the column (shown with two
     /// spaces or more).
     SpaceMark,
+    /// The profile's round mark (shown with two profiles or more).
+    Profile,
     /// A bookmark on the bookmarks bar, by its place in the bar's list.
     Bookmark(usize),
     /// The bar's overflow button ("»" or the "…" tile).
@@ -253,6 +255,10 @@ pub struct Layout {
     /// the column, left of the gear's controls. None on a top strip and
     /// with one space.
     pub space_mark: Option<Rect>,
+    /// The profile's button, with two profiles or more: at the foot of the
+    /// column left of the space mark, and on a top strip left of the
+    /// controls at its right (and of the chips).
+    pub profile: Option<Rect>,
     /// The bookmarks bar, when it shows (`bookmark_bar::place`).
     pub bookmarks: crate::bookmark_bar::BarLayout,
 }
@@ -293,6 +299,21 @@ pub fn layout(tabs: &[TabInfo], width: i32, height: i32, vertical: bool, collaps
     layout_with(tabs, &[], width, height, vertical, collapsed, m, None, None)
 }
 
+/// The layout of a locked window: no strip, no tabs and no bar, only the
+/// caption row with the window's buttons (as the collapsed column's row),
+/// over the lock screen that takes the whole client area.
+pub fn layout_locked(width: i32, height: i32, vertical: bool, m: &Metrics) -> Layout {
+    let edge = m.px(frame::LEAD);
+    let row = 2 * edge + m.px(CONTROL_H);
+    let caption = Rect::new(0, 0, width.max(0), row);
+    Layout {
+        content: Rect::new(0, 0, width.max(0), height.max(0)),
+        vertical,
+        frame: Frame::new(caption, edge, m.scale),
+        ..Default::default()
+    }
+}
+
 /// `layout_chrome` with no update chip.
 #[cfg(all(test, nea_tests))]
 #[allow(clippy::too_many_arguments)]
@@ -307,7 +328,7 @@ pub fn layout_with(
     extensions: Option<usize>,
     zoom: Option<u32>,
 ) -> Layout {
-    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false, None)
+    layout_chrome(tabs, groups, width, height, vertical, collapsed, m, extensions, zoom, false, None, false)
 }
 
 /// `extensions`: with `Some(pinned)`, the strip also holds the extensions
@@ -315,7 +336,8 @@ pub fn layout_with(
 /// percent of the zoom chip (refer to `zoom_percent`), None for no chip.
 /// `update`: the update chip shows (a verified update waits for a restart).
 /// `space_mark`: the width of the active space's name, when the column
-/// shows the space mark (two spaces or more).
+/// shows the space mark (two spaces or more). `profile`: the strip shows
+/// the profile's button (two profiles or more).
 #[allow(clippy::too_many_arguments)]
 pub fn layout_chrome(
     tabs: &[TabInfo],
@@ -329,6 +351,7 @@ pub fn layout_chrome(
     zoom: Option<u32>,
     update: bool,
     space_mark: Option<i32>,
+    profile: bool,
 ) -> Layout {
     if collapsed {
         // No tabs, but the window still needs its buttons and somewhere to
@@ -354,7 +377,8 @@ pub fn layout_chrome(
         place_update(&mut layout, update, m);
         return layout;
     }
-    let chips = chips_room(zoom.is_some(), update, m);
+    // The profile's button takes its room on the controls' row as a chip does.
+    let chips = chips_room(zoom.is_some(), update, m) + if profile { m.px(SETTINGS_W + 2) } else { 0 };
     let mut layout = if vertical {
         layout_vertical(tabs, groups, width, height, m)
     } else {
@@ -365,13 +389,16 @@ pub fn layout_chrome(
     }
     place_zoom(&mut layout, zoom, m);
     place_update(&mut layout, update, m);
+    if profile {
+        place_profile(&mut layout, m);
+    }
     if let Some(name_w) = space_mark.filter(|_| vertical) {
-        // On the gear's row, from the column's pad to the first control:
-        // the name gives way first, and a mark with no room for its dot
-        // does not show.
+        // On the gear's row, from the column's pad (or the profile's
+        // button) to the first control: the name gives way first, and a
+        // mark with no room for its dot does not show.
         let gear = layout.settings;
         let end = layout.update.or(layout.zoom.map(|z| z.rect)).unwrap_or_else(|| leftmost_control(&layout)).left;
-        let left = m.px(8);
+        let left = layout.profile.map_or(m.px(8), |p| p.right + m.px(2));
         let right = (left + crate::spaces::mark_width(name_w, m.scale)).min(end - m.px(2));
         if right - left >= m.px(crate::spaces::MARK_MIN_W) {
             layout.space_mark = Some(Rect::new(left, gear.top, right, gear.bottom));
@@ -425,6 +452,23 @@ fn place_update(layout: &mut Layout, update: bool, m: &Metrics) {
     let gear = layout.settings;
     let right = layout.zoom.map_or_else(|| leftmost_control(layout), |z| z.rect).left - m.px(2);
     layout.update = Some(Rect::new(right - m.px(UPDATE_W), gear.top, right, gear.bottom));
+}
+
+/// The profile's button, the gear's twin. In the column it leads the
+/// gear's row, at the column's pad, before the space mark; on a top strip
+/// it goes left of the chips, or of what they go beside. A column too
+/// narrow for it shows none.
+fn place_profile(layout: &mut Layout, m: &Metrics) {
+    let gear = layout.settings;
+    let first = layout.update.or(layout.zoom.map(|z| z.rect)).unwrap_or_else(|| leftmost_control(layout));
+    let (left, right) = if layout.vertical {
+        (m.px(8), m.px(8) + m.px(SETTINGS_W))
+    } else {
+        (first.left - m.px(2) - m.px(SETTINGS_W), first.left - m.px(2))
+    };
+    if right <= first.left - m.px(2) && left >= 0 {
+        layout.profile = Some(Rect::new(left, gear.top, right, gear.bottom));
+    }
 }
 
 /// The gear's width (the extensions button's).
@@ -715,6 +759,9 @@ impl Layout {
         if self.space_mark.is_some_and(|r| r.contains(x, y)) {
             return Some(Hit::SpaceMark);
         }
+        if self.profile.is_some_and(|r| r.contains(x, y)) {
+            return Some(Hit::Profile);
+        }
         if let Some(label) = self.labels.iter().find(|l| l.rect.contains(x, y)) {
             return Some(Hit::Group(label.id));
         }
@@ -835,7 +882,7 @@ pub fn tabs_area(layout: &Layout, scale: f32) -> RectF {
     if layout.vertical || layout.strip.width() == 0 {
         return RectF::from(layout.strip);
     }
-    let end = [layout.extension_marks.first().copied(), Some(layout.extensions), Some(layout.settings)]
+    let end = [layout.profile, layout.extension_marks.first().copied(), Some(layout.extensions), Some(layout.settings)]
         .into_iter()
         .flatten()
         .filter(|r| r.width() > 0)
@@ -845,6 +892,21 @@ pub fn tabs_area(layout: &Layout, scale: f32) -> RectF {
     // Half the pad after Reload: a tab sliding out goes before it reaches the button.
     let left = layout.nav[2].right + frame::px(4, scale);
     RectF::new(left as f32, 0.0, (end - frame::px(2, scale)) as f32, layout.strip.bottom as f32)
+}
+
+/// The rows the tab list takes in the column, top and bottom: from its
+/// first tab or label to the + button under the last. None on a top strip,
+/// whose list is the strip's one row.
+pub fn list_rows(layout: &Layout) -> Option<(i32, i32)> {
+    if !layout.vertical || layout.strip.width() == 0 {
+        return None;
+    }
+    let rects = layout.items.iter().map(|i| i.rect).chain(layout.labels.iter().map(|l| l.rect));
+    let rows = rects.chain([layout.new_tab]).filter(|r| r.height() > 0);
+    rows.fold(None, |rows: Option<(i32, i32)>, r| match rows {
+        Some((top, bottom)) => Some((top.min(r.top), bottom.max(r.bottom))),
+        None => Some((r.top, r.bottom)),
+    })
 }
 
 /// The tab list (split grounds, the live card, the tabs, the group labels
@@ -1300,7 +1362,7 @@ fn draw_nav(g: &Painter, rect: RectF, button: NavButton, ink: Color, scale: f32)
 
 /// A ghost button's ground (the design system's ghost variant): nothing at rest, the
 /// hover grey under the pointer, a step deeper while a press is answered.
-fn ghost_ground(g: &Painter, rect: RectF, radius: f32, over: f32, pressed: f32, pal: &Palette) {
+pub fn ghost_ground(g: &Painter, rect: RectF, radius: f32, over: f32, pressed: f32, pal: &Palette) {
     if over > 0.0 || pressed > 0.0 {
         let fill = pal.tab_hover.mix(pal.pin_live, pressed);
         g.round(rect, radius, Color::from(fill).with_alpha(over.max(pressed)));
@@ -1396,6 +1458,7 @@ pub enum HoverKey {
     Zoom,
     Update,
     SpaceMark,
+    Profile,
     Bookmark(usize),
     BookmarksMore,
 }
@@ -1415,6 +1478,7 @@ impl HoverKey {
             Hit::Zoom => [Some(HoverKey::Zoom), None],
             Hit::Update => [Some(HoverKey::Update), None],
             Hit::SpaceMark => [Some(HoverKey::SpaceMark), None],
+            Hit::Profile => [Some(HoverKey::Profile), None],
             Hit::Bookmark(i) => [Some(HoverKey::Bookmark(i)), None],
             Hit::BookmarksMore => [Some(HoverKey::BookmarksMore), None],
         }
@@ -1829,6 +1893,12 @@ impl Motion {
             control(HoverKey::PinnedExtension(i), *mark);
         }
         control(HoverKey::Settings, layout.settings);
+        if let Some(mark) = layout.space_mark {
+            control(HoverKey::SpaceMark, mark);
+        }
+        if let Some(profile) = layout.profile {
+            control(HoverKey::Profile, profile);
+        }
         if let Some(update) = layout.update {
             control(HoverKey::Update, update);
         }

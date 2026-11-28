@@ -117,6 +117,16 @@ pub enum Action {
         level: Option<usize>,
         item: Option<usize>,
     },
+    /// Locks the window now, as the profile's lock does. `reason` is what
+    /// the lock screen says: "asked" (the default), "started", "windows"
+    /// or "away" (after `minutes`, 15 when left out).
+    Lock {
+        reason: Option<String>,
+        minutes: Option<u32>,
+    },
+    /// Opens a locked window without Windows Hello. Refused unless it is a
+    /// test run (refer to `profile_lock::script_unlock_allowed`).
+    Unlock,
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]

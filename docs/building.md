@@ -262,13 +262,21 @@ these steps:
 
 1. Nea closes the window as a normal close does. It writes the session and
    closes the pages.
-2. Nea starts its executable again with the same command-line arguments.
+2. The closing process moves the package (`nea-<version>.pkg`) in place of
+   its executable. The running file steps aside as `nea.old`, which the
+   next start deletes.
+3. It starts the new version once, with the same command-line arguments.
    The new process gets the ID of the old process in `NEA_RESTART_WAIT`. It
    waits until the old process stops (20 seconds at most), because the old
-   process holds the profile and the session file until it stops.
-3. The new process replaces the executable before it shows the window, and
-   starts the new version. The new version opens the saved tabs again.
-   Private tabs do not come back, as after a normal close.
+   process holds the profile and the session file until it stops. Then it
+   opens the saved tabs again. Private tabs do not come back, as after a
+   normal close.
+
+The package is not an `.exe` while it waits, and the swap is one move and
+one start: Microsoft Defender's machine-learning detection
+(`Trojan:Win32/Wacatac.C!ml`) once quarantined an unsigned `nea.exe` that
+started itself to copy a downloaded `.exe` into place. Only code signing
+(refer to the code signing policy in the README) removes that risk.
 
 If you do not click the chip, the next start installs the update in the same
 way. Nea keeps the previous executable as `nea.old` and deletes it at the

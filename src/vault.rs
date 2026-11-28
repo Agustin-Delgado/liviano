@@ -153,9 +153,23 @@ pub fn prefix_from_env(name: &str) -> Option<String> {
     std::env::var(name).ok().filter(|p| p.ends_with(':') && !p.contains(char::is_whitespace) && p.len() > 1)
 }
 
+/// The prefix of profile 0: NEA_CREDENTIAL_PREFIX or `PREFIX`.
+pub fn base_prefix() -> String {
+    prefix_from_env("NEA_CREDENTIAL_PREFIX").unwrap_or_else(|| PREFIX.to_string())
+}
+
+/// Set once at start for a profile other than 0: its own corner.
+static PROFILE_PREFIX: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Makes every default store of this process use `prefix`. Only the first
+/// call counts.
+pub fn use_prefix(prefix: String) {
+    let _ = PROFILE_PREFIX.set(prefix);
+}
+
 impl Default for Store {
     fn default() -> Self {
-        Self { prefix: prefix_from_env("NEA_CREDENTIAL_PREFIX").unwrap_or_else(|| PREFIX.to_string()) }
+        Self { prefix: PROFILE_PREFIX.get().cloned().unwrap_or_else(base_prefix) }
     }
 }
 

@@ -134,11 +134,12 @@ pub(super) fn saved_spaces<W>(list: &TabList<W>) -> (Vec<crate::spaces::SavedSpa
 }
 
 /// The window title for the active tab (`label`, and whether it is private).
-pub(super) fn window_title(active: Option<(&str, bool)>) -> String {
+/// `app`: the app's name, with the profile's when profiles show.
+pub(super) fn window_title(active: Option<(&str, bool)>, app: &str) -> String {
     match active {
-        Some((label, true)) => format!("{label} — {} (private tab)", crate::storage::DISPLAY_NAME),
-        Some((label, false)) => format!("{label} — {}", crate::storage::DISPLAY_NAME),
-        None => crate::storage::DISPLAY_NAME.to_string(),
+        Some((label, true)) => format!("{label} — {app} (private tab)"),
+        Some((label, false)) => format!("{label} — {app}"),
+        None => app.to_string(),
     }
 }
 

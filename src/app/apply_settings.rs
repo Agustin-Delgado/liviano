@@ -18,12 +18,17 @@ fn on_tab_layout_changed(vertical: bool, collapsed: bool) {
 
 impl App {
     pub(super) fn open_settings(&mut self) {
+        if self.locked() {
+            return;
+        }
         self.close_omnibar();
         settings_window::set_layout_handler(on_tab_layout_changed);
         settings_window::set_closed_handler(on_settings_closed);
         settings_window::set_tab_layout(self.vertical, self.collapsed);
         settings_window::open(self.hwnd, &self.settings, &self.palette, on_settings_changed);
         self.attach_settings_extensions();
+        self.attach_settings_profiles();
+        self.check_hello_for_settings();
     }
 
     /// Search address, sleep times and kept-awake sites are read where they
@@ -37,7 +42,12 @@ impl App {
         let bar_changed = settings.show_bookmarks_bar != self.settings.show_bookmarks_bar;
         let bench_changed = settings.bench_enabled != self.settings.bench_enabled;
         let trackers_changed = settings.block_trackers != self.settings.block_trackers;
+        let forgotten: Vec<String> =
+            self.settings.notifications.keys().filter(|o| !settings.notifications.contains_key(*o)).cloned().collect();
         self.settings = settings;
+        if !forgotten.is_empty() {
+            self.notify_forget(&forgotten);
+        }
         if trackers_changed {
             crate::shield::set_cosmetic(self.settings.block_trackers);
             for tab in self.tabs.all() {

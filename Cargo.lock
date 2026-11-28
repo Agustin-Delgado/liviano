@@ -140,7 +140,7 @@ dependencies = [
 
 [[package]]
 name = "nea"
-version = "0.1.9"
+version = "0.1.15"
 dependencies = [
  "ed25519-compact",
  "embed-resource",
@@ -149,6 +149,7 @@ dependencies = [
  "serde_json",
  "webview2-com",
  "windows",
+ "windows-future",
  "windows-numerics",
 ]
 

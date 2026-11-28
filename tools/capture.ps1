@@ -156,7 +156,7 @@ public static class NeaCapture {
             shot.Frame.Right - shot.Frame.Left, shot.Frame.Bottom - shot.Frame.Top);
         var cut = bitmap.Clone(crop, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
         bitmap.Dispose();
-        if (shot.Class == "NeaTooltip") KeyOutBlack(cut);
+        if (shot.Class == "NeaTooltip" || shot.Class == "NeaSpaceCard") KeyOutBlack(cut);
         return cut;
     }
 

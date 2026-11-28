@@ -123,7 +123,7 @@ public static class NeaShowcase {
             PrintWindow(w.Hwnd, hdc, 2);
             g.ReleaseHdc(hdc);
         }
-        if (w.Class == "NeaTooltip") KeyOutBlack(bitmap);
+        if (w.Class == "NeaTooltip" || w.Class == "NeaSpaceCard") KeyOutBlack(bitmap);
         return bitmap;
     }
 

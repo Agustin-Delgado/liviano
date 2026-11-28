@@ -218,6 +218,23 @@ fn mode_name(mode: Mode) -> &'static str {
     }
 }
 
+/// The requests that read or act in a page (or run a command).
+fn reads_a_page(action: &Action) -> bool {
+    matches!(action, Action::Text { .. } | Action::Screenshot { .. } | Action::Click { .. } | Action::Run { .. })
+}
+
+/// The reason a script's `lock` names.
+pub(super) fn lock_reason(name: Option<&str>, minutes: Option<u32>) -> Option<crate::profile_lock::Reason> {
+    use crate::profile_lock::Reason;
+    match name.unwrap_or("asked") {
+        "asked" => Some(Reason::Asked),
+        "started" => Some(Reason::Started),
+        "windows" => Some(Reason::WindowsLocked),
+        "away" => Some(Reason::Away(minutes.unwrap_or(15))),
+        _ => None,
+    }
+}
+
 fn screenshot_path(tab: u64, asked: Option<&str>) -> std::path::PathBuf {
     if let Some(path) = asked.filter(|p| !p.trim().is_empty()) {
         return std::path::PathBuf::from(path);
@@ -230,6 +247,11 @@ impl App {
     fn bench_job(&mut self, job: Job) {
         super::note_script();
         let Job { action, reply } = job;
+        // A locked window gives no page to a script: what it reads or does
+        // in a page waits for the unlock.
+        if self.locked() && reads_a_page(&action) {
+            return reply.error("the window is locked");
+        }
         match action {
             Action::Open { url, background } => {
                 let url = omnibox::resolve(&url, &self.settings.search_url).unwrap_or(url);
@@ -414,6 +436,17 @@ impl App {
                     Err(message) => reply.error(&message),
                 }
             }
+            Action::Lock { reason, minutes } => match lock_reason(reason.as_deref(), minutes) {
+                Some(reason) => {
+                    self.lock_now(reason);
+                    reply.ok(self.lock_state());
+                }
+                None => reply.error("reason is one of asked, started, windows, away"),
+            },
+            Action::Unlock => match self.script_unlock() {
+                Ok(()) => reply.ok(self.lock_state()),
+                Err(message) => reply.error(&message),
+            },
             // Answered on the pipe thread; never queued.
             Action::Ping | Action::Memory | Action::Type { .. } | Action::Menu { .. } => {
                 reply.error("request not expected here")
@@ -598,6 +631,16 @@ impl App {
         }
     }
 
+    /// The window's title as Windows shows it.
+    fn window_title_text(&self) -> String {
+        use windows::Win32::UI::WindowsAndMessaging::{GetWindowTextLengthW, GetWindowTextW};
+        unsafe {
+            let mut buffer = vec![0u16; GetWindowTextLengthW(self.hwnd).max(0) as usize + 1];
+            let copied = GetWindowTextW(self.hwnd, &mut buffer).max(0) as usize;
+            String::from_utf16_lossy(&buffer[..copied])
+        }
+    }
+
     fn bench_state(&self) -> Value {
         let tabs: Vec<Value> = self
             .tabs
@@ -624,11 +667,22 @@ impl App {
         json!({
             "tabs": tabs,
             "active": self.tabs.active,
+            // The tabs whose pages are on screen, of any space.
+            "shown": self.tabs.all().filter(|t| matches!(&t.live, Live::Ready(w) if w.is_shown())).map(|t| t.id).collect::<Vec<_>>(),
             "layout": if self.vertical { "vertical" } else { "horizontal" },
             "sidebar_collapsed": self.collapsed,
             "splits": self.split_pairs().iter().map(|(l, r)| json!([l, r])).collect::<Vec<_>>(),
             "groups": self.groups_state(),
             "spaces": self.spaces_state(),
+            "profiles": serde_json::json!({
+                "current": crate::profile_launch::current(),
+                "count": self.profiles.list().len(),
+                "button": self.layout.profile.map(|r| [r.left, r.top, r.right, r.bottom]),
+                "data_dir": crate::storage::data_dir(),
+            }),
+            "locked": self.locked(),
+            "lock": self.lock_state(),
+            "title": self.window_title_text(),
             "bookmarks_bar": self.bookmarks_bar_state(),
             "extensions_button": self.layout.extensions.width() > 0,
             "card": self.card_state(),
@@ -640,6 +694,10 @@ impl App {
             "content": [content.left, content.top, content.right, content.bottom],
             "fullscreen": self.fullscreen.on(),
             "zoom": self.tabs.active_tab().map(|t| (t.zoom * 100.0).round()),
+            "typing": self.tabs.active_tab().and_then(|t| match &t.live {
+                Live::Ready(web) => Some(web.typing.get()),
+                _ => None,
+            }),
             "zoom_chip": self.layout.zoom.map(|z| json!({ "percent": z.percent, "rect": [z.rect.left, z.rect.top, z.rect.right, z.rect.bottom] })),
             "version": crate::updater::CURRENT_VERSION,
             "update_chip": self.layout.update.map(|r| json!({ "version": self.update, "rect": [r.left, r.top, r.right, r.bottom] })),

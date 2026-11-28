@@ -23,8 +23,8 @@ use windows::{
             },
             HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow},
             Input::KeyboardAndMouse::{
-                GetFocus, HOT_KEY_MODIFIERS, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT, MOD_SHIFT, RegisterHotKey, SetFocus,
-                UnregisterHotKey,
+                EnableWindow, GetFocus, HOT_KEY_MODIFIERS, IsWindowEnabled, MOD_ALT, MOD_CONTROL, MOD_NOREPEAT,
+                MOD_SHIFT, RegisterHotKey, SetFocus, UnregisterHotKey,
             },
             WindowsAndMessaging::*,
         },
@@ -35,6 +35,7 @@ use windows::{
 use crate::{
     design::{Palette, dwm, size},
     gfx::{Align, Color, Font, RectF, Surface},
+    profile_lock::{self, LOCK_AFTER_CHOICES, LockOptions},
     settings::{self, FieldPosition, Settings, Theme},
     shortcuts::{self, Command},
     updater,
@@ -83,13 +84,27 @@ const ID_STATUS: i32 = 139;
 const ID_VERSION: i32 = 140;
 const ID_BOOKMARKS_BAR: i32 = 141;
 const ID_BOOKMARKS_BAR_LABEL: i32 = 142;
+const ID_NOTIFY_NOTE: i32 = 143;
+const ID_NOTIFY_FORGET: i32 = 144;
+const ID_PROFILES_LIST: i32 = 145;
+const ID_PROFILE_NAME: i32 = 146;
+const ID_PROFILE_NEW: i32 = 147;
+const ID_PROFILE_RENAME: i32 = 148;
+const ID_PROFILE_OPEN: i32 = 149;
+const ID_PROFILE_SHORTCUT: i32 = 150;
+const ID_PROFILE_SHORTCUT_LABEL: i32 = 151;
+const ID_PROFILE_LOCK: i32 = 152;
+const ID_PROFILE_LOCK_LABEL: i32 = 153;
+const ID_PROFILE_LOCK_AFTER_LABEL: i32 = 154;
+const ID_PROFILE_LOCK_AFTER: i32 = 155;
+const ID_PROFILE_LOCK_NOTE: i32 = 156;
 
 const BN_CLICKED_CODE: u32 = 0;
 // Static control styles (their constants live behind another `windows` feature).
 const SS_NOTIFY: u32 = 0x0100;
 const SS_ENDELLIPSIS: u32 = 0x4000;
 const CLIENT_WIDTH: i32 = 780;
-const CLIENT_HEIGHT: i32 = 898;
+const CLIENT_HEIGHT: i32 = 1080;
 /// Where the tabs go: the first thing in Settings, since the shortcut alone
 /// went unnoticed (and another program may hold it).
 const TAB_LAYOUTS: [(bool, &str); 2] = [(false, "On top"), (true, "On the side")];
@@ -107,6 +122,27 @@ pub enum ExtensionCommand {
     Reload,
     Remove,
     LoadUnpacked,
+}
+
+/// What the Profiles group asks of the app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ProfileCommand {
+    /// A new profile with this name (already cleaned), and a desktop
+    /// shortcut to it when asked.
+    New {
+        name: String,
+        shortcut: bool,
+    },
+    Rename {
+        id: u32,
+        name: String,
+    },
+    Open(u32),
+    /// New lock options for a profile (`profile_lock`).
+    Lock {
+        id: u32,
+        options: LockOptions,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -150,6 +186,15 @@ struct State {
     status: HWND,
     ext_list: HWND,
     ext_note: HWND,
+    notify_note: HWND,
+    profiles_list: HWND,
+    profile_name: HWND,
+    profile_shortcut: HWND,
+    profile_lock: HWND,
+    profile_lock_label: HWND,
+    profile_lock_after_label: HWND,
+    profile_lock_after: HWND,
+    profile_lock_note: HWND,
     font: HFONT,
     heading_font: HFONT,
     scale: f32,
@@ -174,12 +219,22 @@ type AddChild<'a> = dyn FnMut(PCWSTR, &str, u32, WINDOW_EX_STYLE, (i32, i32, i32
 type ExtensionHandler = fn(ExtensionCommand, Option<usize>);
 /// Who applies the tab layout (vertical, collapsed).
 type LayoutHandler = fn(bool, bool);
+/// Who handles what the Profiles group asks for.
+type ProfileHandler = fn(ProfileCommand);
+/// One row of the Profiles list: id, name and lock options.
+type ProfileRow = (u32, String, LockOptions);
 
 thread_local! {
     static STATE: RefCell<Option<State>> = const { RefCell::new(None) };
     static HANDLER: Cell<Option<fn(Settings)>> = const { Cell::new(None) };
     static CLOSED: Cell<Option<fn()>> = const { Cell::new(None) };
     static EXTENSION_HANDLER: Cell<Option<ExtensionHandler>> = const { Cell::new(None) };
+    static PROFILE_HANDLER: Cell<Option<ProfileHandler>> = const { Cell::new(None) };
+    /// The profiles' rows (id, name, lock options) and this window's
+    /// profile, as the app gave them (also before the window opens).
+    static PROFILES: RefCell<(Vec<ProfileRow>, u32)> = const { RefCell::new((Vec::new(), 0)) };
+    /// Windows Hello is set up; None until the app knows.
+    static LOCK_HELLO: Cell<Option<bool>> = const { Cell::new(None) };
     /// Who applies the tab layout (vertical, collapsed): the app, which keeps
     /// it in the session rather than in the settings.
     static LAYOUT_HANDLER: Cell<Option<LayoutHandler>> = const { Cell::new(None) };
@@ -205,6 +260,9 @@ enum Outcome {
     Extension(ExtensionCommand, Option<usize>),
     /// A tab layout (vertical, collapsed) for the app, applied at once.
     Layout(bool, bool),
+    /// Handed to the app once the state is no longer borrowed (it calls back
+    /// into `set_profiles`).
+    Profile(ProfileCommand),
 }
 
 fn wide(text: &str) -> HSTRING {
@@ -792,6 +850,65 @@ fn controls() -> Vec<Spec> {
     add(w!("BUTTON"), "Remove…", button_style, none, (l + 392, 810, 80, 26), ID_EXT_REMOVE, Kind::Button, false);
     add(w!("BUTTON"), "Load unpacked…", button_style, none, (l + 478, 810, 170, 26), ID_EXT_LOAD, Kind::Button, false);
 
+    // Profiles, under Extensions and as wide: the list at the left, what
+    // acts on it at the right. A name typed in the field makes a new
+    // profile or renames the one picked.
+    heading(&mut add, "Profiles", (l, 852, 140, 22));
+    label(
+        &mut add,
+        "A profile keeps its own tabs, spaces, bookmarks, history, passwords and site sign-ins, in its own window.",
+        (l, 878, 732, 22),
+    );
+    add(w!("LISTBOX"), "", list_style, edge, (l, 906, 340, 58), ID_PROFILES_LIST, Kind::List, false);
+    add(w!("EDIT"), "", edit_style, edge, (l + 350, 906, 176, 26), ID_PROFILE_NAME, Kind::Edit, false);
+    add(w!("BUTTON"), "New profile", button_style, none, (l + 532, 906, 110, 26), ID_PROFILE_NEW, Kind::Button, false);
+    add(w!("BUTTON"), "Rename", button_style, none, (l + 648, 906, 84, 26), ID_PROFILE_RENAME, Kind::Button, false);
+    add(
+        w!("BUTTON"),
+        "",
+        tab | BS_AUTOCHECKBOX as u32,
+        none,
+        (l + 350, 942, 18, 18),
+        ID_PROFILE_SHORTCUT,
+        Kind::Button,
+        false,
+    );
+    add(
+        w!("STATIC"),
+        "Add a desktop shortcut",
+        SS_NOTIFY,
+        none,
+        (l + 372, 940, 200, 22),
+        ID_PROFILE_SHORTCUT_LABEL,
+        Kind::Label,
+        false,
+    );
+    add(w!("BUTTON"), "Open", button_style, none, (l + 648, 938, 84, 26), ID_PROFILE_OPEN, Kind::Button, false);
+    // The lock of the profile picked in the list (`profile_lock`).
+    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (l, 976, 18, 18), ID_PROFILE_LOCK, Kind::Button, false);
+    add(
+        w!("STATIC"),
+        "Ask for Windows Hello to open it",
+        SS_NOTIFY,
+        none,
+        (l + 22, 974, 300, 22),
+        ID_PROFILE_LOCK_LABEL,
+        Kind::Label,
+        false,
+    );
+    add(w!("STATIC"), "Lock after", 0, none, (l + 350, 974, 80, 22), ID_PROFILE_LOCK_AFTER_LABEL, Kind::Label, false);
+    add(
+        w!("COMBOBOX"),
+        "",
+        tab | CBS_DROPDOWNLIST as u32,
+        none,
+        (l + 432, 970, 200, 200),
+        ID_PROFILE_LOCK_AFTER,
+        Kind::Combo,
+        false,
+    );
+    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (l, 1004, 620, 22), ID_PROFILE_LOCK_NOTE, Kind::Label, false);
+
     // Right column: Shortcuts.
     let r = 400;
     heading(&mut add, "Shortcuts", (r, 18, 356, 22));
@@ -853,19 +970,22 @@ fn controls() -> Vec<Spec> {
         Kind::Label,
         false,
     );
-    heading(&mut add, "Testing", (r, 610, 140, 22));
-    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 611, 20, 20), ID_BENCH, Kind::Button, false);
+    // The sites that asked to notify: Nea asks each one once.
+    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 608, 262, 22), ID_NOTIFY_NOTE, Kind::Label, false);
+    add(w!("BUTTON"), "Forget", button_style, none, (r + 270, 604, 86, 26), ID_NOTIFY_FORGET, Kind::Button, false);
+    heading(&mut add, "Testing", (r, 640, 140, 22));
+    add(w!("BUTTON"), "", tab | BS_AUTOCHECKBOX as u32, none, (r + 150, 641, 20, 20), ID_BENCH, Kind::Button, false);
     add(
         w!("STATIC"),
         "Script control (local pipe)",
         SS_NOTIFY,
         none,
-        (r + 174, 610, 182, 22),
+        (r + 174, 640, 182, 22),
         ID_BENCH_LABEL,
         Kind::Label,
         false,
     );
-    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 638, 356, 22), ID_VERSION, Kind::Label, false);
+    add(w!("STATIC"), "", SS_ENDELLIPSIS, none, (r, 664, 356, 22), ID_VERSION, Kind::Label, false);
     add(
         w!("BUTTON"),
         "Close",
@@ -920,7 +1040,7 @@ enum Finish {
 
 const THEME_CHUNK: usize = 16;
 const KEYS_CHUNK: usize = 16;
-const COMBO_COUNT: usize = 4;
+const COMBO_COUNT: usize = 5;
 
 /// The piece that follows `step`, for `children` controls and `keys` rows
 /// of the shortcuts list; none after the last one.
@@ -1091,7 +1211,8 @@ impl Build {
                         0 => (ID_THEME, THEMES.iter().map(|(_, n)| *n).collect()),
                         1 => (ID_TAB_LAYOUT, TAB_LAYOUTS.iter().map(|(_, n)| *n).collect()),
                         2 => (ID_FIELD_POSITION, FIELD_POSITIONS.iter().map(|(_, n)| *n).collect()),
-                        _ => (ID_PASSWORDS_OFFER, OFFER_CHOICES.iter().map(|(_, n)| *n).collect()),
+                        3 => (ID_PASSWORDS_OFFER, OFFER_CHOICES.iter().map(|(_, n)| *n).collect()),
+                        _ => (ID_PROFILE_LOCK_AFTER, LOCK_AFTER_CHOICES.iter().map(|(_, n)| *n).collect()),
                     };
                     let combo = self.item(id);
                     for name in names {
@@ -1146,6 +1267,15 @@ impl Build {
                         status: self.item(ID_STATUS),
                         ext_list: self.item(ID_EXT_LIST),
                         ext_note: self.item(ID_EXT_NOTE),
+                        notify_note: self.item(ID_NOTIFY_NOTE),
+                        profiles_list: self.item(ID_PROFILES_LIST),
+                        profile_name: self.item(ID_PROFILE_NAME),
+                        profile_shortcut: self.item(ID_PROFILE_SHORTCUT),
+                        profile_lock: self.item(ID_PROFILE_LOCK),
+                        profile_lock_label: self.item(ID_PROFILE_LOCK_LABEL),
+                        profile_lock_after_label: self.item(ID_PROFILE_LOCK_AFTER_LABEL),
+                        profile_lock_after: self.item(ID_PROFILE_LOCK_AFTER),
+                        profile_lock_note: self.item(ID_PROFILE_LOCK_NOTE),
                         font: self.font,
                         heading_font: self.heading_font,
                         scale: self.scale,
@@ -1285,7 +1415,148 @@ fn fill_fields(st: &mut State) {
         SendMessageW(st.updates, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
     }
     set_text(st.version, &version_line());
+    set_text(st.notify_note, &settings::notifications_summary(&st.settings.notifications));
     fill_bench(st);
+    fill_profiles(st);
+    unsafe {
+        // A new profile gets its shortcut unless the person says otherwise.
+        SendMessageW(st.profile_shortcut, BM_SETCHECK, Some(WPARAM(BST_CHECKED.0 as usize)), None);
+    }
+}
+
+/// The rows of the Profiles list: each name, this window's marked. The
+/// picked row stays where it was, or is this profile's.
+fn fill_profiles(st: &State) {
+    let (rows, current) = PROFILES.with(|p| p.borrow().clone());
+    let picked = list_selection(st.profiles_list).or_else(|| rows.iter().position(|(id, _, _)| *id == current));
+    let texts: Vec<String> = rows.iter().map(|(id, name, _)| profile_row(name, *id == current)).collect();
+    list_fill(st.profiles_list, &texts, picked.filter(|i| *i < texts.len()));
+    fill_profile_lock(st);
+}
+
+/// The lock controls show the options of the profile picked in the list.
+/// With Windows Hello missing, a profile that does not lock cannot start
+/// to (`profile_lock::controls_enabled`).
+fn fill_profile_lock(st: &State) {
+    let options = picked_lock(st).unwrap_or_default();
+    let hello = LOCK_HELLO.with(|h| h.get());
+    let enabled = picked_profile(st).is_some() && profile_lock::controls_enabled(hello, options);
+    let check = if options.lock { BST_CHECKED } else { BST_UNCHECKED };
+    let index = LOCK_AFTER_CHOICES.iter().position(|(after, _)| *after == options.lock_after).unwrap_or(0);
+    unsafe {
+        SendMessageW(st.profile_lock, BM_SETCHECK, Some(WPARAM(check.0 as usize)), None);
+        SendMessageW(st.profile_lock_after, CB_SETCURSEL, Some(WPARAM(index)), None);
+        for control in [st.profile_lock, st.profile_lock_label, st.profile_lock_after_label, st.profile_lock_after] {
+            let _ = EnableWindow(control, enabled);
+        }
+    }
+    set_text(st.profile_lock_note, profile_lock::settings_note(hello, options));
+}
+
+/// The lock options of the profile picked in the list, as the app gave them.
+fn picked_lock(st: &State) -> Option<LockOptions> {
+    let index = list_selection(st.profiles_list)?;
+    PROFILES.with(|p| p.borrow().0.get(index).map(|(_, _, options)| *options))
+}
+
+/// The app knows whether Windows Hello is set up.
+pub fn set_lock_hello(hello: Option<bool>) {
+    LOCK_HELLO.with(|h| h.set(hello));
+    with_state(|st| fill_profile_lock(st));
+}
+
+/// The two controls changed: the new options go to the app, which may ask
+/// for Windows Hello before it saves them.
+fn lock_changed(st: &mut State) -> Outcome {
+    let Some(id) = picked_profile(st) else { return Outcome::Nothing };
+    let lock = unsafe { SendMessageW(st.profile_lock, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0 };
+    let index = unsafe { SendMessageW(st.profile_lock_after, CB_GETCURSEL, None, None).0 };
+    let lock_after = LOCK_AFTER_CHOICES.get(index.max(0) as usize).map_or_else(Default::default, |(after, _)| *after);
+    let options = LockOptions { lock, lock_after };
+    if picked_lock(st) == Some(options) {
+        return Outcome::Nothing;
+    }
+    Outcome::Profile(ProfileCommand::Lock { id, options })
+}
+
+/// A locked window shows no Settings: it goes as if closed. Posted, not
+/// done here: the app that asks is busy, and the close hands it what was
+/// typed.
+pub fn dismiss() {
+    let shown = STATE.with(|s| {
+        s.try_borrow().ok().and_then(|g| g.as_ref().map(|st| (st.hwnd, unsafe { IsWindowVisible(st.hwnd).as_bool() })))
+    });
+    if let Some((hwnd, true)) = shown {
+        unsafe {
+            let _ = PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0));
+        }
+    }
+}
+
+/// One row of the Profiles list.
+fn profile_row(name: &str, this: bool) -> String {
+    if this { format!("{name}  ·  This profile") } else { name.to_string() }
+}
+
+/// The app gives the profiles (id, name, lock options) and this window's.
+pub fn set_profiles(rows: &[ProfileRow], current: u32) {
+    PROFILES.with(|p| *p.borrow_mut() = (rows.to_vec(), current));
+    with_state(|st| fill_profiles(st));
+}
+
+pub fn set_profile_handler(handler: ProfileHandler) {
+    PROFILE_HANDLER.with(|h| h.set(Some(handler)));
+}
+
+/// A line from the app in the status line (what a profile command did).
+pub fn show_status(text: &str) {
+    with_state(|st| status(st, text));
+}
+
+/// The id of the row picked in the Profiles list.
+fn picked_profile(st: &State) -> Option<u32> {
+    let index = list_selection(st.profiles_list)?;
+    PROFILES.with(|p| p.borrow().0.get(index).map(|(id, _, _)| *id))
+}
+
+fn new_profile(st: &mut State) -> Outcome {
+    let Some(name) = crate::profiles::clean_name(&text_of(st.profile_name)) else {
+        status(st, "Type a name for the new profile.");
+        unsafe {
+            let _ = SetFocus(Some(st.profile_name));
+        }
+        return Outcome::Nothing;
+    };
+    let shortcut = unsafe { SendMessageW(st.profile_shortcut, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0 };
+    set_text(st.profile_name, "");
+    status(st, &format!("Opening {name} in a new window…"));
+    Outcome::Profile(ProfileCommand::New { name, shortcut })
+}
+
+fn rename_profile(st: &mut State) -> Outcome {
+    let Some(id) = picked_profile(st) else {
+        status(st, "Pick a profile in the list first.");
+        return Outcome::Nothing;
+    };
+    let Some(name) = crate::profiles::clean_name(&text_of(st.profile_name)) else {
+        status(st, "Type the new name, then press Rename.");
+        return Outcome::Nothing;
+    };
+    set_text(st.profile_name, "");
+    status(st, &format!("The profile is called {name} now."));
+    Outcome::Profile(ProfileCommand::Rename { id, name })
+}
+
+fn open_profile(st: &mut State) -> Outcome {
+    let Some(id) = picked_profile(st) else {
+        status(st, "Pick a profile in the list first.");
+        return Outcome::Nothing;
+    };
+    if id == PROFILES.with(|p| p.borrow().1) {
+        status(st, "This window already shows that profile.");
+        return Outcome::Nothing;
+    }
+    Outcome::Profile(ProfileCommand::Open(id))
 }
 
 /// "Version 0.1.0", and the one waiting for the next launch if there is one.
@@ -1486,6 +1757,17 @@ fn add_awake(st: &mut State) -> Outcome {
     let index = st.settings.keep_awake.iter().position(|h| *h == host);
     fill_awake(st, index);
     status(st, &format!("{host} does not sleep now."));
+    Outcome::Changed
+}
+
+fn forget_notifications(st: &mut State) -> Outcome {
+    if st.settings.notifications.is_empty() {
+        status(st, "No site has asked to notify.");
+        return Outcome::Nothing;
+    }
+    st.settings.notifications.clear();
+    set_text(st.notify_note, &settings::notifications_summary(&st.settings.notifications));
+    status(st, "Each site asks again before it shows notifications.");
     Outcome::Changed
 }
 
@@ -1702,6 +1984,34 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
         (ID_BOOKMARKS_BAR_LABEL, STN_CLICKED) => toggle_bookmarks_bar(st, true),
         (ID_AWAKE_ADD, BN_CLICKED_CODE) => add_awake(st),
         (ID_AWAKE_REMOVE, BN_CLICKED_CODE) => remove_awake(st),
+        (ID_NOTIFY_FORGET, BN_CLICKED_CODE) => forget_notifications(st),
+        (ID_PROFILE_NEW, BN_CLICKED_CODE) => new_profile(st),
+        (ID_PROFILE_RENAME, BN_CLICKED_CODE) => rename_profile(st),
+        (ID_PROFILE_OPEN, BN_CLICKED_CODE) | (ID_PROFILES_LIST, LBN_DBLCLK) => open_profile(st),
+        (ID_PROFILES_LIST, LBN_SELCHANGE) => {
+            fill_profile_lock(st);
+            Outcome::Nothing
+        }
+        (ID_PROFILE_LOCK, BN_CLICKED_CODE) | (ID_PROFILE_LOCK_AFTER, CBN_SELCHANGE) => lock_changed(st),
+        (ID_PROFILE_LOCK_LABEL, STN_CLICKED) => {
+            unsafe {
+                if !IsWindowEnabled(st.profile_lock).as_bool() {
+                    return Outcome::Nothing;
+                }
+                let checked = SendMessageW(st.profile_lock, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+                let next = if checked { BST_UNCHECKED } else { BST_CHECKED };
+                SendMessageW(st.profile_lock, BM_SETCHECK, Some(WPARAM(next.0 as usize)), None);
+            }
+            lock_changed(st)
+        }
+        (ID_PROFILE_SHORTCUT_LABEL, STN_CLICKED) => {
+            unsafe {
+                let checked = SendMessageW(st.profile_shortcut, BM_GETCHECK, None, None).0 as u32 == BST_CHECKED.0;
+                let next = if checked { BST_UNCHECKED } else { BST_CHECKED };
+                SendMessageW(st.profile_shortcut, BM_SETCHECK, Some(WPARAM(next.0 as usize)), None);
+            }
+            Outcome::Nothing
+        }
         (ID_KEYS_LIST, LBN_SELCHANGE) => {
             show_command(st);
             Outcome::Nothing
@@ -1733,6 +2043,8 @@ fn on_command(st: &mut State, id: i32, code: u32) -> Outcome {
                 assign_key(st)
             } else if focus == st.awake_edit {
                 add_awake(st)
+            } else if focus == st.profile_name {
+                new_profile(st)
             } else {
                 commit_all_fields(st)
             }
@@ -1852,7 +2164,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             let code = ((wparam.0 >> 16) & 0xFFFF) as u32;
             let mut extension = None;
             let mut layout = None;
+            let mut profile = None;
             let outcome = with_state(|st| match on_command(st, id, code) {
+                Outcome::Profile(command) => {
+                    profile = Some(command);
+                    Some(None)
+                }
                 Outcome::Layout(vertical, collapsed) => {
                     layout = Some((vertical, collapsed));
                     Some(None)
@@ -1888,6 +2205,9 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             }
             if let (Some((command, row)), Some(handler)) = (extension, EXTENSION_HANDLER.with(|h| h.get())) {
                 handler(command, row);
+            }
+            if let (Some(command), Some(handler)) = (profile, PROFILE_HANDLER.with(|h| h.get())) {
+                handler(command);
             }
             LRESULT(0)
         }

@@ -23,7 +23,7 @@ use windows::{
         },
         UI::{
             Controls::WM_MOUSELEAVE,
-            Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent},
+            Input::KeyboardAndMouse::{SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_MENU},
             WindowsAndMessaging::*,
         },
     },
@@ -40,12 +40,15 @@ mod frame_ui;
 mod fullscreen_ui;
 mod groups_ui;
 mod hovercard_ui;
+mod lock_ui;
 mod memory_ui;
 mod nav_ui;
+mod notify_ui;
 mod panel_ui;
 mod popups_ui;
 mod power_ui;
 mod private_tabs;
+mod profiles_ui;
 mod spaces_ui;
 mod split_ui;
 mod tooltip_ui;
@@ -201,6 +204,7 @@ struct App {
     groups: groups_ui::GroupsUi,
     bench: bench_ui::BenchState,
     vault: vault_ui::Vault,
+    notify: notify_ui::Notify,
     extensions: extensions_ui::Extensions,
     popups: popups_ui::Popups,
     frame: frame_ui::FrameUi,
@@ -223,6 +227,11 @@ struct App {
     spaces: spaces_ui::SpacesUi,
     /// The bookmarks bar's copy of the list (`bookmarks_ui`).
     bookmarks: bookmarks_ui::BarUi,
+    /// The profiles' registry, read at start and again when the window
+    /// comes to the front (another window may have changed it).
+    profiles: crate::profiles::Registry,
+    /// The lock of this window (`lock_ui`).
+    lock: lock_ui::LockUi,
 }
 
 thread_local! {
@@ -394,8 +403,11 @@ pub fn run() -> windows::core::Result<()> {
     let hwnd = create_window(&session)?;
     crate::diag::trace(|| "startup: window created".to_string());
     crate::app_icon::apply(hwnd);
+    // Another Nea finds this profile's window by it.
+    crate::profile_launch::tag_window(hwnd);
     frame_ui::install(hwnd, session.vertical_tabs, session.sidebar_collapsed);
     web::set_window(hwnd);
+    crate::notifications::set_window(hwnd);
     crate::diag::set_window(hwnd);
     crate::updater::notify(hwnd.0 as isize, update_ui::WM_APP_UPDATE);
     crate::updater::start(&settings);
@@ -456,6 +468,7 @@ pub fn run() -> windows::core::Result<()> {
         groups: Default::default(),
         bench: Default::default(),
         vault: Default::default(),
+        notify: Default::default(),
         extensions: extensions_ui::Extensions::load(),
         popups: Default::default(),
         frame: Default::default(),
@@ -471,11 +484,15 @@ pub fn run() -> windows::core::Result<()> {
         fullscreen: Default::default(),
         spaces: Default::default(),
         bookmarks: bookmarks_ui::BarUi::load(),
+        profiles: crate::profile_launch::load(),
+        lock: Default::default(),
     };
     APP.with(|cell| *cell.borrow_mut() = Some(app));
     if bench_on {
         crate::bench::set_enabled(hwnd, true);
     }
+    // Before the window shows: a locked profile never draws its pages.
+    with_app(|app| app.lock_at_start());
 
     unsafe {
         // A scripted run must not take the foreground (and the keyboard)
@@ -507,6 +524,18 @@ pub fn run() -> windows::core::Result<()> {
     Ok(())
 }
 
+thread_local! {
+    /// The last chord the message loop ran held Alt (and not Ctrl: AltGr).
+    static ALT_CHORD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// A native text field (the field, the find bar, Settings): an Edit.
+fn is_text_field(hwnd: HWND) -> bool {
+    let mut class = [0u16; 16];
+    let len = unsafe { GetClassNameW(hwnd, &mut class) } as usize;
+    String::from_utf16_lossy(&class[..len]).eq_ignore_ascii_case("edit")
+}
+
 /// The main window, for timers set from the message loop.
 fn main_window() -> HWND {
     with_app(|app| app.hwnd).unwrap_or_default()
@@ -530,12 +559,43 @@ fn message_loop() {
                 continue;
             }
             if msg.message == WM_KEYDOWN || msg.message == WM_SYSKEYDOWN {
+                // A locked window takes Enter and Space, lets Windows have
+                // Alt+F4, and no shortcut of the app runs.
+                let repeat = (msg.lParam.0 >> 30) & 1 == 1;
+                match with_app(|app| app.lock_key(msg.wParam.0 as u32, repeat)).flatten() {
+                    Some(true) => continue,
+                    Some(false) => {
+                        let _ = TranslateMessage(&msg);
+                        DispatchMessageW(&msg);
+                        continue;
+                    }
+                    None => {}
+                }
                 let chord = web::current_chord(msg.wParam.0 as u32);
-                let command = with_app(|app| app.shortcuts.lookup(chord)).flatten();
+                // In a text field (the field, find, Settings) a word move
+                // is the field's.
+                let command = if chord.moves_the_caret() && is_text_field(msg.hwnd) {
+                    None
+                } else {
+                    with_app(|app| app.shortcuts.lookup(chord)).flatten()
+                };
                 if let Some(command) = command {
-                    with_app(|app| app.run(command));
+                    ALT_CHORD.set(chord.alt && !chord.ctrl);
+                    // Bit 30: the key was already down (a repeat).
+                    let repeat = (msg.lParam.0 >> 30) & 1 == 1;
+                    if !(repeat && command.once_per_press()) {
+                        with_app(|app| app.run(command));
+                    }
                     continue;
                 }
+                if msg.wParam.0 as u16 != VK_MENU.0 {
+                    ALT_CHORD.set(false);
+                }
+            }
+            // The Alt of an Alt chord (Alt+1): its release would be a lone
+            // Alt to the window, which opens the window menu.
+            if msg.message == WM_SYSKEYUP && msg.wParam.0 as u16 == VK_MENU.0 && ALT_CHORD.replace(false) {
+                continue;
             }
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -718,6 +778,14 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
     if msg == crate::diag::WM_APP_PING {
         return LRESULT(0);
     }
+    // Another Nea opened this profile: its window comes to the front.
+    if msg == crate::profile_launch::activate_message() {
+        crate::profile_launch::come_forward(hwnd);
+        return LRESULT(0);
+    }
+    if let Some(result) = lock_ui::window_message(hwnd, msg, wparam, lparam) {
+        return result;
+    }
     if let Some(result) = extensions_ui::window_message(hwnd, msg, wparam, lparam) {
         return result;
     }
@@ -739,6 +807,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
             with_app(|app| app.low_memory());
             LRESULT(0)
         }
+        crate::notifications::WM_APP_TOAST => {
+            if with_app(|app| app.toast_outcomes()).is_none() {
+                retry_later(hwnd, crate::notifications::WM_APP_TOAST, WPARAM(0), LPARAM(0));
+            }
+            LRESULT(0)
+        }
         update_ui::WM_APP_UPDATE => {
             if with_app(|app| app.update_changed()).is_none() {
                 retry_later(hwnd, update_ui::WM_APP_UPDATE, WPARAM(0), LPARAM(0));
@@ -756,6 +830,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 if app.window_sized(kind) {
                     app.relayout()
                 }
+                app.space_name_follow();
             })
             .is_none()
             {
@@ -768,6 +843,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
                 app.session_dirty = true;
                 app.autofill_follow();
                 app.place_omnibar();
+                app.space_name_follow();
             });
             LRESULT(0)
         }
@@ -833,6 +909,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MOUSELEAVE => {
             with_app(|app| {
                 app.tracking_mouse = false;
+                app.lock_mouse_leave();
                 app.set_hover(None);
             });
             LRESULT(0)
@@ -880,6 +957,12 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         }
         WM_SETCURSOR => {
             let own = wparam.0 == hwnd.0 as usize && (lparam.0 & 0xFFFF) as u32 == HTCLIENT;
+            if own && with_app(|app| app.lock_hand_cursor()).unwrap_or(false) {
+                unsafe {
+                    SetCursor(LoadCursorW(None, IDC_HAND).ok());
+                }
+                return LRESULT(1);
+            }
             if own && with_app(|app| app.cursor_on_divider()).unwrap_or(false) {
                 unsafe {
                     SetCursor(LoadCursorW(None, IDC_SIZEWE).ok());
@@ -898,7 +981,7 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_MBUTTONUP => {
             let (x, y) = x_y(lparam);
             with_app(|app| {
-                if app.bookmark_middle_click(x, y) {
+                if app.locked() || app.bookmark_middle_click(x, y) {
                     return;
                 }
                 if let Some(Hit::Tab(id) | Hit::Close(id)) = app.layout.hit(x, y) {
@@ -1016,7 +1099,10 @@ unsafe extern "system" fn window_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lpar
         WM_ACTIVATE => {
             let active = (wparam.0 & 0xFFFF) as u32 != WA_INACTIVE;
             if active {
-                with_app(|app| app.restore_focus());
+                with_app(|app| {
+                    app.reload_profiles();
+                    app.restore_focus();
+                });
             } else {
                 // Another program took the keyboard: the account list goes.
                 with_app(|app| app.autofill_close());
@@ -1080,6 +1166,10 @@ impl App {
             return;
         }
         let (width, height) = self.client_size();
+        if self.locked() {
+            self.lay_out_locked(width, height);
+            return;
+        }
         let metrics = Metrics { scale: self.scale };
         self.layout = tabbar::layout_chrome(
             &self.tab_infos(),
@@ -1093,6 +1183,7 @@ impl App {
             self.zoom_shown(),
             self.update.is_some(),
             self.space_mark_width(),
+            self.profiles_shown(),
         );
         self.place_bookmarks();
         if self.fullscreen.on() {
@@ -1151,6 +1242,10 @@ impl App {
     /// show: a frame of the strip's motion renders the strip, and a full
     /// repaint the chrome around the pages, not the whole client area.
     fn paint(&mut self, hdc: windows::Win32::Graphics::Gdi::HDC, dirty: RECT) {
+        if self.locked() {
+            self.paint_locked(hdc, dirty);
+            return;
+        }
         let (width, height) = self.client_size();
         let loading = self.tabs.tabs.iter().any(|t| t.loading);
         let started = Instant::now();
@@ -1159,9 +1254,9 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
-        let next = next.or(self.spaces_advance(now));
-        let tabs_dx = self.paint_slide(now);
-        let palette = self.space_palette();
+        let next = crate::anim::sooner(next, self.spaces_advance(now));
+        let tabs_dx = self.paint_slide();
+        let palette = self.palette;
         let mut surface = std::mem::take(&mut self.surface);
         let infos = self.tab_infos();
         let extension_initials = self.extension_initials();
@@ -1225,7 +1320,8 @@ impl App {
                 for piece in chrome {
                     let drawn = surface.paint(hdc, piece, |g| {
                         tabbar::paint(g, width, height, &paint);
-                        self.paint_spaces(g, now, &palette, &paint);
+                        self.paint_spaces(g, &palette, &paint);
+                        self.paint_profile(g, &palette);
                         crate::bookmark_bar::paint(g, &bar);
                     });
                     if !drawn {
@@ -1271,11 +1367,14 @@ impl App {
         let fills = self.split_fills();
         self.motion.set_indicator(fills.iter().find(|(_, c)| *c == self.palette.accent).map(|(r, _)| *r));
         let next = self.motion.advance(&self.layout, self.tabs.active, self.hover, loading, now);
-        let next = next.or(self.spaces_advance(now));
+        let next = crate::anim::sooner(next, self.spaces_advance(now));
         self.frame_now = Some(now);
         let old = self.painted_sheet.as_ref()?;
-        if self.motion.rail_moving() || self.motion.indicator_moving() || self.spaces_moving(now) {
+        if self.motion.rail_moving() || self.motion.indicator_moving() {
             return self.moving_area(&fills);
+        }
+        if self.spaces_moving() {
+            return self.slide_area(&fills, old);
         }
         match tabbar::changed_area(old, &self.strip_sheet()) {
             Some(area) => {
@@ -1309,6 +1408,30 @@ impl App {
         }
     }
 
+    /// What a frame of a space slide repaints: the rows of the two lists
+    /// and whatever else changed. The rest of the column stands still. A
+    /// frame of the whole column took about 5 ms, close to what a 120 Hz
+    /// frame leaves; the rows alone take about 1 ms less.
+    fn slide_area(&self, fills: &[(tabbar::Rect, design::Rgb)], old: &tabbar::Sheet) -> Option<RECT> {
+        let mut area = self.moving_area(fills)?;
+        let Some((top, bottom)) = self.slide_rows() else { return Some(area) };
+        // A card's drop shadow reaches past its row (as in `sheet`).
+        let margin = (4.0 * self.scale).ceil() as i32;
+        let rows = RECT { top: area.top.max(top - margin), bottom: area.bottom.min(bottom + margin), ..area };
+        if rows.bottom <= rows.top {
+            return Some(area);
+        }
+        area = rows;
+        if let Some(changed) = tabbar::changed_area(old, &self.strip_sheet()) {
+            let (width, height) = self.client_size();
+            area.left = area.left.min((changed.left.floor() as i32).max(0));
+            area.top = area.top.min((changed.top.floor() as i32).max(0));
+            area.right = area.right.max((changed.right.ceil() as i32).min(width));
+            area.bottom = area.bottom.max((changed.bottom.ceil() as i32).min(height));
+        }
+        Some(area)
+    }
+
     /// What a frame of the strip's motion has to repaint: the strip (or the
     /// caption row when it is hidden) and the split's focus line.
     fn moving_area(&self, fills: &[(tabbar::Rect, design::Rgb)]) -> Option<RECT> {
@@ -1328,7 +1451,11 @@ impl App {
     }
 
     fn update_title(&self) {
-        let title = private_tabs::window_title(self.tabs.active_tab().map(|t| (t.label(), t.private)));
+        if self.set_locked_title() {
+            return;
+        }
+        let active = self.tabs.active_tab().map(|t| (t.label(), t.private));
+        let title = private_tabs::window_title(active, &self.app_name());
         unsafe {
             let _ = SetWindowTextW(self.hwnd, &wide(&title));
         }
@@ -1359,6 +1486,7 @@ impl App {
         self.hide_card();
         self.hide_tip();
         self.restyle_vault();
+        self.restyle_notify();
         self.invalidate();
     }
 
@@ -1371,6 +1499,7 @@ impl App {
         self.omnibar.set_font(self.font, self.scale);
         // Before the old font is deleted: the offer's controls still use it.
         self.restyle_vault();
+        self.restyle_notify();
         unsafe {
             let _ = DeleteObject(old.into());
         }
@@ -1516,6 +1645,13 @@ impl App {
     /// Gives the keyboard to the active page, or to the window while that
     /// page is being made. Only for a window that is in front.
     fn focus_page_now(&self) {
+        if self.locked() {
+            // A hidden page gets no key: the window holds the keyboard.
+            unsafe {
+                let _ = windows::Win32::UI::Input::KeyboardAndMouse::SetFocus(Some(self.hwnd));
+            }
+            return;
+        }
         if let Some(Live::Ready(web)) = self.tabs.active_tab().map(|t| &t.live) {
             let _doing = crate::diag::doing(&"view:focus", 0);
             web.focus();
@@ -1572,6 +1708,7 @@ impl App {
         self.forget_thumb(id);
         self.scrolls.forget(id);
         self.curtain.closed(id);
+        self.notify_tab_closed(id);
         let heir = self.unpair_closing(id);
         self.opening_closed(id);
         if let Some(tab) = self.tabs.close(id)
@@ -1690,8 +1827,12 @@ impl App {
         // Views out of sight that are not suspended and not due for it yet.
         let mut awake_views = Vec::new();
         // A page that waits for its sign-in pop-up stays live too.
-        let keep_awake: Vec<bool> =
-            self.tabs.all().map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id)).collect();
+        // So does a site that may notify: a sleeping page sends nothing.
+        let keep_awake: Vec<bool> = self
+            .tabs
+            .all()
+            .map(|t| self.keeps_awake(&t.url) || self.waits_for_popup(t.id) || self.notifies(&t.url, t.private))
+            .collect();
         // Both pages of the pair on screen are in use: their idle time starts
         // when they leave the screen, or when the window is minimized. The
         // tabs of the other spaces are background tabs like any other.
@@ -1947,6 +2088,7 @@ impl App {
                 }
             }
             Event::Extension(event) => self.on_extension_event(event),
+            Event::Notify(id, message) => self.on_notify(id, message),
         }
     }
 
@@ -1980,8 +2122,15 @@ impl App {
             }
             return;
         };
+        let mut main_profile = None;
         match WebTab::new(id, controller, self.shortcuts.clone(), self.settings.theme) {
             Ok(mut web) => {
+                // A page may ask to notify from any tab; the decisions the
+                // engine kept are read from the main profile.
+                let _ = crate::notify_watch::watch(&web.webview, id);
+                if !tab.private {
+                    main_profile = Some(web.webview.clone());
+                }
                 // A private tab keeps no passwords: no capture, no account menu.
                 web.passwords = !tab.private;
                 // A private download is not listed in the panel: downloads.json outlives it.
@@ -2020,6 +2169,9 @@ impl App {
                 }
             }
         }
+        if let Some(view) = main_profile {
+            self.notify_import(&view);
+        }
         self.extensions_view_ready();
         self.show_active();
         // Moving the keyboard waits on the engine's process: only for the
@@ -2035,6 +2187,11 @@ impl App {
     fn run(&mut self, command: Command) {
         let _doing = crate::diag::doing(&"command", 0);
         crate::diag::trace(|| format!("command {}", command.name()));
+        // A locked window runs nothing: not from a key, a page, a menu or
+        // the window menu.
+        if self.locked() {
+            return;
+        }
         let started = Instant::now();
         self.run_command(command);
         // For measurements (NEA_TRACE=1): how long the command held the window.
@@ -2217,6 +2374,20 @@ impl App {
         }
     }
 
+    /// A modal loop (a popup menu) took the mouse, and no move or leave
+    /// came here meanwhile: the hover is set again from where the pointer
+    /// is, and the leave is tracked anew.
+    pub(super) fn rehover(&mut self) {
+        let mut point = POINT::default();
+        let inside = unsafe {
+            GetCursorPos(&mut point).is_ok()
+                && windows::Win32::Graphics::Gdi::ScreenToClient(self.hwnd, &mut point).as_bool()
+        };
+        self.tracking_mouse = false;
+        let hover = if inside { self.layout.hit(point.x, point.y) } else { None };
+        self.set_hover(hover);
+    }
+
     /// Everything a hover can light up lives in the strip, the caption row
     /// and the window's buttons: only those repaint, never the page area.
     fn invalidate_hover_area(&self) {
@@ -2248,6 +2419,10 @@ impl App {
             }
             self.tracking_mouse = true;
         }
+        if self.locked() {
+            self.lock_mouse_move(x, y);
+            return;
+        }
         if self.divider_drag(x) {
             return;
         }
@@ -2262,6 +2437,10 @@ impl App {
     }
 
     fn mouse_down(&mut self, x: i32, y: i32) {
+        if self.locked() {
+            self.lock_mouse_down(x, y);
+            return;
+        }
         self.hide_card();
         self.hide_tip();
         if self.divider_mouse_down(x, y) {
@@ -2280,6 +2459,10 @@ impl App {
             Some(Hit::Close(id)) => self.close_tab(id),
             Some(Hit::Group(group)) => self.group_mouse_down(group, x, y),
             Some(Hit::SpaceMark) => self.space_mouse_down(x, y),
+            Some(Hit::Profile) => {
+                self.close_omnibar();
+                self.profile_mouse_down(x, y);
+            }
             Some(Hit::NewTab) => {
                 self.motion.press(tabbar::HoverKey::NewTab);
                 self.open_omnibar(Mode::NewTab);
@@ -2322,6 +2505,9 @@ impl App {
     }
 
     fn context_menu(&mut self, x: i32, y: i32) {
+        if self.locked() {
+            return;
+        }
         if let Some(Hit::Nav(button)) = self.layout.hit(x, y) {
             self.ask_history(button);
             return;
@@ -2332,6 +2518,10 @@ impl App {
         }
         if let Some(Hit::SpaceMark) = self.layout.hit(x, y) {
             self.space_menu(x, y, self.tabs.space);
+            return;
+        }
+        if let Some(Hit::Profile) = self.layout.hit(x, y) {
+            self.profile_menu(x, y);
             return;
         }
         if let Some(Hit::Bookmark(index)) = self.layout.hit(x, y) {
@@ -2460,6 +2650,9 @@ impl App {
     }
 
     fn open_omnibar(&mut self, mode: Mode) {
+        if self.locked() {
+            return;
+        }
         self.autofill_close();
         self.hide_card();
         self.forget_group_target();
@@ -2785,6 +2978,7 @@ impl App {
     }
 
     fn shutdown(&mut self) {
+        self.notify_shutdown();
         self.save(true);
         self.release_spare();
         storage::flush_writes(Duration::from_secs(10));

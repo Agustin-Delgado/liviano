@@ -70,7 +70,8 @@ thread_local! {
 /// needed: with no page open, no filter is held in memory.
 pub fn start() {
     if !STARTED.swap(true, Ordering::Relaxed) {
-        lists::spawn(storage::data_dir().join("shield"));
+        // The lists are the same for every profile: one cache serves all.
+        lists::spawn(storage::shared_data_dir().join("shield"));
     }
 }
 
@@ -118,7 +119,7 @@ pub fn set_cosmetic(on: bool) {
     if !on {
         COSMETIC.with(|c| *c.borrow_mut() = None);
     } else if !was && STARTED.load(Ordering::Relaxed) {
-        lists::spawn_cosmetic(storage::data_dir().join("shield"));
+        lists::spawn_cosmetic(storage::shared_data_dir().join("shield"));
     }
 }
 
